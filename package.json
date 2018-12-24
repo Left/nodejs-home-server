@@ -21,10 +21,11 @@
   },
   "homepage": "https://github.com/Left/nodejs-home-server#readme",
   "dependencies": {
-    "express": "4.16.0",
-    "nodemon": "1.11.0",
-    "ws": "^4.0.0",
-    "adbkit": "2.11.0"
+    "express": "4.16.4",
+    "nodemon": "1.18.9",
+    "ws": "6.1.2",
+    "adbkit": "2.11.0",
+    "debug": ">=2.6.9"
   },
   "devDependencies": {
     "@types/mocha": "2.2.41",
