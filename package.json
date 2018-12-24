@@ -25,7 +25,8 @@
     "nodemon": "1.18.9",
     "ws": "6.1.2",
     "adbkit": "2.11.0",
-    "debug": ">=2.6.9"
+    "debug": ">=2.6.9",
+    "growl": ">=1.10.0"
   },
   "devDependencies": {
     "@types/mocha": "2.2.41",
