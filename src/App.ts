@@ -47,6 +47,12 @@ interface Ping extends Msg {
     pingid: string;
 }
 
+interface ChildControllerHandle {
+    processMsg(controller: ChildController, packet: Msg): void;
+    connected(controller: ChildController);
+    disconnected(controller: ChildController);
+}
+
 class ChildController {
     private pingId = 0;
     private intervalId: NodeJS.Timer;
@@ -55,8 +61,22 @@ class ChildController {
 
     constructor(
         public readonly ip: string, 
-        public readonly processor: (packet: Msg) => void) {
+        public readonly handle: ChildControllerHandle) {
         this.attemptToConnect();
+    }
+
+    public isAlive() {
+        return !!this.ws && this.wasRecentlyContacted();
+    }
+
+    public dropConnection() {
+        if (!!this.ws) {
+            if (this.ws.readyState == this.ws.OPEN) {
+                this.ws.close();
+            }
+        }
+        this.ws = null;
+        this.handle.disconnected(this);
     }
 
     public attemptToConnect() {
@@ -67,28 +87,28 @@ class ChildController {
 
         this.ws.on('open', () => {
             // ws.send('something');
+            this.handle.connected(this);
             this.lastResponse = Date.now();
             
-            console.log(this.ip + " connected");
-
             if (!!this.intervalId) {
                 clearInterval(this.intervalId);
             }
             this.intervalId = setInterval(() => {
-                if (Date.now() - this.lastResponse > 6000) {
+                if (this.wasRecentlyContacted()) {
                     // 6 seconds passed, no repsonse. Drop the connection and re-try
-                    this.ws.close();
-                    this.ws = null;
+                    this.dropConnection();
                     this.attemptToConnect();
-                }
-
-                const pingText = JSON.stringify({ 'type': 'ping', 'pingig': "" + (this.pingId++)});
-                try {
-                    this.ws.send(pingText);
-                } catch (err) {
-                    // Failed to send, got error, let's reconnect
-                    this.ws = null;
-                    this.attemptToConnect();
+                } else {
+                    const pingText = JSON.stringify({ 'type': 'ping', 'pingig': "" + (this.pingId++)});
+                    try {
+                        if (!!this.ws) {
+                            this.ws.send(pingText);
+                        }
+                    } catch (err) {
+                        // Failed to send, got error, let's reconnect
+                        this.dropConnection();
+                        this.attemptToConnect();
+                    }
                 }
             }, 2000);
         });
@@ -100,23 +120,26 @@ class ChildController {
                 if ('result' in objData) {
                     // console.log('Pong', objData.pingid);
                 } else {
-                    this.processor(objData);
+                    this.handle.processMsg(this, objData);
                 }
             }
         });
 
         this.ws.on('error', (err: Error) => {
             console.log("Error: " + err);
-            this.ws.close();
-            this.ws = null;
+            this.dropConnection();
             setTimeout(() => this.attemptToConnect(), 1000);
         });
 
-        this.ws.on('close', (err: Error) => {
-            console.log("Error: " + err);
-            this.ws = null;
+        this.ws.on('close', (code: number, reason: string) => {
+            console.log("Closed: " + code + " " + reason);
+            this.dropConnection();
             setTimeout(() => this.attemptToConnect(), 1000);
         });
+    }
+
+    private wasRecentlyContacted() {
+        return Date.now() - this.lastResponse > 6000;
     }
 }
 
@@ -137,40 +160,16 @@ const emptyConfig: IConfig = {
     sleepAt: emptyTime
 }
 
-class App {
+class App implements ChildControllerHandle {
     public expressApi: express.Express;
     public server: http.Server;
     public readonly wss: WebSocket.Server;
     public currentTemp: number;
     private config: IConfig;
 
-    private processData = (data: Msg) => {
-        const objData = <Log | Temp | Hello | IRKey> data;
-        switch (objData.type) {
-            case 'temp':
-                if (this.currentTemp != objData.value) {
-                    console.log("temperature: ", objData.value);
-                    this.wss.clients.forEach(cl => cl.send(objData.value));
-                    this.currentTemp = objData.value;
-                }
-                break;
-            case 'log':
-                console.log("log: ", objData.val);
-                break;
-            case 'hello':
-                console.log("hello: ", objData.firmware, objData.afterRestart);
-                break;
-            case 'ir_key':
-                console.log("ir_key: ", objData.remote, objData.key);
-                break;
-            default:
-                console.log(objData);
-        }
-    };
-
     public controllers: ChildController[] = [
-        new ChildController("192.168.121.75", this.processData),
-        new ChildController("192.168.121.131", this.processData)
+        new ChildController("192.168.121.75", this),
+        new ChildController("192.168.121.131", this)
     ];
 
     private saveConf() {
@@ -266,6 +265,38 @@ class App {
 
     public listen(port: number, errCont) {
         this.server.listen(port, errCont);
+    }
+
+    public connected(controller: ChildController) {
+        console.log("Connected controller ", controller.ip);
+    }
+
+    public disconnected(controller: ChildController) {
+        console.log("Disconnected controller ", controller.ip);
+    }
+
+    public processMsg(controller: ChildController, data: Msg) {
+        const objData = <Log | Temp | Hello | IRKey> data;
+        switch (objData.type) {
+            case 'temp':
+                if (this.currentTemp != objData.value) {
+                    console.log("temperature: ", objData.value);
+                    this.wss.clients.forEach(cl => cl.send(objData.value));
+                    this.currentTemp = objData.value;
+                }
+                break;
+            case 'log':
+                console.log("log: ", objData.val);
+                break;
+            case 'hello':
+                console.log("hello: ", objData.firmware, objData.afterRestart);
+                break;
+            case 'ir_key':
+                console.log("ir_key: ", objData.remote, objData.key);
+                break;
+            default:
+                console.log(objData);
+        }
     }
 }
 
