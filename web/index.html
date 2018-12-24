@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8">
+    <meta 
+        name='viewport' 
+        content='width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0' 
+    />
+    <script type="text/javascript">
+        var serverSettings = /*{{{serverSettings}}}*/;
+    </script>
+    <script type="text/javascript">
+        function sendReq(url) {
+            var xhr = new XMLHttpRequest();
+            xhr.open("POST", url, true);
+            xhr.onload = function() {
+                const respJSON = JSON.parse(xhr.responseText);
+                if ('reload' in respJSON && respJSON['reload']) {
+                    document.location.reload();
+                }
+            };
+            xhr.send(); 
+        }
+
+        window.onload = function() {
+            document.getElementById('birghtness').addEventListener('input', 
+                function(e) {
+                    console.log('BRIGHT', e.srcElement.value);
+                    sendReq("/light/brightness/" + e.srcElement.value);
+                }, false);
+
+            playYoutube = () => {
+                var urlId = document.getElementById('youtubeChannelURL');
+                sendReq("/tablet/youtubeURL/" + encodeURIComponent(urlId.value));
+            }
+
+            document.getElementById('playYoutube').addEventListener('click', 
+                function(e) {
+                    playYoutube();
+                }, false);
+            document.getElementById('youtubeChannelURL').addEventListener('keypress',
+                function(e) {
+                    if (e.keyCode == 13) {
+                        playYoutube();
+                    }
+                }, false); 
+
+            Array.prototype.filter.call(document.getElementsByClassName('action'),
+                function(el) {
+                    el.addEventListener("click",
+                        function() { 
+                            if (el.dataset.action === 'go') {
+                                document.location = el.dataset.url;
+                            } else {
+                                sendReq(el.dataset.url);
+                            }
+                        },
+                        false
+                    );
+                }
+            );
+
+            Array.prototype.filter.call(document.getElementsByClassName('channelSelect'),
+                function(el) {
+                    el.addEventListener("change", (ev) => { 
+                        sendReq("/tablet/history/setchannel/" +
+                            el.dataset.url + "/" +
+                            el.selectedOptions[0].value);
+                    }, false);
+                }
+            );
+
+
+            var categEl = document.getElementById('categories');
+            var updateCategory = () => {
+                var category = categEl.selectedOptions[0].value;
+                Array.prototype.filter.call(document.getElementsByClassName('channel-line'),
+                    function(el) {
+                        el.style.display = el.dataset.cat === category ? "block" : "none";
+                    }, false);
+            }
+
+            var selHours = document.getElementById('wakehrs');
+            var wakeat = new Date(serverSettings.wakeAt);
+            console.log(wakeat);
+            for (var i = 0; i < 24; ++i) {
+                var opt = document.createElement('option');
+                opt.value = i;
+                opt.innerHTML = i;
+                selHours.appendChild(opt);
+            }
+            selHours.selectedIndex = wakeat.getHours();
+
+            var selMins = document.getElementById('wakemins');
+            for (var i = 0; i < 60; ++i) {
+                var opt = document.createElement('option');
+                opt.value = i;
+                opt.innerHTML = i;
+                selMins.appendChild(opt);
+            }
+            selMins.selectedIndex = wakeat.getMinutes();
+
+            document.getElementById('wakeBtn').addEventListener('click', 
+                function(e) {
+                    sendReq("/tablet/wakeat/" + (selHours.selectedIndex) + "/" + (selMins.selectedIndex) + "/" + (wakeChannel.selectedOptions[0].value));
+                }, false);
+
+            document.getElementById('sleepBtn').addEventListener('click', () => {
+                sendReq("/tablet/sleepin/" + document.getElementById('sleepinSel').selectedOptions[0].value);
+            }, false);
+        }
+    </script>
+    <style>
+        html, body {
+            height: 100%;
+            width: 100%;
+            margin: 0;
+        }
+
+        body table {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 100%; 
+            width: 100%
+        }
+
+        .header {
+            padding: 1em;
+        }
+
+        .channels {
+            margin: .5em;
+            overflow: scroll;
+        }
+
+        .channel-line {
+            /* height: 2em; */
+        }
+    </style>
+</head>
+<body>
+    <table>
+        <tr><td class="header">
+            <div>
+                <button class='action' data-url='/tablet/onoff'    >  ( POWER )  </button>
+                <button class='action' data-url='/tablet/volup'    >   + Vol +   </button>
+                <button class='action' data-url='/tablet/voldown'  >   - Vol -   </button>
+                <a href="/tablet_screen.html" target="_new"> Screenshot </a>
+                <br/>
+                <button class='action' data-url='/channels.html' data-action='go' >  Channels list  </button>
+                <span> or video: </span>
+                <input id='youtubeChannelURL' type="text" placeholder="Youtube URL"/>
+                <button id='playYoutube'>  Play  </button>
+                <button class='action' data-url='/tablet/stop'     >     STOP    </button>
+                <button class='action' data-url='/tablet/playagain'> PLAY AGAIN  </button>
+                <button class='action' data-url='/tablet/reboot'   >    REBOOT   </button>
+                <button class='action' data-url='/self/reboot'     > ORANGE PI REBOOT </button>
+                <!--
+                <button class='action' data-url='/tablet/history/clear'     > CLEAR HISTORY </button>
+                -->
+            </div>
+            <hr/>
+            <div>
+                <select id='sleepinSel'>
+                    <option value='10'>10 sec</option>
+                    <option value='300'>5 min </option>
+                    <option value='600'>10 min</option>
+                    <option value='1200'>20 min</option>
+                    <option value='1800' selected>30 min</option>
+                    <option value='3600'>1 hour</option>
+                    <option value='7200'>2 hour</option>
+                    <option value='10800'>3 hour</option>
+                    <option value='14400'>4 hours</option>
+                </select>&nbsp;
+                <button id='sleepBtn'> Sleep!  </button>
+                &nbsp;&nbsp;
+                <select id='wakehrs'></select>&nbsp;
+                <select id='wakemins'></select>&nbsp;
+
+                <select id='wakeChannel'><!--{{{wakeChannels}}}--></select>&nbsp;
+
+                <button id='wakeBtn'> Wake!  </button>
+            </div>
+            <hr/>
+            <div>
+                <span>Table light: </span>
+                <button class='action' data-url='/light/on'  > ON </button>
+                <button class='action' data-url='/light/off' > OFF </button>
+                <input type="range" id="birghtness" name="birghtness" min="0" max="100" />
+            </div>
+            <hr/>
+            <div>
+                <span>KITCHEN: </span>
+                <span>SMALL: </span>
+                <button class='action' data-url='/relay/131/1/true'  > ON </button>
+                <button class='action' data-url='/relay/131/1/false' > OFF </button>
+                <span>BIG: </span>
+                <button class='action' data-url='/relay/131/0/true'  > ON </button>
+                <button class='action' data-url='/relay/131/0/false' > OFF </button>
+            </div>
+            <hr/>
+            <div>
+                <span>LIGHT ON CUPBOARD: </span>
+                <button class='action' data-url='/relay/93/0/true'  >  ON   </button>
+                <button class='action' data-url='/relay/93/0/false' >  OFF  </button>
+            </div>
+            <hr/>
+            <div>
+                <span>SPEAKER: </span>
+                <button class='action' data-url='/relay/93/1/true'  >  ON   </button>
+                <button class='action' data-url='/relay/93/1/false' >  OFF  </button>
+            </div>
+            <hr/>
+            <div>
+                <span>CORIDOR: </span>
+                <button class='action' data-url='/relay/93/2/true'  > ON </button>
+                <button class='action' data-url='/relay/93/2/false' > OFF </button>
+            </div>
+            <hr/>
+            <div>
+                <span>ROOM: </span>
+                <button class='action' data-url='/relay/93/3/true'  > ON </button>
+                <button class='action' data-url='/relay/93/3/false' > OFF </button>
+                <span><!--{{{temp}}}--></span>
+            </div>
+            <hr/>
+       </td></tr>
+        <tr><td class='history'>
+            <!--{{{history}}}-->               
+        </td></tr>
+    </table>
+
+</body>
+
+</html>
