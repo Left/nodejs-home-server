@@ -3,11 +3,13 @@ import * as http from 'http';
 import * as WebSocket from 'ws';
 import * as stream from "stream";
 import * as fs from "fs";
+import * as child_process from "child_process";
+import * as dgram from "dgram";
 
-import * as Promise from 'bluebird';
-global.Promise = Promise
+import * as BBPromise from 'bluebird';
 
-var adb = require('adbkit')
+var adb = require('adbkit');
+
 var client = adb.createClient()
 
 interface PingResult {
@@ -80,6 +82,13 @@ class ChildController {
         this.handle.disconnected(this);
     }
 
+    public send(json: {}): Promise<void> {
+        const txt = JSON.stringify(json);
+        console.log(this + " SEND: " + txt);
+        this.ws.send(txt);
+        return Promise.resolve(void 0);
+    }
+
     public attemptToConnect() {
         if (!!this.ws)
             return; // We're already attempting to connect
@@ -95,7 +104,7 @@ class ChildController {
                 clearInterval(this.intervalId);
             }
             this.intervalId = setInterval(() => {
-                if (this.wasRecentlyContacted()) {
+                if (!this.wasRecentlyContacted()) {
                     // 6 seconds passed, no repsonse. Drop the connection and re-try
                     this.dropConnection();
                     this.attemptToConnect();
@@ -142,7 +151,7 @@ class ChildController {
     public toString() : string { return this.name + "(" + this.ip + ")"; }
 
     private wasRecentlyContacted() {
-        return Date.now() - this.lastResponse > 6000;
+        return Date.now() - this.lastResponse < 6000;
     }
 }
 
@@ -170,12 +179,107 @@ namespace adbkit {
     }
 }
 
+interface Relay {
+    readonly name: string;
+    isOn(): boolean;
+    switch(on: boolean): Promise<void>;
+}
+
+class GPIORelay implements Relay {
+    private _on: boolean = false;
+    private _modeSet: boolean = false;
+    constructor(public readonly name: string, public readonly pin: number) {}
+
+    isOn(): boolean {
+        return this._on;
+    }
+
+    switch(on: boolean): Promise<void> {
+        return new Promise<void>((accept, reject) => {
+            const go = () => {
+                child_process.spawn("/root/WiringOP/gpio/gpio", ["-1", "mode", "" + this.pin, "out"])
+                    .on('close', () => {
+                        this._on = on;
+                        accept();
+                    });
+            };
+            if (!this._modeSet) {
+                child_process.spawn("/root/WiringOP/gpio/gpio", ["-1", "write", "" + this.pin, on ? "0" : "1"])
+                    .on('close', go);
+            } else {
+                go();
+            }    
+        });
+    }
+}
+class ControllerRelay implements Relay {
+    private _on: boolean = false;
+
+    constructor(
+        public readonly name: string, 
+        public readonly controller: ChildController,
+        public readonly index: number) {
+    }
+
+    isOn(): boolean {
+        return this._on;
+    }
+
+    switch(on: boolean): Promise<void> {
+        if (this.controller.isAlive()) {
+            return this.controller.send({
+                type: "switch", 
+                id: "" + this.index,
+                on: on ? "true" : "false"
+            }).then(() => {
+                this._on = on;
+            });
+        } else {
+            return Promise.reject('Controller is not connected')
+        }
+    }
+}
+
+class MiLightBulbRelay implements Relay {
+    private _on: boolean = false;
+    constructor(
+        public readonly name: string) {
+    }
+
+    isOn(): boolean {
+        return this._on;
+    }
+
+    switch(on: boolean): Promise<void> {
+        const sock = dgram.createSocket("udp4");
+        return new Promise((accept, reject) => {
+            sock.send(
+                new Buffer([on ? 0xc2 : 0x46, 0x00, 0x55]), 
+                8899, 
+                "192.168.121.35", (err, bytes) => {
+                    if (!!err) {
+                        reject(err);
+                    } else {
+                        accept(void 0);
+                    }
+                });    
+        });
+    }
+}
+
 class Tablet {
     constructor(public readonly id: string) {
     }
 
     public adbStream: NodeJS.ReadWriteStream;
     public name: string;
+
+    public serializable(): any{
+        return {
+            id: this.id, 
+            name: this.name
+        }
+    }
 }
 
 class App implements ChildControllerHandle {
@@ -186,9 +290,29 @@ class App implements ChildControllerHandle {
     private config: IConfig;
     private tablets: Map<string, Tablet> = new Map();
 
-    public controllers: ChildController[] = [
-        new ChildController("192.168.121.75", "RoomsClock", this),
-        new ChildController("192.168.121.131", "KitchenClock", this)
+    private roomsClock: ChildController = new ChildController("192.168.121.75", "RoomsClock", this);
+    private kitchenClock: ChildController = new ChildController("192.168.121.131", "KitchenClock", this)
+
+    public controllers: ChildController[] = [ this.roomsClock, this.kitchenClock];
+
+    private r1 = new GPIORelay("Лампа на шкафу", 38);
+    private r2 = new GPIORelay("Колонки", 40);
+    private r3 = new GPIORelay("Освещение в коридоре", 36);
+    private r4 = new GPIORelay("Потолок в комнате", 32);
+    
+    private r5 = new ControllerRelay("Потолок на кухне", this.kitchenClock, 0);
+    private r6 = new ControllerRelay("Лента на кухне", this.kitchenClock, 1);
+
+    private r7 = new MiLightBulbRelay("Лампа на столе");
+    
+    private allRelays: Relay[] = [
+        this.r1, 
+        this.r2, 
+        this.r3, 
+        this.r4, 
+        this.r5, 
+        this.r6,
+        this.r7
     ];
 
     private saveConf() {
@@ -227,6 +351,8 @@ class App implements ChildControllerHandle {
         });
 
         const router = express.Router()
+
+        router.use(express.static("web"));
         router.get('/', (req, res) => {
             res.redirect('/index.html');
         });
@@ -239,6 +365,17 @@ class App implements ChildControllerHandle {
             res.setHeader("Expires", new Date(Date.now() + 2592000000).toUTCString());
             res.end(favicon);
         });
+        router.post('/relay', (req, res) => {
+            this.allRelays[req.query["index"]].switch(req.query["on"] === "true")
+            .then(() => {
+                res.json({
+                    result: "OK"
+                });
+            })
+            .catch((err) => {
+                console.log(err);
+            });
+        });
         router.get('/tablets', (req, res) => {
             res.json(Array.from(this.tablets.values()).map(d => { return { 
                 id: d.id, 
@@ -246,9 +383,19 @@ class App implements ChildControllerHandle {
             }}));
         });
         router.get('/index.html', (req, res) => {
-            res.json({
-                message: 'Hello from me!'
-            })
+            fs.readFile('templates/index.html', 'utf-8', (err, data: string) => {
+                data = data
+                    .replace("\"{{{tablets}}}\"", JSON.stringify(Array.from(this.tablets.values()).map(t => t.serializable())))
+                    .replace("\"{{{config}}}\"", JSON.stringify(this.config))
+                    .replace("<!--{{{relays}}}-->", 
+                        this.allRelays.map((r, index) => {
+                            return "<div><span>" + r.name + "</span><button onclick=\"switchRelay(true, " + index + ")\"> ON </button>" +
+                                "<button onclick=\"switchRelay(false, " + index + ")\"> OFF </button></div>"
+                        }).join('\n')
+                    )
+                    ;
+                res.send(data);
+            });
         });
         router.get('/tablet/wakeat/:h/:m', (req, res) => {
             const hours = req.params['h'];
@@ -293,7 +440,7 @@ class App implements ChildControllerHandle {
 
     private processDevice(device: adbkit.Device): void {
         // Wait some time for device to auth...
-        Promise.delay(1000).then(() => {
+        BBPromise.delay(1000).then(() => {
             // console.log("Let's get some info about device " + device.id + " (" + device.type + ")");
             // And then open shell
             client.getProperties(device.id).then(props => {
