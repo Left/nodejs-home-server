@@ -49,8 +49,8 @@ interface Ping extends Msg {
 
 interface ChildControllerHandle {
     processMsg(controller: ChildController, packet: Msg): void;
-    connected(controller: ChildController);
-    disconnected(controller: ChildController);
+    connected(controller: ChildController): void;
+    disconnected(controller: ChildController): void;
 }
 
 class ChildController {
@@ -61,7 +61,7 @@ class ChildController {
 
     constructor(
         public readonly ip: string, 
-        public readonly name: string, 
+        public name: string, 
         public readonly handle: ChildControllerHandle) {
         this.attemptToConnect();
     }
@@ -163,12 +163,28 @@ const emptyConfig: IConfig = {
     sleepAt: emptyTime
 }
 
+namespace adbkit {
+    export interface Device { 
+        id: string;
+        type: string;
+    }
+}
+
+class Tablet {
+    constructor(public readonly id: string) {
+    }
+
+    public adbStream: NodeJS.ReadWriteStream;
+    public name: string;
+}
+
 class App implements ChildControllerHandle {
     public expressApi: express.Express;
     public server: http.Server;
     public readonly wss: WebSocket.Server;
     public currentTemp: number;
     private config: IConfig;
+    private tablets: Map<string, Tablet> = new Map();
 
     public controllers: ChildController[] = [
         new ChildController("192.168.121.75", "RoomsClock", this),
@@ -223,6 +239,12 @@ class App implements ChildControllerHandle {
             res.setHeader("Expires", new Date(Date.now() + 2592000000).toUTCString());
             res.end(favicon);
         });
+        router.get('/tablets', (req, res) => {
+            res.json(Array.from(this.tablets.values()).map(d => { return { 
+                id: d.id, 
+                name: d.name
+            }}));
+        });
         router.get('/index.html', (req, res) => {
             res.json({
                 message: 'Hello from me!'
@@ -241,29 +263,46 @@ class App implements ChildControllerHandle {
                 message: 'OK'
             })
         })
-
         this.expressApi.use('/', router);
 
+        client.trackDevices()
+            .then(tracker => {
+                tracker.on('add', (dev: adbkit.Device) => {
+                    // console.log("=== ADDED   = " + dev.id);
+                    this.tablets.set(dev.id, new Tablet(dev.id));
+                    this.processDevice(dev);
+                    // console.log(this.devices.map(d => d.id).join(", "));
+                });
+                tracker.on('remove', (dev: adbkit.Device) => {
+                    // console.log("=== REMOVED = " + dev.id);
+                    this.tablets.delete(dev.id);
+                    // console.log(this.devices.map(d => d.id).join(", "));
+                });
+            });
+        /*
         client.listDevices()
-            .then((devices: { id: string, type: string }[]) => {
+            .then((devices: AdbKitDevice[]) => {
                 devices.forEach(device => {
-                    client.shell(device.id, '')
-                        .then((out: NodeJS.ReadWriteStream) => {
-                            out.pipe(new stream.Writable({
-                                write: (chunk, encoding, next) => {
-                                    console.log("Received chunk:", chunk.toString());
-                                    if (chunk.length > 10) {
-                                        // out.write("ls\r");
-                                    }
-                                    next();
-                                }
-                            }).on('close', () => { console.log("close"); }));
-                        });
                 });
             })
             .catch((err: Error) => {
                 console.error('Something went wrong:', err.stack)
             })
+        */
+    }
+
+    private processDevice(device: adbkit.Device): void {
+        // Wait some time for device to auth...
+        Promise.delay(1000).then(() => {
+            // console.log("Let's get some info about device " + device.id + " (" + device.type + ")");
+            // And then open shell
+            client.getProperties(device.id).then(props => {
+                this.tablets.get(device.id).name = props['ro.product.model'];
+            });
+            client.shell(device.id, '').then((out: NodeJS.ReadWriteStream) => {
+                this.tablets.get(device.id).adbStream = out;
+            });
+        });
     }
 
     public listen(port: number, errCont) {
@@ -271,11 +310,11 @@ class App implements ChildControllerHandle {
     }
 
     public connected(controller: ChildController) {
-        console.log("Connected controller " + controller);
+        console.log(controller + " " + "Connected");
     }
 
     public disconnected(controller: ChildController) {
-        console.log("Disconnected controller " + controller);
+        console.log(controller + " " + "Disconnected");
     }
 
     public processMsg(controller: ChildController, data: Msg) {
@@ -283,22 +322,22 @@ class App implements ChildControllerHandle {
         switch (objData.type) {
             case 'temp':
                 if (this.currentTemp != objData.value) {
-                    console.log("temperature: ", objData.value);
+                    console.log(controller + " " + "temperature: ", objData.value);
                     this.wss.clients.forEach(cl => cl.send(objData.value));
                     this.currentTemp = objData.value;
                 }
                 break;
             case 'log':
-                console.log("log: ", objData.val);
+                console.log(controller + " " + "log: ", objData.val);
                 break;
             case 'hello':
-                console.log("hello: ", objData.firmware, objData.afterRestart);
+                console.log(controller + " " + "hello: ", objData.firmware, (objData.afterRestart / 1000) + " sec");
                 break;
             case 'ir_key':
-                console.log("ir_key: ", objData.remote, objData.key);
+                console.log(controller + " " + "ir_key: ", objData.remote, objData.key);
                 break;
             default:
-                console.log(objData);
+                console.log(controller + " UNKNOWN CMD: " + objData);
         }
     }
 }
