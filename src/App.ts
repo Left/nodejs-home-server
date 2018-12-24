@@ -61,6 +61,7 @@ class ChildController {
 
     constructor(
         public readonly ip: string, 
+        public readonly name: string, 
         public readonly handle: ChildControllerHandle) {
         this.attemptToConnect();
     }
@@ -138,6 +139,8 @@ class ChildController {
         });
     }
 
+    public toString() : string { return this.name + "(" + this.ip + ")"; }
+
     private wasRecentlyContacted() {
         return Date.now() - this.lastResponse > 6000;
     }
@@ -168,8 +171,8 @@ class App implements ChildControllerHandle {
     private config: IConfig;
 
     public controllers: ChildController[] = [
-        new ChildController("192.168.121.75", this),
-        new ChildController("192.168.121.131", this)
+        new ChildController("192.168.121.75", "RoomsClock", this),
+        new ChildController("192.168.121.131", "KitchenClock", this)
     ];
 
     private saveConf() {
@@ -268,11 +271,11 @@ class App implements ChildControllerHandle {
     }
 
     public connected(controller: ChildController) {
-        console.log("Connected controller ", controller.ip);
+        console.log("Connected controller " + controller);
     }
 
     public disconnected(controller: ChildController) {
-        console.log("Disconnected controller ", controller.ip);
+        console.log("Disconnected controller " + controller);
     }
 
     public processMsg(controller: ChildController, data: Msg) {
