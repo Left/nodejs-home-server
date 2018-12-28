@@ -5,12 +5,12 @@ import * as stream from "stream";
 import * as fs from "fs";
 import * as child_process from "child_process";
 import * as dgram from "dgram";
+import * as events from "events";
 
-import * as BBPromise from 'bluebird';
+var BBPromise = require('bluebird')
+var adbkit = require('adbkit')
 
-var adb = require('adbkit');
-
-var client = adb.createClient()
+var client = adbkit.createClient()
 
 interface PingResult {
     result: string;
@@ -120,7 +120,7 @@ class ChildController {
                         this.attemptToConnect();
                     }
                 }
-            }, 2000);
+            }, 6000);
         });
 
         this.ws.on('message', (data) => {
@@ -138,20 +138,20 @@ class ChildController {
         this.ws.on('error', (err: Error) => {
             console.log("Error: " + err);
             this.dropConnection();
-            setTimeout(() => this.attemptToConnect(), 1000);
+            setTimeout(() => this.attemptToConnect(), 3000);
         });
 
         this.ws.on('close', (code: number, reason: string) => {
             console.log("Closed: " + code + " " + reason);
             this.dropConnection();
-            setTimeout(() => this.attemptToConnect(), 1000);
+            setTimeout(() => this.attemptToConnect(), 3000);
         });
     }
 
     public toString() : string { return this.name + "(" + this.ip + ")"; }
 
     private wasRecentlyContacted() {
-        return Date.now() - this.lastResponse < 6000;
+        return Date.now() - this.lastResponse < 10000;
     }
 }
 
@@ -179,50 +179,108 @@ namespace adbkit {
     }
 }
 
-interface Relay {
+interface Property<T> {
     readonly name: string;
-    isOn(): boolean;
-    switch(on: boolean): Promise<void>;
+    available(): boolean;
+    get(): T;
+    onChange(fn: () => void): void;
 }
 
-class GPIORelay implements Relay {
-    private _on: boolean = false;
-    private _modeSet: boolean = false;
-    constructor(public readonly name: string, public readonly pin: number) {}
+interface WriteableProperty<T> extends Property<T> {
+    set(val: T): void;
+}
 
-    isOn(): boolean {
+interface Controller {
+    name: string;
+    properties: Property<any>[];
+}
+
+abstract class Relay implements WriteableProperty<boolean> {
+    private evs: events.EventEmitter = new events.EventEmitter();
+    private _on: boolean = false;
+    constructor(public readonly name: string) {}
+
+    public abstract switch(on: boolean): Promise<void>;
+
+    available(): boolean {
+        return true;
+    }
+    get(): boolean {
         return this._on;
+    }
+    set(val: boolean): void {
+        this.switch(val).then(() => {
+            this.setInternal(val);
+        })
+        .catch(() => {
+            // Nothing has changed, but we fire an eent anyway
+            this.fireOnChange();
+        });
+    }
+
+    onChange(fn: () => void): void {
+        // TODO: Impl me
+        this.evs.on('change', fn);
+    }
+
+    protected setInternal(val: boolean) {
+        this._on = val;
+        this.fireOnChange();
+    }
+
+    protected fireOnChange() {
+        this.evs.emit('change');
+    }
+}
+
+function runShell(cmd: string, args: string[]): Promise<String> {
+    return new Promise<String>((accept, reject) => {
+        const out = [];
+        const pr = child_process.spawn(cmd, args);
+        pr.on('error', (err: Error) => {
+            reject(err);
+        })
+        pr.on('close', () => {
+            accept(out.join(''));
+        });
+        pr.stdout.on("data", (d) => {
+            out.push(d.toString());
+        });
+    
+    });
+}
+
+class GPIORelay extends Relay {
+    private _init: Promise<void>;
+
+    constructor(readonly name: string, public readonly pin: number) { 
+        super(name); 
+
+        this._init = runShell("/root/WiringOP/gpio/gpio", ["-1", "mode", "" + this.pin, "out"])
+            .then(() => {
+                return runShell("/root/WiringOP/gpio/gpio", ["-1", "read", "" + this.pin])
+                    .then((str) => {
+                        this.setInternal(str.startsWith("1"));
+                        return void 0;
+                    })
+
+            })
     }
 
     switch(on: boolean): Promise<void> {
-        return new Promise<void>((accept, reject) => {
-            const go = () => {
-                child_process.spawn("/root/WiringOP/gpio/gpio", ["-1", "mode", "" + this.pin, "out"])
-                    .on('close', () => {
-                        this._on = on;
-                        accept();
-                    });
-            };
-            if (!this._modeSet) {
-                child_process.spawn("/root/WiringOP/gpio/gpio", ["-1", "write", "" + this.pin, on ? "0" : "1"])
-                    .on('close', go);
-            } else {
-                go();
-            }    
+        return this._init.then(() => {
+            return runShell("/root/WiringOP/gpio/gpio", ["-1", "write", "" + this.pin, on ? "0" : "1"])
+                .then(() => void 0);
         });
     }
 }
-class ControllerRelay implements Relay {
-    private _on: boolean = false;
+class ControllerRelay extends Relay {
 
     constructor(
-        public readonly name: string, 
+        readonly name: string, 
         public readonly controller: ChildController,
         public readonly index: number) {
-    }
-
-    isOn(): boolean {
-        return this._on;
+        super(name);
     }
 
     switch(on: boolean): Promise<void> {
@@ -231,8 +289,6 @@ class ControllerRelay implements Relay {
                 type: "switch", 
                 id: "" + this.index,
                 on: on ? "true" : "false"
-            }).then(() => {
-                this._on = on;
             });
         } else {
             return Promise.reject('Controller is not connected')
@@ -240,21 +296,27 @@ class ControllerRelay implements Relay {
     }
 }
 
-class MiLightBulbRelay implements Relay {
-    private _on: boolean = false;
-    constructor(
-        public readonly name: string) {
-    }
+class MiLightBulb implements Controller {
+    readonly name = "MiLight";
+    readonly properties: Property<any>[] = [
+        new (class MiLightBulbRelay extends Relay {
+            constructor(
+                readonly name: string,
+                readonly pThis: MiLightBulb) {
+                super(name);
+            }
 
-    isOn(): boolean {
-        return this._on;
-    }
+            switch(on: boolean): Promise<void> {
+                return this.pThis.send([on ? 0xc2 : 0x46, 0x00, 0x55]);
+            }
+        })("On/off", this)
+    ];
 
-    switch(on: boolean): Promise<void> {
+    private send(buf: number[]): Promise<void> {
         const sock = dgram.createSocket("udp4");
-        return new Promise((accept, reject) => {
+        return new Promise<void>((accept, reject) => {
             sock.send(
-                new Buffer([on ? 0xc2 : 0x46, 0x00, 0x55]), 
+                new Buffer(buf), 
                 8899, 
                 "192.168.121.35", (err, bytes) => {
                     if (!!err) {
@@ -267,12 +329,33 @@ class MiLightBulbRelay implements Relay {
     }
 }
 
-class Tablet {
+class TabletOnOffRelay extends Relay {
+    constructor(private readonly tbl: Tablet) {
+        super(tbl.id + " on/off");
+    }
+
+    public switch(on: boolean): Promise<void> {
+        this.tbl.adbStream.write("input keyevent KEYCODE_POWER\n");
+        this.tbl.adbStream.write("dumpsys power\n");
+        this.tbl.adbStream.on('data', data => {
+            console.log(data);
+        });
+        return Promise.resolve(void 0);
+
+    }
+}
+
+
+class Tablet implements Controller {
     constructor(public readonly id: string) {
     }
 
     public adbStream: NodeJS.ReadWriteStream;
     public name: string;
+
+    public properties = [
+        new TabletOnOffRelay(this)
+    ]
 
     public serializable(): any{
         return {
@@ -288,32 +371,34 @@ class App implements ChildControllerHandle {
     public readonly wss: WebSocket.Server;
     public currentTemp: number;
     private config: IConfig;
-    private tablets: Map<string, Tablet> = new Map();
 
     private roomsClock: ChildController = new ChildController("192.168.121.75", "RoomsClock", this);
     private kitchenClock: ChildController = new ChildController("192.168.121.131", "KitchenClock", this)
-
-    public controllers: ChildController[] = [ this.roomsClock, this.kitchenClock];
 
     private r1 = new GPIORelay("Лампа на шкафу", 38);
     private r2 = new GPIORelay("Колонки", 40);
     private r3 = new GPIORelay("Освещение в коридоре", 36);
     private r4 = new GPIORelay("Потолок в комнате", 32);
+    private ctrlGPIO = {
+        name: "Комната",
+        properties: [this.r1, this.r2, this.r3, this.r4]
+    }
     
     private r5 = new ControllerRelay("Потолок на кухне", this.kitchenClock, 0);
     private r6 = new ControllerRelay("Лента на кухне", this.kitchenClock, 1);
+    private ctrlKitchen = {
+        name: "Часы на кухне",
+        properties: [this.r5, this.r6]
+    }
 
-    private r7 = new MiLightBulbRelay("Лампа на столе");
-    
-    private allRelays: Relay[] = [
-        this.r1, 
-        this.r2, 
-        this.r3, 
-        this.r4, 
-        this.r5, 
-        this.r6,
-        this.r7
-    ];
+    private ctrlLamp = new MiLightBulb();
+
+    private readonly kindle: Tablet = new Tablet('192.168.121.166:5556');
+    private readonly nexus7: Tablet = new Tablet('00eaadb6');
+
+    private readonly tablets: Map<string, Tablet> = new Map();
+
+    private readonly controllers = [ this.ctrlGPIO, this.ctrlKitchen, this.ctrlLamp, this.kindle, this.nexus7 ];
 
     private saveConf() {
         fs.writeFileSync('/root/storedConf.json', JSON.stringify(this.config));
@@ -322,6 +407,9 @@ class App implements ChildControllerHandle {
     constructor() {
         this.expressApi = express();
 
+        this.tablets.set(this.kindle.id, this.kindle);
+        this.tablets.set(this.nexus7.id, this.nexus7);
+
         if (fs.existsSync('/root/storedConf.json')) {
             const data = fs.readFileSync('/root/storedConf.json');
             this.config = JSON.parse(data.toString());
@@ -329,18 +417,20 @@ class App implements ChildControllerHandle {
             this.config = emptyConfig;
         }
 
-        console.log('Will wake up at ' + this.config.wakeAt.hours + ':' + this.config.wakeAt.minutes);
-
         this.server = http.createServer(this.expressApi);
 
         this.wss = new WebSocket.Server({ server: this.server });
         this.wss.on('connection', (ws: WebSocket) => {
             //connection is up, let's add a simple simple event
             ws.on('message', (message: string) => {
-
-                //log the received message and send it back to the client
-                console.log('received: %s', message);
-                // ws.send(`Hello, you sent -> ${message}`);
+                const msg = JSON.parse(message);
+                if (msg.type === "setBoolProp") {
+                    const prop = this.controllers[msg.controller].properties[msg.prop];
+                    prop.set(msg.val);
+                } else {
+                    //log the received message and send it back to the client
+                    console.log('received: %s', message);
+                }
             });
 
             //send immediatly a feedback to the incoming connection    
@@ -365,17 +455,6 @@ class App implements ChildControllerHandle {
             res.setHeader("Expires", new Date(Date.now() + 2592000000).toUTCString());
             res.end(favicon);
         });
-        router.post('/relay', (req, res) => {
-            this.allRelays[req.query["index"]].switch(req.query["on"] === "true")
-            .then(() => {
-                res.json({
-                    result: "OK"
-                });
-            })
-            .catch((err) => {
-                console.log(err);
-            });
-        });
         router.get('/tablets', (req, res) => {
             res.json(Array.from(this.tablets.values()).map(d => { return { 
                 id: d.id, 
@@ -383,20 +462,10 @@ class App implements ChildControllerHandle {
             }}));
         });
         router.get('/index.html', (req, res) => {
-            fs.readFile('templates/index.html', 'utf-8', (err, data: string) => {
-                data = data
-                    .replace("\"{{{tablets}}}\"", JSON.stringify(Array.from(this.tablets.values()).map(t => t.serializable())))
-                    .replace("\"{{{config}}}\"", JSON.stringify(this.config))
-                    .replace("<!--{{{relays}}}-->", 
-                        this.allRelays.map((r, index) => {
-                            return "<div><span>" + r.name + "</span><button onclick=\"switchRelay(true, " + index + ")\"> ON </button>" +
-                                "<button onclick=\"switchRelay(false, " + index + ")\"> OFF </button></div>"
-                        }).join('\n')
-                    )
-                    ;
-                res.send(data);
-            });
+            res.contentType('html');
+            res.send(this.renderToHTML());
         });
+
         router.get('/tablet/wakeat/:h/:m', (req, res) => {
             const hours = req.params['h'];
             const mins = req.params['m'];
@@ -416,32 +485,100 @@ class App implements ChildControllerHandle {
             .then(tracker => {
                 tracker.on('add', (dev: adbkit.Device) => {
                     // console.log("=== ADDED   = " + dev.id);
-                    this.tablets.set(dev.id, new Tablet(dev.id));
                     this.processDevice(dev);
                     // console.log(this.devices.map(d => d.id).join(", "));
                 });
                 tracker.on('remove', (dev: adbkit.Device) => {
                     // console.log("=== REMOVED = " + dev.id);
-                    this.tablets.delete(dev.id);
                     // console.log(this.devices.map(d => d.id).join(", "));
                 });
             });
-        /*
+        
         client.listDevices()
-            .then((devices: AdbKitDevice[]) => {
-                devices.forEach(device => {
+            .then((devices: adbkit.Device[]) => {
+                devices.forEach(dev => {
+                    this.processDevice(dev);
                 });
             })
             .catch((err: Error) => {
                 console.error('Something went wrong:', err.stack)
             })
-        */
+        
     }
+    
+    private renderToHTML(): string {
+        let idx = 0;
 
+        const wrap = (tag, body) => {
+            if (typeof tag == "string") {
+                return `<${tag}>\n${body}\n</${tag}>`;
+            } else {
+                const props = Object.getOwnPropertyNames(tag[1]).map(pn => pn + "=\"" + tag[1][pn] + "\"");
+                return `<${tag[0]} ${props.join(" ")}>\n${body}\n</${tag[0]}>`;
+            }
+        } 
+
+        const hdr = [
+            wrap(["script", {type: "text/javascript"}], 
+            `
+            var sock = new WebSocket("ws:/" + location.host);
+            sock.onopen = () => {
+                console.log("socket.onopen");
+                sock.onmessage = function(event) {
+                    console.log(event.data);
+                    const d = JSON.parse(event.data);
+                    if (d.type === 'onBoolPropChanged') {
+                        document.getElementById(d.id).checked = d.val;
+                    }
+                };
+            };
+    
+            function clickOnCheckBox(elId, controllerIndex, propIndex) {
+                sock.send(JSON.stringify({ 
+                    type: 'setBoolProp',
+                    controller: controllerIndex, 
+                    prop: propIndex, 
+                    val: document.getElementById(elId).checked }));
+            }
+            `)
+        ];
+        return wrap(["html", { lang: "en"}], 
+            wrap("head", hdr.join("\n")) + "\n" +
+            wrap("body", this.controllers.map((ctrl, ctrlIndex) => {
+                return ctrl.name + "<br/>" + ctrl.properties.map((prop, prIndex) => {
+                    let res = "";
+                    const id = ctrlIndex + ":" + prIndex;
+    
+                    const val = prop.get();
+                    if (typeof val == "boolean") {
+                        const avail = prop.available();
+                        // Boolean property, render as checkbok
+                        res = `<input type="checkbox" id=${id} 
+                            ${avail ? "" : "disabled"} 
+                            ${val ? "checked" : ""}
+                            onclick="clickOnCheckBox('${id}', ${ctrlIndex}, ${prIndex})">${prop.name}</input>`;
+                    }
+                
+                    prop.onChange(() => {
+                        this.wss.clients.forEach(cl => cl.send(JSON.stringify({
+                            type: "onBoolPropChanged",
+                            controller: ctrlIndex, 
+                            prop: prIndex, 
+                            id: id,
+                            val: prop.get()
+                        })));
+                    });
+
+                    return res;
+                }).join("<br/>\n")
+            }).join("<hr/>\n"))
+        );
+    }
+    
     private processDevice(device: adbkit.Device): void {
         // Wait some time for device to auth...
         BBPromise.delay(1000).then(() => {
-            // console.log("Let's get some info about device " + device.id + " (" + device.type + ")");
+            console.log("Let's get some info about device " + device.id + " (" + device.type + ")");
             // And then open shell
             client.getProperties(device.id).then(props => {
                 this.tablets.get(device.id).name = props['ro.product.model'];
