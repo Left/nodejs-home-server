@@ -12,6 +12,11 @@ var adbkit = require('adbkit')
 
 var client = adbkit.createClient()
 
+function trace<T>(x: T): T {
+    console.log(x);
+    return x;
+}
+
 interface PingResult {
     result: string;
     pingid: string;
@@ -199,19 +204,48 @@ interface Controller {
     properties: Property<any>[];
 }
 
-abstract class Relay implements WriteableProperty<boolean> {
-    private evs: events.EventEmitter = new events.EventEmitter();
-    private _on: boolean = false;
-    constructor(public readonly name: string) {}
 
-    public abstract switch(on: boolean): Promise<void>;
+abstract class WriteblePropertyImpl<T> implements WriteableProperty<T> {
+    private _val: T;
+
+    protected evs: events.EventEmitter = new events.EventEmitter();
+    constructor(public readonly name: string, readonly initial) {
+        this._val = initial;
+    }
 
     available(): boolean {
         return true;
     }
-    get(): boolean {
-        return this._on;
+
+    get(): T {
+        return this._val;
     }
+
+    protected setInternal(val: T) {
+        this._val = val;
+        this.fireOnChange();
+    }
+
+    onChange(fn: () => void): void {
+        // TODO: Impl me
+        this.evs.on('change', fn);
+    }
+
+    protected fireOnChange() {
+        this.evs.emit('change');
+    }
+
+    abstract set(val: T): void;
+} 
+
+
+abstract class Relay extends WriteblePropertyImpl<boolean> {
+    constructor(readonly name) {
+        super(name, false);
+    }
+
+    public abstract switch(on: boolean): Promise<void>;
+
     set(val: boolean): void {
         this.switch(val).then(() => {
             this.setInternal(val);
@@ -220,20 +254,6 @@ abstract class Relay implements WriteableProperty<boolean> {
             // Nothing has changed, but we fire an eent anyway
             this.fireOnChange();
         });
-    }
-
-    onChange(fn: () => void): void {
-        // TODO: Impl me
-        this.evs.on('change', fn);
-    }
-
-    protected setInternal(val: boolean) {
-        this._on = val;
-        this.fireOnChange();
-    }
-
-    protected fireOnChange() {
-        this.evs.emit('change');
     }
 }
 
@@ -264,7 +284,7 @@ class GPIORelay extends Relay {
             .then(() => {
                 return runShell("/root/WiringOP/gpio/gpio", ["-1", "read", "" + this.pin])
                     .then((str) => {
-                        this.setInternal(str.startsWith("1"));
+                        this.setInternal(str.startsWith("0"));
                         return void 0;
                     })
 
@@ -272,9 +292,10 @@ class GPIORelay extends Relay {
     }
 
     switch(on: boolean): Promise<void> {
+        // console.log("Here ", on);
         return this._init.then(() => {
             return runShell("/root/WiringOP/gpio/gpio", ["-1", "write", "" + this.pin, on ? "0" : "1"])
-                .then(() => void 0);
+                .then(() => this.setInternal(on));
         });
     }
 }
@@ -302,17 +323,41 @@ class ControllerRelay extends Relay {
 class MiLightBulb implements Controller {
     readonly name = "MiLight";
     readonly properties: Property<any>[] = [
-        new (class MiLightBulbRelay extends Relay {
+        new (class MiLightBulbRelay extends WriteblePropertyImpl<boolean> {
             constructor(
-                readonly name: string,
                 readonly pThis: MiLightBulb) {
-                super(name);
+                super("On/off", false);
             }
 
-            switch(on: boolean): Promise<void> {
-                return this.pThis.send([on ? 0xc2 : 0x46, 0x00, 0x55]);
+            set(on: boolean): Promise<void> {
+                if (on) {
+                    return this.pThis.send([0x42, 0x00, 0x55])
+                        .then(() => BBPromise.delay(100).then(
+                            () => this.pThis.send([0xC2, 0x00, 0x55])
+                        ));
+                } else {
+                    return this.pThis.send([0x46, 0x00, 0x55]);
+                }
             }
-        })("On/off", this)
+        })(this),
+        new (class BrightnessProperty extends WriteblePropertyImpl<number> {
+            constructor(public readonly pThis: MiLightBulb) {
+                super("Brightness", 50);
+            }
+            public set(val: number): void {
+                this.pThis.send([0x4E, 0x2 + (0x15 * val / 100), 0x55])
+                    .then(() => this.setInternal(val));
+            }
+        })(this),
+        new (class BrightnessProperty extends WriteblePropertyImpl<number> {
+            constructor(public readonly pThis: MiLightBulb) {
+                super("Hue", 50);
+            }
+            public set(val: number): void {
+                this.pThis.send([0x40, (0xff * val / 100), 0x55])
+                    .then(() => this.setInternal(val));
+            }
+        })(this)
     ];
 
     private send(buf: number[]): Promise<void> {
@@ -433,7 +478,7 @@ class App implements ChildControllerHandle {
             //connection is up, let's add a simple simple event
             ws.on('message', (message: string) => {
                 const msg = JSON.parse(message);
-                if (msg.type === "setBoolProp") {
+                if (msg.type === "setProp") {
                     const prop = this.controllers[msg.controller].properties[msg.prop];
                     if (isWriteableProperty(prop)) {
                         prop.set(msg.val);
@@ -540,19 +585,23 @@ class App implements ChildControllerHandle {
                 sock.onmessage = function(event) {
                     console.log(event.data);
                     const d = JSON.parse(event.data);
-                    if (d.type === 'onBoolPropChanged') {
-                        document.getElementById(d.id).checked = d.val;
+                    if (d.type === 'onPropChanged') {
+                        if (typeof(d.val) == "boolean") {
+                            document.getElementById(d.id).checked = d.val;
+                        } else if (typeof(d.val) == "number") {
+                            document.getElementById(d.id).value = d.val;
+                        }
                     }
                 };
             };
     
-            function clickOnCheckBox(elId, controllerIndex, propIndex) {
+            function sendVal(controllerIndex, propIndex, val) {
                 sock.send(JSON.stringify({ 
-                    type: 'setBoolProp',
+                    type: 'setProp',
                     controller: controllerIndex, 
                     prop: propIndex, 
-                    val: document.getElementById(elId).checked }));
-            }
+                    val: val }));
+            };
             `)
         ];
         return wrap(["html", { lang: "en"}], 
@@ -563,18 +612,23 @@ class App implements ChildControllerHandle {
                     const id = ctrlIndex + ":" + prIndex;
     
                     const val = prop.get();
-                    if (typeof val == "boolean") {
-                        const avail = prop.available();
+                    const avail = prop.available();
+                    if (typeof val === "boolean") {
                         // Boolean property, render as checkbok
                         res = `<input type="checkbox" id=${id} 
                             ${avail ? "" : "disabled"} 
                             ${val ? "checked" : ""}
-                            onclick="clickOnCheckBox('${id}', ${ctrlIndex}, ${prIndex})">${prop.name}</input>`;
+                            onclick="sendVal(${ctrlIndex}, ${prIndex}, document.getElementById('${id}').checked)">${prop.name}</input>`;
+                    } else if (typeof val === "number") {
+                        res = `<input ${avail ? "" : "disabled"}  type="range" id="${id}" min="0" max="100" value="${val}" 
+                            oninput="sendVal(${ctrlIndex}, ${prIndex}, +document.getElementById('${id}').value)">${prop.name}</input>`;
+                    } else {
+                        console.log("Unknown prop type " + typeof (val));
                     }
                 
                     prop.onChange(() => {
                         this.wss.clients.forEach(cl => cl.send(JSON.stringify({
-                            type: "onBoolPropChanged",
+                            type: "onPropChanged",
                             controller: ctrlIndex, 
                             prop: prIndex, 
                             id: id,
