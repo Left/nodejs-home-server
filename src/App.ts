@@ -204,14 +204,9 @@ interface Controller {
     properties: Property<any>[];
 }
 
-
-abstract class WriteblePropertyImpl<T> implements WriteableProperty<T> {
-    private _val: T;
-
+abstract class PropertyImpl<T> implements Property<T> {
     protected evs: events.EventEmitter = new events.EventEmitter();
-    constructor(public readonly name: string, readonly initial) {
-        this._val = initial;
-    }
+    private _val: T;
 
     available(): boolean {
         return true;
@@ -226,6 +221,10 @@ abstract class WriteblePropertyImpl<T> implements WriteableProperty<T> {
         this.fireOnChange();
     }
 
+    constructor(public readonly name: string, readonly initial) {
+        this._val = initial;
+    }
+
     onChange(fn: () => void): void {
         // TODO: Impl me
         this.evs.on('change', fn);
@@ -233,6 +232,12 @@ abstract class WriteblePropertyImpl<T> implements WriteableProperty<T> {
 
     protected fireOnChange() {
         this.evs.emit('change');
+    }
+}
+
+abstract class WriteblePropertyImpl<T> extends PropertyImpl<T> implements WriteableProperty<T> {
+    constructor(public readonly name: string, readonly initial) {
+        super(name, initial);
     }
 
     abstract set(val: T): void;
@@ -439,6 +444,17 @@ class App implements ChildControllerHandle {
         properties: [this.r5, this.r6]
     }
 
+    private tempProperty = new (class Temp extends PropertyImpl<string> {
+        constructor() {
+            super("Температура", "Нет данных")
+        }
+    })();
+
+    private ctrlClock = {
+        name: "Часы и датчик температуры",
+        properties: [ this.tempProperty ]
+    }
+
     private ctrlLamp = new MiLightBulb();
 
     private readonly kindle: Tablet = new Tablet('192.168.121.166:5556');
@@ -448,6 +464,7 @@ class App implements ChildControllerHandle {
 
     private readonly controllers: Controller[] = [ 
         this.ctrlGPIO, 
+        this.ctrlClock,
         this.ctrlKitchen, 
         this.ctrlLamp, 
         this.kindle, 
@@ -590,6 +607,8 @@ class App implements ChildControllerHandle {
                             document.getElementById(d.id).checked = d.val;
                         } else if (typeof(d.val) == "number") {
                             document.getElementById(d.id).value = d.val;
+                        } else if (typeof(d.val) == "string") {
+                            document.getElementById(d.id).value = d.val;
                         }
                     }
                 };
@@ -622,7 +641,10 @@ class App implements ChildControllerHandle {
                     } else if (typeof val === "number") {
                         res = `<input ${avail ? "" : "disabled"}  type="range" id="${id}" min="0" max="100" value="${val}" 
                             oninput="sendVal(${ctrlIndex}, ${prIndex}, +document.getElementById('${id}').value)">${prop.name}</input>`;
-                    } else {
+                        } else if (typeof val === "string") {
+                            res = `<input ${avail ? "" : "disabled"}  type="text" id="${id}" value="${val}" 
+                                oninput="sendVal(${ctrlIndex}, ${prIndex}, +document.getElementById('${id}').value)">${prop.name}</input>`;
+                        } else {
                         console.log("Unknown prop type " + typeof (val));
                     }
                 
@@ -676,6 +698,7 @@ class App implements ChildControllerHandle {
                     console.log(controller + " " + "temperature: ", objData.value);
                     this.wss.clients.forEach(cl => cl.send(objData.value));
                     this.currentTemp = objData.value;
+                    this.tempProperty['setInternal'](this.currentTemp + 'C');
                 }
                 break;
             case 'log':
