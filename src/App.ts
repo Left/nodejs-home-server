@@ -190,6 +190,10 @@ interface WriteableProperty<T> extends Property<T> {
     set(val: T): void;
 }
 
+function isWriteableProperty<T>(object: Property<T>): object is WriteableProperty<T> {
+    return 'set' in object;
+}
+
 interface Controller {
     name: string;
     properties: Property<any>[];
@@ -275,7 +279,6 @@ class GPIORelay extends Relay {
     }
 }
 class ControllerRelay extends Relay {
-
     constructor(
         readonly name: string, 
         public readonly controller: ChildController,
@@ -398,7 +401,13 @@ class App implements ChildControllerHandle {
 
     private readonly tablets: Map<string, Tablet> = new Map();
 
-    private readonly controllers = [ this.ctrlGPIO, this.ctrlKitchen, this.ctrlLamp, this.kindle, this.nexus7 ];
+    private readonly controllers: Controller[] = [ 
+        this.ctrlGPIO, 
+        this.ctrlKitchen, 
+        this.ctrlLamp, 
+        this.kindle, 
+        this.nexus7 
+    ];
 
     private saveConf() {
         fs.writeFileSync('/root/storedConf.json', JSON.stringify(this.config));
@@ -426,7 +435,11 @@ class App implements ChildControllerHandle {
                 const msg = JSON.parse(message);
                 if (msg.type === "setBoolProp") {
                     const prop = this.controllers[msg.controller].properties[msg.prop];
-                    prop.set(msg.val);
+                    if (isWriteableProperty(prop)) {
+                        prop.set(msg.val);
+                    } else {
+                        console.error(`Property ${prop.name} is not writable`);
+                    }
                 } else {
                     //log the received message and send it back to the client
                     console.log('received: %s', message);
@@ -545,7 +558,7 @@ class App implements ChildControllerHandle {
         return wrap(["html", { lang: "en"}], 
             wrap("head", hdr.join("\n")) + "\n" +
             wrap("body", this.controllers.map((ctrl, ctrlIndex) => {
-                return ctrl.name + "<br/>" + ctrl.properties.map((prop, prIndex) => {
+                return ctrl.name + "<br/>" + ctrl.properties.map((prop: Property<any>, prIndex: number): string => {
                     let res = "";
                     const id = ctrlIndex + ":" + prIndex;
     
