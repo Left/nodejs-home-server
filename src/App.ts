@@ -222,8 +222,11 @@ abstract class PropertyImpl<T> implements Property<T> {
     }
 
     public setInternal(val: T) {
+        const shouldFire = this._val != val;
         this._val = val;
-        this.fireOnChange();
+        if (shouldFire) {
+            this.fireOnChange();
+        }
     }
 
     constructor(public readonly name: string, readonly initial) {
@@ -388,6 +391,10 @@ class MiLightBulb implements Controller {
     }
 }
 
+abstract class Button extends WritablePropertyImpl<void> {
+    constructor(protected tbl: Tablet) { super("", void 0); }
+}
+
 class Tablet implements Controller {
     constructor(public readonly id: string) {
     }
@@ -422,12 +429,16 @@ class Tablet implements Controller {
 
     public properties = [
         this.screenIsOn,
-        new (class ButtonReset extends WritablePropertyImpl<void> {
-            constructor(private tbl: Tablet) { super("Reset", void 0); }
-
+        new (class ButtonImpl extends Button {
+            readonly name = "Reset";
             set(val: void): void {
-                console.log("Resetting " + JSON.stringify(this.tbl.serializable()));
                 this.tbl.shellCmd("reboot");
+            }
+        })(this),
+        new (class ButtonImpl extends Button {
+            readonly name = "Stop playing";
+            set(val: void): void {
+                this.tbl.shellCmd("am force-stop org.videolan.vlc");
             }
         })(this)
     ]
@@ -516,34 +527,34 @@ class App implements ChildControllerHandle {
 
     private r1 = new GPIORelay("Лампа на шкафу", 38);
     private r2 = new GPIORelay("Колонки", 40);
-    private r3 = new GPIORelay("Освещение в коридоре", 36);
-    private r4 = new GPIORelay("Потолок в комнате", 32);
-    private ctrlGPIO = {
-        name: "Комната",
-        online: true, // Always online
-        properties: [this.r1, this.r2, this.r3, this.r4]
-    }
-    
-    private r5 = new ControllerRelay("Потолок на кухне", this.kitchenClock, 0);
-    private r6 = new ControllerRelay("Лента на кухне", this.kitchenClock, 1);
-    private ctrlKitchen = {
-        name: "Часы на кухне",
-        online: true,
-        properties: [this.r5, this.r6]
-    }
-
+    private r3 = new GPIORelay("Коридор", 36);
+    private r4 = new GPIORelay("Потолок", 32);
     private tempProperty = new (class Temp extends PropertyImpl<string> {
         constructor() {
             super("Температура", "Нет данных")
         }
     })();
 
+    private ctrlGPIO = {
+        name: "Комната",
+        online: true, // Always online
+        properties: [this.r1, this.r2, this.r3, this.r4, this.tempProperty]
+    }
+    
+    private r5 = new ControllerRelay("Потолок", this.kitchenClock, 0);
+    private r6 = new ControllerRelay("Лента", this.kitchenClock, 1);
+    private ctrlKitchen = {
+        name: "Часы на кухне",
+        online: true,
+        properties: [this.r5, this.r6]
+    }
+/*
     private ctrlClock = {
         name: "Часы и датчик температуры",
         online: true,
-        properties: [ this.tempProperty ]
+        properties: [  ]
     }
-
+*/
     private ctrlLamp = new MiLightBulb();
 
     private readonly kindle: Tablet = new Tablet('192.168.121.166:5556');
@@ -553,7 +564,7 @@ class App implements ChildControllerHandle {
 
     private readonly controllers: Controller[] = [ 
         this.ctrlGPIO, 
-        this.ctrlClock,
+        // this.ctrlClock,
         this.ctrlKitchen, 
         this.ctrlLamp, 
         this.kindle, 
@@ -679,11 +690,13 @@ class App implements ChildControllerHandle {
                 return `<${tag}>\n${body}\n</${tag}>`;
             } else {
                 const props = Object.getOwnPropertyNames(tag[1]).map(pn => pn + "=\"" + tag[1][pn] + "\"");
-                return `<${tag[0]} ${props.join(" ")}>\n${body}\n</${tag[0]}>`;
+                return `<${tag[0]} ${props.join(" ")}` + (!!body ? `>\n${body}\n</${tag[0]}>` : ">");
             }
         } 
 
         const hdr = [
+            wrap(["meta", { 'http-equiv': "content-type", content:"text/html; charset=UTF-8" }], undefined),
+            wrap(["meta", { name: "viewport", content: "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" }], undefined),
             wrap(["script", {type: "text/javascript"}], 
             `
             var sock = new WebSocket("ws:/" + location.host);
@@ -724,16 +737,16 @@ class App implements ChildControllerHandle {
                     const avail = prop.available();
                     if (typeof val === "boolean") {
                         // Boolean property, render as checkbok
-                        res = `<input type="checkbox" id=${id} 
+                        res = `<label><input type="checkbox" id=${id} 
                             ${avail ? "" : "disabled"} 
                             ${val ? "checked" : ""}
-                            onclick="sendVal(${ctrlIndex}, ${prIndex}, document.getElementById('${id}').checked)">${prop.name}</input>`;
+                            onclick="sendVal(${ctrlIndex}, ${prIndex}, document.getElementById('${id}').checked)"/>${prop.name}</label>`;
                     } else if (typeof val === "number") {
                         res = `<input ${avail ? "" : "disabled"}  type="range" id="${id}" min="0" max="100" value="${val}" 
                             oninput="sendVal(${ctrlIndex}, ${prIndex}, +document.getElementById('${id}').value)">${prop.name}</input>`;
                     } else if (typeof val === "string") {
-                        res = `<input ${avail ? "" : "disabled"}  type="text" id="${id}" value="${val}" 
-                            oninput="sendVal(${ctrlIndex}, ${prIndex}, +document.getElementById('${id}').value)">${prop.name}</input>`;
+                        res = `<label>${prop.name}<input ${avail ? "" : "disabled"}  type="text" id="${id}" value="${val}" 
+                            oninput="sendVal(${ctrlIndex}, ${prIndex}, +document.getElementById('${id}').value)"/></label>`;
                     } else if (typeof val === "undefined") {
                         res = `<input ${avail ? "" : "disabled"}  type="button" id="${id}" value="${prop.name}" 
                             onclick="sendVal(${ctrlIndex}, ${prIndex}, document.getElementById('${id}').value)"></input>`;
