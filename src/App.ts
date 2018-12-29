@@ -7,10 +7,14 @@ import * as child_process from "child_process";
 import * as dgram from "dgram";
 import * as events from "events";
 
-var BBPromise = require('bluebird')
-var adbkit = require('adbkit')
+function delay(time: number): Promise<void> {
+    return new Promise<void>(function(resolve) { 
+        setTimeout(resolve, time);
+    });
+ }
 
-var client = adbkit.createClient()
+var adbkit = require('adbkit')
+var adbClient = adbkit.createClient()
 
 function trace<T>(x: T): T {
     console.log(x);
@@ -200,7 +204,8 @@ function isWriteableProperty<T>(object: Property<T>): object is WriteablePropert
 }
 
 interface Controller {
-    name: string;
+    readonly name: string;
+    readonly online: boolean;
     properties: Property<any>[];
 }
 
@@ -216,7 +221,7 @@ abstract class PropertyImpl<T> implements Property<T> {
         return this._val;
     }
 
-    protected setInternal(val: T) {
+    public setInternal(val: T) {
         this._val = val;
         this.fireOnChange();
     }
@@ -235,7 +240,7 @@ abstract class PropertyImpl<T> implements Property<T> {
     }
 }
 
-abstract class WriteblePropertyImpl<T> extends PropertyImpl<T> implements WriteableProperty<T> {
+abstract class WritablePropertyImpl<T> extends PropertyImpl<T> implements WriteableProperty<T> {
     constructor(public readonly name: string, readonly initial) {
         super(name, initial);
     }
@@ -244,7 +249,7 @@ abstract class WriteblePropertyImpl<T> extends PropertyImpl<T> implements Writea
 } 
 
 
-abstract class Relay extends WriteblePropertyImpl<boolean> {
+abstract class Relay extends WritablePropertyImpl<boolean> {
     constructor(readonly name) {
         super(name, false);
     }
@@ -327,8 +332,9 @@ class ControllerRelay extends Relay {
 
 class MiLightBulb implements Controller {
     readonly name = "MiLight";
+    readonly online = true;
     readonly properties: Property<any>[] = [
-        new (class MiLightBulbRelay extends WriteblePropertyImpl<boolean> {
+        new (class MiLightBulbRelay extends WritablePropertyImpl<boolean> {
             constructor(
                 readonly pThis: MiLightBulb) {
                 super("On/off", false);
@@ -337,7 +343,7 @@ class MiLightBulb implements Controller {
             set(on: boolean): Promise<void> {
                 if (on) {
                     return this.pThis.send([0x42, 0x00, 0x55])
-                        .then(() => BBPromise.delay(100).then(
+                        .then(() => delay(100).then(
                             () => this.pThis.send([0xC2, 0x00, 0x55])
                         ));
                 } else {
@@ -345,7 +351,7 @@ class MiLightBulb implements Controller {
                 }
             }
         })(this),
-        new (class BrightnessProperty extends WriteblePropertyImpl<number> {
+        new (class BrightnessProperty extends WritablePropertyImpl<number> {
             constructor(public readonly pThis: MiLightBulb) {
                 super("Brightness", 50);
             }
@@ -354,7 +360,7 @@ class MiLightBulb implements Controller {
                     .then(() => this.setInternal(val));
             }
         })(this),
-        new (class BrightnessProperty extends WriteblePropertyImpl<number> {
+        new (class BrightnessProperty extends WritablePropertyImpl<number> {
             constructor(public readonly pThis: MiLightBulb) {
                 super("Hue", 50);
             }
@@ -382,32 +388,48 @@ class MiLightBulb implements Controller {
     }
 }
 
-class TabletOnOffRelay extends Relay {
-    constructor(private readonly tbl: Tablet) {
-        super(tbl.id + " on/off");
-    }
-
-    public switch(on: boolean): Promise<void> {
-        this.tbl.adbStream.write("input keyevent KEYCODE_POWER\n");
-        this.tbl.adbStream.write("dumpsys power\n");
-        this.tbl.adbStream.on('data', data => {
-            console.log(data);
-        });
-        return Promise.resolve(void 0);
-
-    }
-}
-
-
 class Tablet implements Controller {
     constructor(public readonly id: string) {
     }
 
-    public adbStream: NodeJS.ReadWriteStream;
-    public name: string;
+    private _name: string;
+    private _androidVersion: string;
+    public get name() { return this._online ? `${this._name}, android ${this._androidVersion}` : "Getting data"; }
+
+    private _online: boolean = false;
+    private _timer: NodeJS.Timer;
+    public get online() { return this._online; }
+
+    private screenIsOn = new (class TabletOnOffRelay extends Relay {
+        constructor(private readonly tbl: Tablet) {
+            super(tbl.id + " on/off");
+        }
+    
+        public switch(on: boolean): Promise<void> {
+            return this.tbl.screenIsSwitchedOn().then(onNow => {
+                if (on !== onNow) {
+                    this.tbl.shellCmd("input keyevent KEYCODE_POWER").then(res => {
+                        return delay(300).then(() => this.tbl.screenIsSwitchedOn().then(onNow => {
+                            this.setInternal(onNow);
+                        }));
+                    })
+                } else {
+                    return Promise.resolve(void 0); // Already in this state
+                }
+            });
+        }
+    })(this);
 
     public properties = [
-        new TabletOnOffRelay(this)
+        this.screenIsOn,
+        new (class ButtonReset extends WritablePropertyImpl<void> {
+            constructor(private tbl: Tablet) { super("Reset", void 0); }
+
+            set(val: void): void {
+                console.log("Resetting " + JSON.stringify(this.tbl.serializable()));
+                this.tbl.shellCmd("reboot");
+            }
+        })(this)
     ]
 
     public serializable(): any{
@@ -415,6 +437,70 @@ class Tablet implements Controller {
             id: this.id, 
             name: this.name
         }
+    }
+
+    private shellCmd(cmd: string): Promise<string> {
+        return new Promise<string>((accept, reject) => {
+            adbClient.shell(this.id, cmd)
+                .then(adbkit.util.readAll)
+                .then((output: string) => {
+                    accept(output);
+                })
+                .catch(err => reject(err));
+            });
+    };
+
+    public screenIsSwitchedOn(): Promise<boolean> {
+        return new Promise<boolean>((accept, reject) => {
+            this.shellCmd('dumpsys power')
+                .then((output: string) => {
+                    const str = output.toString();
+                    const lines: string[] = str.split(/\r\n|\r|\n/);
+                    const data = {
+                        mHoldingWakeLockSuspendBlocker: undefined,
+                        mWakefulness: undefined
+                    };
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        Object.getOwnPropertyNames(data).forEach(prop => {
+                            if (trimmed.startsWith(prop + "=")) {
+                                data[prop] = trimmed.substring(prop.length + 1);
+                            }
+                        });
+                    }
+                    
+                    // console.log(this.name + "->" + JSON.stringify(data));
+                    accept(data.mWakefulness == "Awake");
+                })
+                .catch(err => reject(err));
+        });
+    }
+
+    public init() {
+        // And then open shell
+        adbClient.getProperties(this.id).then(props => {
+            this._name = props['ro.product.model'];
+            this._androidVersion = props['ro.build.version.release'];
+
+            this._online = true;
+
+            // Check that screen is on
+            this.screenIsSwitchedOn().then(on => {
+                this.screenIsOn.setInternal(on);
+            });
+            // console.log(JSON.stringify(props));
+        });
+
+        this._timer = setInterval(() => {
+            this.screenIsSwitchedOn().then(on => {
+                this.screenIsOn.setInternal(on);
+            });
+        }, 10000);
+    }
+
+    public stop() {
+        clearInterval(this._timer);
+        this._online = false;
     }
 }
 
@@ -434,6 +520,7 @@ class App implements ChildControllerHandle {
     private r4 = new GPIORelay("Потолок в комнате", 32);
     private ctrlGPIO = {
         name: "Комната",
+        online: true, // Always online
         properties: [this.r1, this.r2, this.r3, this.r4]
     }
     
@@ -441,6 +528,7 @@ class App implements ChildControllerHandle {
     private r6 = new ControllerRelay("Лента на кухне", this.kitchenClock, 1);
     private ctrlKitchen = {
         name: "Часы на кухне",
+        online: true,
         properties: [this.r5, this.r6]
     }
 
@@ -452,6 +540,7 @@ class App implements ChildControllerHandle {
 
     private ctrlClock = {
         name: "Часы и датчик температуры",
+        online: true,
         properties: [ this.tempProperty ]
     }
 
@@ -556,7 +645,7 @@ class App implements ChildControllerHandle {
         })
         this.expressApi.use('/', router);
 
-        client.trackDevices()
+        adbClient.trackDevices()
             .then(tracker => {
                 tracker.on('add', (dev: adbkit.Device) => {
                     // console.log("=== ADDED   = " + dev.id);
@@ -566,10 +655,11 @@ class App implements ChildControllerHandle {
                 tracker.on('remove', (dev: adbkit.Device) => {
                     // console.log("=== REMOVED = " + dev.id);
                     // console.log(this.devices.map(d => d.id).join(", "));
+                    this.tablets.get(dev.id).stop();
                 });
             });
         
-        client.listDevices()
+        adbClient.listDevices()
             .then((devices: adbkit.Device[]) => {
                 devices.forEach(dev => {
                     this.processDevice(dev);
@@ -641,10 +731,13 @@ class App implements ChildControllerHandle {
                     } else if (typeof val === "number") {
                         res = `<input ${avail ? "" : "disabled"}  type="range" id="${id}" min="0" max="100" value="${val}" 
                             oninput="sendVal(${ctrlIndex}, ${prIndex}, +document.getElementById('${id}').value)">${prop.name}</input>`;
-                        } else if (typeof val === "string") {
-                            res = `<input ${avail ? "" : "disabled"}  type="text" id="${id}" value="${val}" 
-                                oninput="sendVal(${ctrlIndex}, ${prIndex}, +document.getElementById('${id}').value)">${prop.name}</input>`;
-                        } else {
+                    } else if (typeof val === "string") {
+                        res = `<input ${avail ? "" : "disabled"}  type="text" id="${id}" value="${val}" 
+                            oninput="sendVal(${ctrlIndex}, ${prIndex}, +document.getElementById('${id}').value)">${prop.name}</input>`;
+                    } else if (typeof val === "undefined") {
+                        res = `<input ${avail ? "" : "disabled"}  type="button" id="${id}" value="${prop.name}" 
+                            onclick="sendVal(${ctrlIndex}, ${prIndex}, document.getElementById('${id}').value)"></input>`;
+                    } else {
                         console.log("Unknown prop type " + typeof (val));
                     }
                 
@@ -666,15 +759,8 @@ class App implements ChildControllerHandle {
     
     private processDevice(device: adbkit.Device): void {
         // Wait some time for device to auth...
-        BBPromise.delay(1000).then(() => {
-            console.log("Let's get some info about device " + device.id + " (" + device.type + ")");
-            // And then open shell
-            client.getProperties(device.id).then(props => {
-                this.tablets.get(device.id).name = props['ro.product.model'];
-            });
-            client.shell(device.id, '').then((out: NodeJS.ReadWriteStream) => {
-                this.tablets.get(device.id).adbStream = out;
-            });
+        delay(1000).then(() => {
+            this.tablets.get(device.id).init();
         });
     }
 
