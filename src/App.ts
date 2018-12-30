@@ -407,6 +407,16 @@ class Tablet implements Controller {
     private _timer: NodeJS.Timer;
     public get online() { return this._online; }
 
+    private volume = new (class VolumeControl extends WritablePropertyImpl<number> {
+        constructor(private readonly tbl: Tablet) {
+            super("Volume", 0);
+        }
+
+        set(val: number): void {
+            this.tbl.setVolume(val);
+        }
+    })(this);
+
     private screenIsOn = new (class TabletOnOffRelay extends Relay {
         constructor(private readonly tbl: Tablet) {
             super(tbl.id + " on/off");
@@ -428,6 +438,7 @@ class Tablet implements Controller {
     })(this);
 
     public properties = [
+        this.volume,
         this.screenIsOn,
         new (class ButtonImpl extends Button {
             readonly name = "Reset";
@@ -460,6 +471,71 @@ class Tablet implements Controller {
                 .catch(err => reject(err));
             });
     };
+
+    private settingVolume = Promise.resolve(void 0);
+
+    public setVolume(vol: number): Promise<void> {
+        return this.settingVolume.then(() => 
+            this.settingVolume = this.getVolume().then(volNow => {
+                var times = (volNow - vol)/15;
+                var updown = "DOWN";
+                if (times < 0) {
+                    updown = "UP";
+                    times = -times;
+                }
+                const shellCmd = ("input keyevent KEYCODE_VOLUME_" + updown + ";").repeat(times);
+                console.log('setVolume', volNow, vol, shellCmd);
+                if (!!shellCmd) {
+                    return this.shellCmd(shellCmd)
+                        .then(() => {
+                            this.settingVolume = Promise.resolve(void 0);
+                        });
+                } else {
+                    return this.settingVolume = Promise.resolve(void 0);
+                }
+            }));
+    }
+
+    public getVolume(): Promise<number> {
+        const t = Date.now();
+        return new Promise<number>((accept_, reject) => {
+            const accept = (val) => {
+                console.log(Date.now() - t, "ms", val);
+                accept_(val);
+            }
+            this.shellCmd('dumpsys audio')
+                .then((output: string) => {
+                    const str = output.toString();
+                    const allTheLines = str.split('- STREAM_');
+                    const musicLines = allTheLines.filter(ll => ll.startsWith('MUSIC:'))[0];
+                    const musicLinesArray = musicLines.split(/\r\n|\r|\n/);
+                    const muteCountLine = musicLinesArray.filter(ll => ll.startsWith("   Mute count:"))[0];
+                    const mutedLine = musicLinesArray.filter(ll => ll.startsWith("   Muted:"))[0];
+
+                    if (!!mutedLine && mutedLine !== '   Muted: false') {
+                        accept(0);
+                    } else if (!!muteCountLine && muteCountLine !== '   Mute count: 0') {
+                        accept(0);
+                    } else {
+                        const currentLineStart = "   Current:";
+                        const currVolLine = musicLinesArray.filter(ll => ll.startsWith(currentLineStart))[0];
+                        const allValues = currVolLine.substring(currentLineStart.length+1).split(', ');
+                        const currVol = allValues.filter(ll => ll.startsWith("2:"))[0];
+                        if (!!currVol) {
+                            const maxVol = allValues.filter(ll => ll.startsWith("1000:"))[0];                
+                            const retVol = (+(currVol.split(': ')[1]) / +(maxVol.split(': ')[1]) * 100)
+                            accept(retVol);
+                        } else {
+                            const currVol = allValues.filter(ll => ll.startsWith("2 (speaker):"))[0];
+                            const retVol = (+(currVol.split(': ')[1]) / 15.) * 100.;
+                            accept(retVol);
+                        }
+                
+                    }
+                })
+                .catch(err => reject(err));
+        });
+    }
 
     public screenIsSwitchedOn(): Promise<boolean> {
         return new Promise<boolean>((accept, reject) => {
@@ -494,19 +570,22 @@ class Tablet implements Controller {
             this._androidVersion = props['ro.build.version.release'];
 
             this._online = true;
-
-            // Check that screen is on
-            this.screenIsSwitchedOn().then(on => {
-                this.screenIsOn.setInternal(on);
-            });
-            // console.log(JSON.stringify(props));
         });
 
         this._timer = setInterval(() => {
-            this.screenIsSwitchedOn().then(on => {
-                this.screenIsOn.setInternal(on);
-            });
+            this.timerTask();
         }, 10000);
+
+        this.timerTask();
+    }
+
+    public timerTask() {
+        this.screenIsSwitchedOn().then(on => {
+            this.screenIsOn.setInternal(on);
+        });
+        this.getVolume().then(vol => {
+            this.volume.setInternal(vol);
+        });    
     }
 
     public stop() {
