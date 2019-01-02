@@ -1,7 +1,7 @@
 import * as express from 'express'
 import * as http from 'http';
 import * as WebSocket from 'ws';
-import * as stream from "stream";
+// import * as stream from "stream";
 import * as fs from "fs";
 import * as child_process from "child_process";
 import * as dgram from "dgram";
@@ -16,6 +16,7 @@ function delay(time: number): Promise<void> {
 var adbkit = require('adbkit')
 var adbClient = adbkit.createClient()
 
+/*
 function trace<T>(x: T): T {
     console.log(x);
     return x;
@@ -25,6 +26,7 @@ interface PingResult {
     result: string;
     pingid: string;
 }
+*/
 
 interface Msg {
     type: string;
@@ -53,10 +55,12 @@ interface IRKey extends Msg {
     key: string;
 }
 
+/*
 interface Ping extends Msg {
     type: 'ping';
     pingid: string;
 }
+*/
 
 interface ChildControllerHandle {
     processMsg(controller: ClockController, packet: Msg): void;
@@ -85,6 +89,11 @@ namespace adbkit {
     export interface Device { 
         id: string;
         type: string;
+    }
+
+    export interface Tracker {
+        on(event: "add", listener: (dev: Device) => void): void;
+        on(event: "remove", listener: (dev: Device) => void): void;
     }
 }
 
@@ -129,7 +138,7 @@ abstract class PropertyImpl<T> implements Property<T> {
         }
     }
 
-    constructor(public readonly name: string, readonly initial) {
+    constructor(public readonly name: string, readonly initial: T) {
         this._val = initial;
     }
 
@@ -144,7 +153,7 @@ abstract class PropertyImpl<T> implements Property<T> {
 }
 
 abstract class WritablePropertyImpl<T> extends PropertyImpl<T> implements WriteableProperty<T> {
-    constructor(public readonly name: string, readonly initial) {
+    constructor(public readonly name: string, readonly initial: T) {
         super(name, initial);
     }
 
@@ -153,7 +162,7 @@ abstract class WritablePropertyImpl<T> extends PropertyImpl<T> implements Writea
 
 
 abstract class Relay extends WritablePropertyImpl<boolean> {
-    constructor(readonly name) {
+    constructor(readonly name: string) {
         super(name, false);
     }
 
@@ -172,7 +181,7 @@ abstract class Relay extends WritablePropertyImpl<boolean> {
 
 function runShell(cmd: string, args: string[]): Promise<String> {
     return new Promise<String>((accept, reject) => {
-        const out = [];
+        const out: string[] = [];
         const pr = child_process.spawn(cmd, args);
         pr.on('error', (err: Error) => {
             reject(err);
@@ -276,16 +285,18 @@ abstract class Button extends WritablePropertyImpl<void> {
 }
 
 class Tablet implements Controller {
-    constructor(public readonly id: string) {
-    }
-
     private _name: string;
     private _androidVersion: string;
     public get name() { return this._online ? `${this._name}, android ${this._androidVersion}` : "Getting data"; }
 
     private _online: boolean = false;
-    private _timer: NodeJS.Timer;
+    private _timer?: NodeJS.Timer;
     public get online() { return this._online; }
+
+    constructor(public readonly id: string) {
+        this._name = id;
+        this._androidVersion = "<Unknown>";
+    }
 
     private volume = new (class VolumeControl extends WritablePropertyImpl<number> {
         constructor(private readonly tbl: Tablet) {
@@ -316,8 +327,6 @@ class Tablet implements Controller {
             });
         }
     })(this);
-
-    public 
 
     public properties = [
         this.volume,
@@ -350,7 +359,7 @@ class Tablet implements Controller {
                 .then((output: string) => {
                     accept(output);
                 })
-                .catch(err => reject(err));
+                .catch((err: Error) => reject(err));
             });
     };
 
@@ -370,7 +379,7 @@ class Tablet implements Controller {
                 if (!!shellCmd) {
                     return this.shellCmd(shellCmd)
                         .then(() => {
-                            this.settingVolume = Promise.resolve(void 0);
+                            return this.settingVolume = Promise.resolve(void 0);
                         });
                 } else {
                     return this.settingVolume = Promise.resolve(void 0);
@@ -381,7 +390,7 @@ class Tablet implements Controller {
     public getVolume(): Promise<number> {
         const t = Date.now();
         return new Promise<number>((accept_, reject) => {
-            const accept = (val) => {
+            const accept = (val: number) => {
                 console.log(Date.now() - t, "ms", val);
                 accept_(val);
             }
@@ -425,7 +434,7 @@ class Tablet implements Controller {
                 .then((output: string) => {
                     const str = output.toString();
                     const lines: string[] = str.split(/\r\n|\r|\n/);
-                    const data = {
+                    const data: { [k: string]: string|undefined } = {
                         mHoldingWakeLockSuspendBlocker: undefined,
                         mWakefulness: undefined
                     };
@@ -447,7 +456,7 @@ class Tablet implements Controller {
 
     public init() {
         // And then open shell
-        adbClient.getProperties(this.id).then(props => {
+        adbClient.getProperties(this.id).then((props: {[k: string]: string}) => {
             this._name = props['ro.product.model'];
             this._androidVersion = props['ro.build.version.release'];
 
@@ -471,7 +480,9 @@ class Tablet implements Controller {
     }
 
     public stop() {
-        clearInterval(this._timer);
+        if (!!this._timer) {
+            clearInterval(this._timer);
+        }
         this._online = false;
     }
 }
@@ -481,8 +492,8 @@ class ControllerRelay extends Relay {
         super(name);
     }
 
-    private controller: ClockController;
-    private index: number;
+    private controller?: ClockController;
+    private index?: number;
 
     init(controller: ClockController, index: number): any {
         this.controller = controller;
@@ -490,7 +501,7 @@ class ControllerRelay extends Relay {
     }
 
     switch(on: boolean): Promise<void> {
-        if (this.controller.online) {
+        if (this.controller && this.controller.online) {
             return this.controller.send({
                 type: "switch", 
                 id: "" + this.index,
@@ -504,9 +515,9 @@ class ControllerRelay extends Relay {
 
 class ClockController implements Controller {
     private pingId = 0;
-    private intervalId: NodeJS.Timer;
+    private intervalId?: NodeJS.Timer;
     private lastResponse = Date.now();
-    private ws: WebSocket;
+    private ws?: WebSocket;
     public readonly properties: Property<any>[];
 
     constructor(public readonly ip: string, public readonly name: string, public readonly properties_: Property<any>[], public readonly handle: ChildControllerHandle) {
@@ -541,7 +552,7 @@ class ClockController implements Controller {
                 this.ws.close();
             }
         }
-        this.ws = null;
+        this.ws = undefined;
         this.handle.disconnected(this);
     }
 
@@ -552,7 +563,9 @@ class ClockController implements Controller {
     public send(json: {}): Promise<void> {
         const txt = JSON.stringify(json);
         console.log(this + " SEND: " + txt);
-        this.ws.send(txt);
+        if (this.ws) {
+            this.ws.send(txt);
+        }
         return Promise.resolve(void 0);
     }
 
@@ -627,7 +640,7 @@ class App implements ChildControllerHandle {
     public expressApi: express.Express;
     public server: http.Server;
     public readonly wss: WebSocket.Server;
-    public currentTemp: number;
+    public currentTemp?: number;
     private config: IConfig;
 
     private r1 = new GPIORelay("Лампа на шкафу", 38);
@@ -762,16 +775,17 @@ class App implements ChildControllerHandle {
         this.expressApi.use('/', router);
 
         adbClient.trackDevices()
-            .then(tracker => {
+            .then((tracker: adbkit.Tracker) => {
                 tracker.on('add', (dev: adbkit.Device) => {
                     // console.log("=== ADDED   = " + dev.id);
                     this.processDevice(dev);
                     // console.log(this.devices.map(d => d.id).join(", "));
                 });
-                tracker.on('remove', (dev: adbkit.Device) => {
-                    // console.log("=== REMOVED = " + dev.id);
-                    // console.log(this.devices.map(d => d.id).join(", "));
-                    this.tablets.get(dev.id).stop();
+                tracker.on('remove', (dev: adbkit.Device) => {                    
+                    const foundDev = this.tablets.get(dev.id);
+                    if (foundDev) {
+                        foundDev.stop();
+                    }
                 });
             });
         
@@ -790,7 +804,7 @@ class App implements ChildControllerHandle {
     private renderToHTML(): string {
         let idx = 0;
 
-        const wrap = (tag, body) => {
+        const wrap = (tag: string| [string, {[k: string]: string}], body?: string ) => {
             if (typeof tag == "string") {
                 return `<${tag}>\n${body}\n</${tag}>`;
             } else {
@@ -800,7 +814,7 @@ class App implements ChildControllerHandle {
         } 
 
         const hdr = [
-            wrap(["meta", { 'http-equiv': "content-type", content:"text/html; charset=UTF-8" }], undefined),
+            wrap(["meta", { 'http-equiv': "content-type", content:"text/html; charset=UTF-8" }]),
             wrap(["meta", { name: "viewport", content: "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" }], undefined),
             wrap(["script", {type: "text/javascript"}], 
             `
@@ -878,11 +892,14 @@ class App implements ChildControllerHandle {
     private processDevice(device: adbkit.Device): void {
         // Wait some time for device to auth...
         delay(1000).then(() => {
-            this.tablets.get(device.id).init();
+            const found = this.tablets.get(device.id);
+            if (found) {
+                found.init();
+            }
         });
     }
 
-    public listen(port: number, errCont) {
+    public listen(port: number, errCont: any) {
         this.server.listen(port, errCont);
     }
 
