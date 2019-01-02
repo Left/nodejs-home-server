@@ -59,109 +59,9 @@ interface Ping extends Msg {
 }
 
 interface ChildControllerHandle {
-    processMsg(controller: ChildController, packet: Msg): void;
-    connected(controller: ChildController): void;
-    disconnected(controller: ChildController): void;
-}
-
-class ChildController {
-    private pingId = 0;
-    private intervalId: NodeJS.Timer;
-    private lastResponse = Date.now();
-    private ws: WebSocket;
-
-    constructor(
-        public readonly ip: string, 
-        public name: string, 
-        public readonly handle: ChildControllerHandle) {
-        this.attemptToConnect();
-    }
-
-    public isAlive() {
-        return !!this.ws && this.wasRecentlyContacted();
-    }
-
-    public dropConnection() {
-        if (!!this.ws) {
-            if (this.ws.readyState == this.ws.OPEN) {
-                this.ws.close();
-            }
-        }
-        this.ws = null;
-        this.handle.disconnected(this);
-    }
-
-    public send(json: {}): Promise<void> {
-        const txt = JSON.stringify(json);
-        console.log(this + " SEND: " + txt);
-        this.ws.send(txt);
-        return Promise.resolve(void 0);
-    }
-
-    public attemptToConnect() {
-        if (!!this.ws)
-            return; // We're already attempting to connect
-
-        this.ws = new WebSocket('ws://' + this.ip + ":8081");
-
-        this.ws.on('open', () => {
-            // ws.send('something');
-            this.handle.connected(this);
-            this.lastResponse = Date.now();
-            
-            if (!!this.intervalId) {
-                clearInterval(this.intervalId);
-            }
-            this.intervalId = setInterval(() => {
-                if (!this.wasRecentlyContacted()) {
-                    // 6 seconds passed, no repsonse. Drop the connection and re-try
-                    this.dropConnection();
-                    this.attemptToConnect();
-                } else {
-                    const pingText = JSON.stringify({ 'type': 'ping', 'pingig': "" + (this.pingId++)});
-                    try {
-                        if (!!this.ws) {
-                            this.ws.send(pingText);
-                        }
-                    } catch (err) {
-                        // Failed to send, got error, let's reconnect
-                        this.dropConnection();
-                        this.attemptToConnect();
-                    }
-                }
-            }, 6000);
-        });
-
-        this.ws.on('message', (data) => {
-            this.lastResponse = Date.now();
-            if (typeof data == "string") {
-                const objData = JSON.parse(data);
-                if ('result' in objData) {
-                    // console.log('Pong', objData.pingid);
-                } else {
-                    this.handle.processMsg(this, objData);
-                }
-            }
-        });
-
-        this.ws.on('error', (err: Error) => {
-            console.log("Error: " + err);
-            this.dropConnection();
-            setTimeout(() => this.attemptToConnect(), 3000);
-        });
-
-        this.ws.on('close', (code: number, reason: string) => {
-            console.log("Closed: " + code + " " + reason);
-            this.dropConnection();
-            setTimeout(() => this.attemptToConnect(), 3000);
-        });
-    }
-
-    public toString() : string { return this.name + "(" + this.ip + ")"; }
-
-    private wasRecentlyContacted() {
-        return Date.now() - this.lastResponse < 10000;
-    }
+    processMsg(controller: ClockController, packet: Msg): void;
+    connected(controller: ClockController): void;
+    disconnected(controller: ClockController): void;
 }
 
 interface Time {
@@ -206,7 +106,7 @@ function isWriteableProperty<T>(object: Property<T>): object is WriteablePropert
 interface Controller {
     readonly name: string;
     readonly online: boolean;
-    properties: Property<any>[];
+    readonly properties: Property<any>[];
 }
 
 abstract class PropertyImpl<T> implements Property<T> {
@@ -310,26 +210,6 @@ class GPIORelay extends Relay {
             return runShell("/root/WiringOP/gpio/gpio", ["-1", "write", "" + this.pin, on ? "0" : "1"])
                 .then(() => this.setInternal(on));
         });
-    }
-}
-class ControllerRelay extends Relay {
-    constructor(
-        readonly name: string, 
-        public readonly controller: ChildController,
-        public readonly index: number) {
-        super(name);
-    }
-
-    switch(on: boolean): Promise<void> {
-        if (this.controller.isAlive()) {
-            return this.controller.send({
-                type: "switch", 
-                id: "" + this.index,
-                on: on ? "true" : "false"
-            });
-        } else {
-            return Promise.reject('Controller is not connected')
-        }
     }
 }
 
@@ -436,6 +316,8 @@ class Tablet implements Controller {
             });
         }
     })(this);
+
+    public 
 
     public properties = [
         this.volume,
@@ -594,6 +476,153 @@ class Tablet implements Controller {
     }
 }
 
+class ControllerRelay extends Relay {
+    constructor(readonly name: string) {
+        super(name);
+    }
+
+    private controller: ClockController;
+    private index: number;
+
+    init(controller: ClockController, index: number): any {
+        this.controller = controller;
+        this.index = index;
+    }
+
+    switch(on: boolean): Promise<void> {
+        if (this.controller.online) {
+            return this.controller.send({
+                type: "switch", 
+                id: "" + this.index,
+                on: on ? "true" : "false"
+            });
+        } else {
+            return Promise.reject('Controller is not connected')
+        }
+    }
+}
+
+class ClockController implements Controller {
+    private pingId = 0;
+    private intervalId: NodeJS.Timer;
+    private lastResponse = Date.now();
+    private ws: WebSocket;
+    public readonly properties: Property<any>[];
+
+    constructor(public readonly ip: string, public readonly name: string, public readonly properties_: Property<any>[], public readonly handle: ChildControllerHandle) {
+        this.attemptToConnect();
+
+        const that = this;
+        this.properties = properties_.concat([ 
+            (new (class Reset extends WritablePropertyImpl<void> {
+                constructor() {
+                    super("Restart", void 0);
+                }
+
+                public set(val: void): void {
+                    that.reboot();
+                }
+            })() as Property<any>)
+        ]);
+        this.properties.forEach((p, index) => {
+            if (p instanceof ControllerRelay) {
+                p.init(this, index);
+            }
+        });
+    }
+
+    public get online() {
+        return !!this.ws && this.wasRecentlyContacted();
+    }
+
+    public dropConnection() {
+        if (!!this.ws) {
+            if (this.ws.readyState == this.ws.OPEN) {
+                this.ws.close();
+            }
+        }
+        this.ws = null;
+        this.handle.disconnected(this);
+    }
+
+    public reboot(): void {
+        this.send({ type: "reboot" });
+    }
+
+    public send(json: {}): Promise<void> {
+        const txt = JSON.stringify(json);
+        console.log(this + " SEND: " + txt);
+        this.ws.send(txt);
+        return Promise.resolve(void 0);
+    }
+
+    public attemptToConnect() {
+        if (!!this.ws)
+            return; // We're already attempting to connect
+
+        this.ws = new WebSocket('ws://' + this.ip + ":8081");
+
+        this.ws.on('open', () => {
+            // ws.send('something');
+            this.handle.connected(this);
+            this.lastResponse = Date.now();
+            
+            if (!!this.intervalId) {
+                clearInterval(this.intervalId);
+            }
+            this.intervalId = setInterval(() => {
+                if (!this.wasRecentlyContacted()) {
+                    // 6 seconds passed, no repsonse. Drop the connection and re-try
+                    this.dropConnection();
+                    this.attemptToConnect();
+                } else {
+                    const pingText = JSON.stringify({ 'type': 'ping', 'pingig': "" + (this.pingId++)});
+                    try {
+                        if (!!this.ws) {
+                            this.ws.send(pingText);
+                        }
+                    } catch (err) {
+                        // Failed to send, got error, let's reconnect
+                        this.dropConnection();
+                        this.attemptToConnect();
+                    }
+                }
+            }, 6000);
+        });
+
+        this.ws.on('message', (data) => {
+            this.lastResponse = Date.now();
+            if (typeof data == "string") {
+                const objData = JSON.parse(data);
+                if ('result' in objData) {
+                    // console.log('Pong', objData.pingid);
+                } else {
+                    this.handle.processMsg(this, objData);
+                }
+            }
+        });
+
+        this.ws.on('error', (err: Error) => {
+            console.log("Error: " + err);
+            this.dropConnection();
+            setTimeout(() => this.attemptToConnect(), 3000);
+        });
+
+        this.ws.on('close', (code: number, reason: string) => {
+            console.log("Closed: " + code + " " + reason);
+            this.dropConnection();
+            setTimeout(() => this.attemptToConnect(), 3000);
+        });
+    }
+
+    public toString() : string { return this.name + "(" + this.ip + ")"; }
+
+    private wasRecentlyContacted() {
+        return Date.now() - this.lastResponse < 10000;
+    }
+
+} 
+
 class App implements ChildControllerHandle {
     public expressApi: express.Express;
     public server: http.Server;
@@ -601,13 +630,11 @@ class App implements ChildControllerHandle {
     public currentTemp: number;
     private config: IConfig;
 
-    private roomsClock: ChildController = new ChildController("192.168.121.75", "RoomsClock", this);
-    private kitchenClock: ChildController = new ChildController("192.168.121.131", "KitchenClock", this)
-
     private r1 = new GPIORelay("Лампа на шкафу", 38);
     private r2 = new GPIORelay("Колонки", 40);
     private r3 = new GPIORelay("Коридор", 36);
     private r4 = new GPIORelay("Потолок", 32);
+
     private tempProperty = new (class Temp extends PropertyImpl<string> {
         constructor() {
             super("Температура", "Нет данных")
@@ -617,16 +644,15 @@ class App implements ChildControllerHandle {
     private ctrlGPIO = {
         name: "Комната",
         online: true, // Always online
-        properties: [this.r1, this.r2, this.r3, this.r4, this.tempProperty]
+        properties: [this.r1, this.r2, this.r3, this.r4]
     }
-    
-    private r5 = new ControllerRelay("Потолок", this.kitchenClock, 0);
-    private r6 = new ControllerRelay("Лента", this.kitchenClock, 1);
-    private ctrlKitchen = {
-        name: "Часы на кухне",
-        online: true,
-        properties: [this.r5, this.r6]
-    }
+
+    private ctrlRoomClock = new ClockController("192.168.121.75", "Часы в комнате", [ this.tempProperty ], this);
+    private ctrlKitchen = new ClockController("192.168.121.131", "Часы на кухне", [ 
+        new ControllerRelay("Потолок"),
+        new ControllerRelay("Лента")
+    ], this);
+
 /*
     private ctrlClock = {
         name: "Часы и датчик температуры",
@@ -643,7 +669,7 @@ class App implements ChildControllerHandle {
 
     private readonly controllers: Controller[] = [ 
         this.ctrlGPIO, 
-        // this.ctrlClock,
+        this.ctrlRoomClock,
         this.ctrlKitchen, 
         this.ctrlLamp, 
         this.kindle, 
@@ -844,7 +870,7 @@ class App implements ChildControllerHandle {
                     });
 
                     return res;
-                }).join("<br/>\n")
+                }).join("&nbsp;\n")
             }).join("<hr/>\n"))
         );
     }
@@ -860,15 +886,15 @@ class App implements ChildControllerHandle {
         this.server.listen(port, errCont);
     }
 
-    public connected(controller: ChildController) {
+    public connected(controller: ClockController) {
         console.log(controller + " " + "Connected");
     }
 
-    public disconnected(controller: ChildController) {
+    public disconnected(controller: ClockController) {
         console.log(controller + " " + "Disconnected");
     }
 
-    public processMsg(controller: ChildController, data: Msg) {
+    public processMsg(controller: ClockController, data: Msg) {
         const objData = <Log | Temp | Hello | IRKey> data;
         switch (objData.type) {
             case 'temp':
