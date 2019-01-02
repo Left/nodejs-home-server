@@ -185,39 +185,57 @@ function runShell(cmd: string, args: string[]): Promise<String> {
         const pr = child_process.spawn(cmd, args);
         pr.on('error', (err: Error) => {
             reject(err);
-        })
+        });
         pr.on('close', () => {
             accept(out.join(''));
         });
         pr.stdout.on("data", (d) => {
             out.push(d.toString());
         });
-    
+
     });
+}
+
+class Button extends WritablePropertyImpl<void> {
+    constructor(name: string, private action: () => void ) { 
+        super(name, void 0); 
+    }
+
+    set(val: void): void {
+        this.action();
+    }
+
+    static create<T extends Controller>(name: string, action: () => void ): Button {
+        return new Button(name, action);
+    }
 }
 
 class GPIORelay extends Relay {
     private _init: Promise<void>;
+    static readonly gpioCmd = "/root/WiringOP/gpio/gpio";
 
     constructor(readonly name: string, public readonly pin: number) { 
         super(name); 
 
-        this._init = runShell("/root/WiringOP/gpio/gpio", ["-1", "mode", "" + this.pin, "out"])
+        this._init = runShell(GPIORelay.gpioCmd, ["-1", "mode", "" + this.pin, "out"])
             .then(() => {
-                return runShell("/root/WiringOP/gpio/gpio", ["-1", "read", "" + this.pin])
+                return runShell(GPIORelay.gpioCmd, ["-1", "read", "" + this.pin])
                     .then((str) => {
                         this.setInternal(str.startsWith("0"));
                         return void 0;
                     })
+                    .catch(err => console.log(err.errno));
 
             })
+            .catch(err => console.log(err.errno));
     }
 
     switch(on: boolean): Promise<void> {
         // console.log("Here ", on);
         return this._init.then(() => {
-            return runShell("/root/WiringOP/gpio/gpio", ["-1", "write", "" + this.pin, on ? "0" : "1"])
-                .then(() => this.setInternal(on));
+            return runShell(GPIORelay.gpioCmd, ["-1", "write", "" + this.pin, on ? "0" : "1"])
+                .then(() => this.setInternal(on))
+                .catch(err => console.log(err.errno));
         });
     }
 }
@@ -280,10 +298,6 @@ class MiLightBulb implements Controller {
     }
 }
 
-abstract class Button extends WritablePropertyImpl<void> {
-    constructor(protected tbl: Tablet) { super("", void 0); }
-}
-
 class Tablet implements Controller {
     private _name: string;
     private _androidVersion: string;
@@ -316,9 +330,10 @@ class Tablet implements Controller {
         public switch(on: boolean): Promise<void> {
             return this.tbl.screenIsSwitchedOn().then(onNow => {
                 if (on !== onNow) {
-                    this.tbl.shellCmd("input keyevent KEYCODE_POWER").then(res => {
+                    return this.tbl.shellCmd("input keyevent KEYCODE_POWER").then(res => {
                         return delay(300).then(() => this.tbl.screenIsSwitchedOn().then(onNow => {
                             this.setInternal(onNow);
+                            return Promise.resolve(void 0); // Already in this state
                         }));
                     })
                 } else {
@@ -328,21 +343,11 @@ class Tablet implements Controller {
         }
     })(this);
 
-    public properties = [
+    public properties: Property<any>[] = [
         this.volume,
         this.screenIsOn,
-        new (class ButtonImpl extends Button {
-            readonly name = "Reset";
-            set(val: void): void {
-                this.tbl.shellCmd("reboot");
-            }
-        })(this),
-        new (class ButtonImpl extends Button {
-            readonly name = "Stop playing";
-            set(val: void): void {
-                this.tbl.shellCmd("am force-stop org.videolan.vlc");
-            }
-        })(this)
+        Button.create("Reset", () => this.shellCmd("reboot")),
+        Button.create("Stop playing", () => this.shellCmd("am force-stop org.videolan.vlc"))
     ]
 
     public serializable(): any{
@@ -523,18 +528,10 @@ class ClockController implements Controller {
     constructor(public readonly ip: string, public readonly name: string, public readonly properties_: Property<any>[], public readonly handle: ChildControllerHandle) {
         this.attemptToConnect();
 
-        const that = this;
         this.properties = properties_.concat([ 
-            (new (class Reset extends WritablePropertyImpl<void> {
-                constructor() {
-                    super("Restart", void 0);
-                }
-
-                public set(val: void): void {
-                    that.reboot();
-                }
-            })() as Property<any>)
+            Button.create("Restart", () => this.reboot()),
         ]);
+
         this.properties.forEach((p, index) => {
             if (p instanceof ControllerRelay) {
                 p.init(this, index);
