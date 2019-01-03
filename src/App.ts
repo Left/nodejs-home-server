@@ -7,6 +7,8 @@ import * as child_process from "child_process";
 import * as dgram from "dgram";
 import * as events from "events";
 
+import * as util from "./Util";
+
 function delay(time: number): Promise<void> {
     return new Promise<void>(function(resolve) { 
         setTimeout(resolve, time);
@@ -99,9 +101,61 @@ namespace adbkit {
 
 interface Property<T> {
     readonly name: string;
-    available(): boolean;
+    readonly available: boolean;
     get(): T;
     onChange(fn: () => void): void;
+
+    readonly htmlRenderer: HTMLRederer<T>;
+}
+
+interface HTMLRederer<T> {
+    body(prop: Property<T>, id: string, ctrlIndex: number, prIndex: number): string;
+    updateCode(prop: Property<T>, id: string, ctrlIndex: number, prIndex: number): string;
+}
+
+class CheckboxHTMLRenderer implements HTMLRederer<boolean> {
+    body(prop: Property<boolean>, id: string, ctrlIndex: number, prIndex: number): string {
+        return `<label><input type="checkbox" id=${id} 
+            ${prop.available ? "" : "disabled"} 
+            ${prop.get() ? "checked" : ""}
+            onclick="sendVal(${ctrlIndex}, ${prIndex}, document.getElementById('${id}').checked)"/>${prop.name}</label>`;
+    }    
+    
+    updateCode(prop: Property<boolean>, id: string, ctrlIndex: number, prIndex: number): string {
+        return `document.getElementById('${id}').checked = val;`;
+    }
+}
+
+class ButtonRendrer implements HTMLRederer<void> {
+    body(prop: Property<void>, id: string, ctrlIndex: number, prIndex: number): string {
+        return `<input ${prop.available ? "" : "disabled"}  type="button" id="${id}" value="${prop.name}" 
+            onclick="sendVal(${ctrlIndex}, ${prIndex}, '')"></input>`;
+    }
+
+    updateCode(prop: Property<void>, id: string, ctrlIndex: number, prIndex: number): string {
+        return '';
+    }
+}
+
+class SliderHTMLRenderer implements HTMLRederer<number> {
+    body(prop: Property<number>, id: string, ctrlIndex: number, prIndex: number): string {
+        return `<label>${prop.name}<input ${prop.available ? "" : "disabled"}  type="range" id="${id}" min="0" max="100" value="${prop.get()}" 
+            oninput="sendVal(${ctrlIndex}, ${prIndex}, +document.getElementById('${id}').value)"/></label>`;
+    }
+
+    updateCode(prop: Property<number>, id: string, ctrlIndex: number, prIndex: number): string {
+        return `document.getElementById('${id}').value = val;`;
+    }
+}
+
+class SpanHTMLRenderer implements HTMLRederer<string> {
+    body(prop: Property<string>, id: string, ctrlIndex: number, prIndex: number): string {
+        return `<span id="${id}">${prop.name} : ${prop.get()}</span>`;
+    }
+
+    updateCode(prop: Property<string>, id: string, ctrlIndex: number, prIndex: number): string {
+        return `document.getElementById('${id}').innerHTML = '${prop.name + ' :'}' + val;`;
+    }
 }
 
 interface WriteableProperty<T> extends Property<T> {
@@ -118,11 +172,15 @@ interface Controller {
     readonly properties: Property<any>[];
 }
 
-abstract class PropertyImpl<T> implements Property<T> {
+class PropertyImpl<T> implements Property<T> {
     protected evs: events.EventEmitter = new events.EventEmitter();
     private _val: T;
 
-    available(): boolean {
+    constructor(public readonly name: string, public readonly htmlRenderer: HTMLRederer<T>, readonly initial: T) {
+        this._val = initial;
+    }
+
+    get available(): boolean {
         return true;
     }
 
@@ -138,10 +196,6 @@ abstract class PropertyImpl<T> implements Property<T> {
         }
     }
 
-    constructor(public readonly name: string, readonly initial: T) {
-        this._val = initial;
-    }
-
     onChange(fn: () => void): void {
         // TODO: Impl me
         this.evs.on('change', fn);
@@ -153,8 +207,8 @@ abstract class PropertyImpl<T> implements Property<T> {
 }
 
 abstract class WritablePropertyImpl<T> extends PropertyImpl<T> implements WriteableProperty<T> {
-    constructor(public readonly name: string, readonly initial: T) {
-        super(name, initial);
+    constructor(public readonly name: string, readonly htmlRenderer: HTMLRederer<T>, readonly initial: T) {
+        super(name, htmlRenderer, initial);
     }
 
     abstract set(val: T): void;
@@ -163,7 +217,7 @@ abstract class WritablePropertyImpl<T> extends PropertyImpl<T> implements Writea
 
 abstract class Relay extends WritablePropertyImpl<boolean> {
     constructor(readonly name: string) {
-        super(name, false);
+        super(name, new CheckboxHTMLRenderer(), false);
     }
 
     public abstract switch(on: boolean): Promise<void>;
@@ -192,20 +246,19 @@ function runShell(cmd: string, args: string[]): Promise<String> {
         pr.stdout.on("data", (d) => {
             out.push(d.toString());
         });
-
     });
 }
 
 class Button extends WritablePropertyImpl<void> {
     constructor(name: string, private action: () => void ) { 
-        super(name, void 0); 
+        super(name, new ButtonRendrer(), void 0); 
     }
 
     set(val: void): void {
         this.action();
     }
 
-    static create<T extends Controller>(name: string, action: () => void ): Button {
+    static create(name: string, action: () => void ): Button {
         return new Button(name, action);
     }
 }
@@ -247,7 +300,7 @@ class MiLightBulb implements Controller {
         new (class MiLightBulbRelay extends WritablePropertyImpl<boolean> {
             constructor(
                 readonly pThis: MiLightBulb) {
-                super("On/off", false);
+                super("On/off", new CheckboxHTMLRenderer(), false);
             }
 
             set(on: boolean): Promise<void> {
@@ -263,7 +316,7 @@ class MiLightBulb implements Controller {
         })(this),
         new (class BrightnessProperty extends WritablePropertyImpl<number> {
             constructor(public readonly pThis: MiLightBulb) {
-                super("Brightness", 50);
+                super("Brightness", new SliderHTMLRenderer(), 50);
             }
             public set(val: number): void {
                 this.pThis.send([0x4E, 0x2 + (0x15 * val / 100), 0x55])
@@ -272,7 +325,7 @@ class MiLightBulb implements Controller {
         })(this),
         new (class BrightnessProperty extends WritablePropertyImpl<number> {
             constructor(public readonly pThis: MiLightBulb) {
-                super("Hue", 50);
+                super("Hue", new SliderHTMLRenderer(), 50);
             }
             public set(val: number): void {
                 this.pThis.send([0x40, (0xff * val / 100), 0x55])
@@ -314,7 +367,7 @@ class Tablet implements Controller {
 
     private volume = new (class VolumeControl extends WritablePropertyImpl<number> {
         constructor(private readonly tbl: Tablet) {
-            super("Volume", 0);
+            super("Volume", new SliderHTMLRenderer(), 0);
         }
 
         set(val: number): void {
@@ -322,9 +375,11 @@ class Tablet implements Controller {
         }
     })(this);
 
+    private battery = new PropertyImpl<string>("Battery", new SpanHTMLRenderer(), "");
+
     private screenIsOn = new (class TabletOnOffRelay extends Relay {
         constructor(private readonly tbl: Tablet) {
-            super(tbl.id + " on/off");
+            super("Screen on");
         }
     
         public switch(on: boolean): Promise<void> {
@@ -346,6 +401,7 @@ class Tablet implements Controller {
     public properties: Property<any>[] = [
         this.volume,
         this.screenIsOn,
+        this.battery,
         Button.create("Reset", () => this.shellCmd("reboot")),
         Button.create("Stop playing", () => this.shellCmd("am force-stop org.videolan.vlc"))
     ]
@@ -362,7 +418,7 @@ class Tablet implements Controller {
             adbClient.shell(this.id, cmd)
                 .then(adbkit.util.readAll)
                 .then((output: string) => {
-                    accept(output);
+                    accept(output.toString());
                 })
                 .catch((err: Error) => reject(err));
             });
@@ -380,7 +436,6 @@ class Tablet implements Controller {
                     times = -times;
                 }
                 const shellCmd = ("input keyevent KEYCODE_VOLUME_" + updown + ";").repeat(times);
-                console.log('setVolume', volNow, vol, shellCmd);
                 if (!!shellCmd) {
                     return this.shellCmd(shellCmd)
                         .then(() => {
@@ -393,18 +448,12 @@ class Tablet implements Controller {
     }
 
     public getVolume(): Promise<number> {
-        const t = Date.now();
-        return new Promise<number>((accept_, reject) => {
-            const accept = (val: number) => {
-                console.log(Date.now() - t, "ms", val);
-                accept_(val);
-            }
-            this.shellCmd('dumpsys audio')
-                .then((output: string) => {
-                    const str = output.toString();
+        return new Promise<number>((accept, reject) => {
+            this.shellCmd('dumpsys audio | grep -E \'STREAM|Current|Mute\'')
+                .then((str: string) => {
                     const allTheLines = str.split('- STREAM_');
                     const musicLines = allTheLines.filter(ll => ll.startsWith('MUSIC:'))[0];
-                    const musicLinesArray = musicLines.split(/\r\n|\r|\n/);
+                    const musicLinesArray = util.splitLines(musicLines);
                     const muteCountLine = musicLinesArray.filter(ll => ll.startsWith("   Mute count:"))[0];
                     const mutedLine = musicLinesArray.filter(ll => ll.startsWith("   Muted:"))[0];
 
@@ -433,27 +482,36 @@ class Tablet implements Controller {
         });
     }
 
+    public getBatteryLevel(): Promise<number> {
+        return this.shellCmd('dumpsys battery | grep level')
+            .then((output: string) => {
+                return +(output.split(':')[1]);
+            });
+    }
+
     public screenIsSwitchedOn(): Promise<boolean> {
         return new Promise<boolean>((accept, reject) => {
-            this.shellCmd('dumpsys power')
+            const data: Map<string, string> = new Map([
+                ["mHoldingWakeLockSuspendBlocker", ""],
+                ["mWakefulness", ""]
+            ]);
+
+            this.shellCmd('dumpsys power | grep -E \'' + Array.from(data.keys()).join('|') + '\'')
                 .then((output: string) => {
                     const str = output.toString();
                     const lines: string[] = str.split(/\r\n|\r|\n/);
-                    const data: { [k: string]: string|undefined } = {
-                        mHoldingWakeLockSuspendBlocker: undefined,
-                        mWakefulness: undefined
-                    };
                     for (const line of lines) {
                         const trimmed = line.trim();
-                        Object.getOwnPropertyNames(data).forEach(prop => {
+                        
+                        Array.from(data.keys()).forEach(prop => {
                             if (trimmed.startsWith(prop + "=")) {
-                                data[prop] = trimmed.substring(prop.length + 1);
+                                data.set(prop, trimmed.substring(prop.length + 1));
                             }
                         });
                     }
                     
                     // console.log(this.name + "->" + JSON.stringify(data));
-                    accept(data.mWakefulness == "Awake");
+                    accept(data.get("mWakefulness") === "Awake");
                 })
                 .catch(err => reject(err));
         });
@@ -481,7 +539,10 @@ class Tablet implements Controller {
         });
         this.getVolume().then(vol => {
             this.volume.setInternal(vol);
-        });    
+        });
+        this.getBatteryLevel().then(vol => {
+            this.battery.setInternal(vol + "%");
+        });
     }
 
     public stop() {
@@ -647,7 +708,7 @@ class App implements ChildControllerHandle {
 
     private tempProperty = new (class Temp extends PropertyImpl<string> {
         constructor() {
-            super("Температура", "Нет данных")
+            super("Температура", new SpanHTMLRenderer(), "Нет данных")
         }
     })();
 
@@ -799,8 +860,6 @@ class App implements ChildControllerHandle {
     }
     
     private renderToHTML(): string {
-        let idx = 0;
-
         const wrap = (tag: string| [string, {[k: string]: string}], body?: string ) => {
             if (typeof tag == "string") {
                 return `<${tag}>\n${body}\n</${tag}>`;
@@ -810,25 +869,29 @@ class App implements ChildControllerHandle {
             }
         } 
 
+        const propChangedMap = this.controllers.map((ctrl, ctrlIndex) => {
+            return ctrl.properties.map((prop: Property<any>, prIndex: number): string => {
+                const id = ctrlIndex + ":" + prIndex;
+                return `'${id}' : (val) => { ${prop.htmlRenderer.updateCode(prop, id, ctrlIndex, prIndex)} }`
+            }).join(',\n');
+        }).join(',\n');
+
         const hdr = [
             wrap(["meta", { 'http-equiv': "content-type", content:"text/html; charset=UTF-8" }]),
             wrap(["meta", { name: "viewport", content: "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" }], undefined),
             wrap(["script", {type: "text/javascript"}], 
             `
             var sock = new WebSocket("ws:/" + location.host);
+            const propChangeMap = {
+                ${propChangedMap}
+            };
             sock.onopen = () => {
                 console.log("socket.onopen");
                 sock.onmessage = function(event) {
                     console.log(event.data);
                     const d = JSON.parse(event.data);
                     if (d.type === 'onPropChanged') {
-                        if (typeof(d.val) == "boolean") {
-                            document.getElementById(d.id).checked = d.val;
-                        } else if (typeof(d.val) == "number") {
-                            document.getElementById(d.id).value = d.val;
-                        } else if (typeof(d.val) == "string") {
-                            document.getElementById(d.id).value = d.val;
-                        }
+                        propChangeMap[d.id](d.val);
                     }
                 };
             };
@@ -849,26 +912,7 @@ class App implements ChildControllerHandle {
                     let res = "";
                     const id = ctrlIndex + ":" + prIndex;
     
-                    const val = prop.get();
-                    const avail = prop.available();
-                    if (typeof val === "boolean") {
-                        // Boolean property, render as checkbok
-                        res = `<label><input type="checkbox" id=${id} 
-                            ${avail ? "" : "disabled"} 
-                            ${val ? "checked" : ""}
-                            onclick="sendVal(${ctrlIndex}, ${prIndex}, document.getElementById('${id}').checked)"/>${prop.name}</label>`;
-                    } else if (typeof val === "number") {
-                        res = `<input ${avail ? "" : "disabled"}  type="range" id="${id}" min="0" max="100" value="${val}" 
-                            oninput="sendVal(${ctrlIndex}, ${prIndex}, +document.getElementById('${id}').value)">${prop.name}</input>`;
-                    } else if (typeof val === "string") {
-                        res = `<label>${prop.name}<input ${avail ? "" : "disabled"}  type="text" id="${id}" value="${val}" 
-                            oninput="sendVal(${ctrlIndex}, ${prIndex}, +document.getElementById('${id}').value)"/></label>`;
-                    } else if (typeof val === "undefined") {
-                        res = `<input ${avail ? "" : "disabled"}  type="button" id="${id}" value="${prop.name}" 
-                            onclick="sendVal(${ctrlIndex}, ${prIndex}, document.getElementById('${id}').value)"></input>`;
-                    } else {
-                        console.log("Unknown prop type " + typeof (val));
-                    }
+                    res = prop.htmlRenderer.body(prop, id, ctrlIndex, prIndex);
                 
                     prop.onChange(() => {
                         this.wss.clients.forEach(cl => cl.send(JSON.stringify({
@@ -913,10 +957,10 @@ class App implements ChildControllerHandle {
         switch (objData.type) {
             case 'temp':
                 if (this.currentTemp != objData.value) {
-                    console.log(controller + " " + "temperature: ", objData.value);
-                    this.wss.clients.forEach(cl => cl.send(objData.value));
+                    // console.log(controller + " " + "temperature: ", objData.value);
+                    // this.wss.clients.forEach(cl => cl.send(objData.value));
                     this.currentTemp = objData.value;
-                    this.tempProperty['setInternal'](this.currentTemp + 'C');
+                    this.tempProperty.setInternal(this.currentTemp + "&#8451;");
                 }
                 break;
             case 'log':
