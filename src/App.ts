@@ -230,6 +230,21 @@ class Tablet implements props.Controller {
     constructor(public readonly id: string) {
         this._name = id;
         this._androidVersion = "<Unknown>";
+
+        const tbl = this;
+
+        this.properties = [
+            this.volume,
+            this.screenIsOn,
+            this.battery,
+            new (class PlayLine extends props.WritablePropertyImpl<string> {
+                set(val: string): void {
+                    tbl.playURL(val);
+                }
+            })("Go play", new props.StringAndGoRendrer(), ""),
+            Button.create("Reset", () => this.shellCmd("reboot")),
+            Button.create("Stop playing", () => this.shellCmd("am force-stop org.videolan.vlc"))
+        ];
     }
 
     private volume = new (class VolumeControl extends props.WritablePropertyImpl<number> {
@@ -265,13 +280,7 @@ class Tablet implements props.Controller {
         }
     })(this);
 
-    public properties: props.Property<any>[] = [
-        this.volume,
-        this.screenIsOn,
-        this.battery,
-        Button.create("Reset", () => this.shellCmd("reboot")),
-        Button.create("Stop playing", () => this.shellCmd("am force-stop org.videolan.vlc"))
-    ]
+    public readonly properties: props.Property<any>[];
 
     public serializable(): any{
         return {
@@ -292,6 +301,15 @@ class Tablet implements props.Controller {
     };
 
     private settingVolume = Promise.resolve(void 0);
+
+    public playURL(url: string): Promise<void> {
+        return this.shellCmd(
+            "am start -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity -a android.intent.action.VIEW -d \"" + 
+                url.replace("&", "\&")+ "\" --ez force_fullscreen true")
+            .then(() => {
+                return Promise.resolve(void 0);
+            })
+    }
 
     public setVolume(vol: number): Promise<void> {
         return this.settingVolume.then(() => 
@@ -735,6 +753,7 @@ class App implements ChildControllerHandle {
                     this.wss.clients.forEach(cl => cl.send(JSON.stringify({
                         type: "onPropChanged",
                         id: prop.id,
+                        name: prop.name,
                         val: prop.get()
                     })));
                 });    
@@ -743,15 +762,6 @@ class App implements ChildControllerHandle {
     }
     
     private renderToHTML(): string {
-        const wrap = (tag: string| [string, {[k: string]: string}], body?: string ) => {
-            if (typeof tag == "string") {
-                return `<${tag}>\n${body}\n</${tag}>`;
-            } else {
-                const props = Object.getOwnPropertyNames(tag[1]).map(pn => pn + "=\"" + tag[1][pn] + "\"");
-                return `<${tag[0]} ${props.join(" ")}` + (!!body ? `>\n${body}\n</${tag[0]}>` : ">");
-            }
-        } 
-
         const propChangedMap = this.controllers.map((ctrl, ctrlIndex) => {
             return ctrl.properties.map((prop: props.Property<any>, prIndex: number): string => {
                 return `'${prop.id}' : (val) => { ${prop.htmlRenderer.updateCode(prop)} }`
@@ -759,9 +769,9 @@ class App implements ChildControllerHandle {
         }).join(',\n');
 
         const hdr = [
-            wrap(["meta", { 'http-equiv': "content-type", content:"text/html; charset=UTF-8" }]),
-            wrap(["meta", { name: "viewport", content: "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" }], undefined),
-            wrap(["script", {type: "text/javascript"}], 
+            util.wrapToHTML(["meta", { 'http-equiv': "content-type", content:"text/html; charset=UTF-8" }]),
+            util.wrapToHTML(["meta", { name: "viewport", content: "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" }], undefined),
+            util.wrapToHTML(["script", {type: "text/javascript"}], 
             `
             var sock = new WebSocket("ws:/" + location.host);
             const propChangeMap = {
@@ -778,17 +788,18 @@ class App implements ChildControllerHandle {
                 };
             };
     
-            function sendVal(id, val) {
+            function sendVal(id, name, val) {
                 sock.send(JSON.stringify({ 
                     type: 'setProp',
                     id: id,
+                    name: name,
                     val: val }));
             };
             `)
         ];
-        return wrap(["html", { lang: "en"}], 
-            wrap("head", hdr.join("\n")) + "\n" +
-            wrap("body", this.controllers.map((ctrl) => {
+        return util.wrapToHTML(["html", { lang: "en"}], 
+            util.wrapToHTML("head", hdr.join("\n")) + "\n" +
+            util.wrapToHTML("body", this.controllers.map((ctrl) => {
                 return ctrl.name + "<br/>" + ctrl.properties.map((prop: props.Property<any>): string => {
                     let res = "";
 

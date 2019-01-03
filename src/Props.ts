@@ -20,7 +20,7 @@ export class CheckboxHTMLRenderer implements HTMLRederer<boolean> {
         return `<label><input type="checkbox" id=${prop.id} 
             ${prop.available ? "" : "disabled"} 
             ${prop.get() ? "checked" : ""}
-            onclick="sendVal('${prop.id}', document.getElementById('${prop.id}').checked)"/>${prop.name}</label>`;
+            onclick="sendVal('${prop.id}', '${prop.name}', document.getElementById('${prop.id}').checked)"/>${prop.name}</label>`;
     }    
     
     updateCode(prop: Property<boolean>): string {
@@ -31,7 +31,7 @@ export class CheckboxHTMLRenderer implements HTMLRederer<boolean> {
 export class ButtonRendrer implements HTMLRederer<void> {
     body(prop: Property<void>): string {
         return `<input ${prop.available ? "" : "disabled"}  type="button" id="${prop.id}" value="${prop.name}" 
-            onclick="sendVal('${prop.id}', '')"></input>`;
+            onclick="sendVal('${prop.id}', '${prop.name}', '')"></input>`;
     }
 
     updateCode(prop: Property<void>): string {
@@ -42,7 +42,8 @@ export class ButtonRendrer implements HTMLRederer<void> {
 export class SliderHTMLRenderer implements HTMLRederer<number> {
     body(prop: Property<number>): string {
         return `<label>${prop.name}<input ${prop.available ? "" : "disabled"}  type="range" id="${prop.id}" min="0" max="100" value="${prop.get()}" 
-            oninput="sendVal('${prop.id}', +document.getElementById('${prop.id}').value)"/></label>`;
+            name="${prop.name}"
+            oninput="sendVal('${prop.id}', '${prop.name}', +document.getElementById('${prop.id}').value)"/></label>`;
     }
 
     updateCode(prop: Property<number>): string {
@@ -57,6 +58,22 @@ export class SpanHTMLRenderer implements HTMLRederer<string> {
 
     updateCode(prop: Property<string>): string {
         return `document.getElementById('${prop.id}').innerHTML = '${prop.name + ' :'}' + val;`;
+    }
+}
+
+export class StringAndGoRendrer implements HTMLRederer<string> {
+    body(prop: Property<string>): string {
+        return `<span>
+            <input ${prop.available ? "" : "disabled"}  type="text" 
+            id="${prop.id}" 
+            placeholder="${prop.name}"
+            value="" />&nbsp;
+            <input type="button" value=" Go " onclick="sendVal('${prop.id}', '${prop.name}', document.getElementById('${prop.id}').value)"/>
+            </span>`;
+    }
+
+    updateCode(prop: Property<string>): string {
+        return '';
     }
 }
 
@@ -84,7 +101,7 @@ export class PropertyImpl<T> implements Property<T> {
 
     constructor(public readonly name: string, public readonly htmlRenderer: HTMLRederer<T>, readonly initial: T) {
         this._val = initial;
-        this.id = ("" + (PropertyImpl._nextId++) + "(" + this.name + ")");
+        this.id = ("" + (PropertyImpl._nextId++));
         PropertyImpl._allProps.set(this.id, this);
     }
 
