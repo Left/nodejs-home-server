@@ -3,11 +3,10 @@ import * as http from 'http';
 import * as WebSocket from 'ws';
 // import * as stream from "stream";
 import * as fs from "fs";
-import * as child_process from "child_process";
 import * as dgram from "dgram";
-import * as events from "events";
 
 import * as util from "./Util";
+import * as props from "./Props";
 
 function delay(time: number): Promise<void> {
     return new Promise<void>(function(resolve) { 
@@ -99,136 +98,9 @@ namespace adbkit {
     }
 }
 
-interface Property<T> {
-    readonly id: string;
-    readonly name: string;
-    readonly available: boolean;
-    get(): T;
-    onChange(fn: () => void): void;
-
-    readonly htmlRenderer: HTMLRederer<T>;
-}
-
-interface HTMLRederer<T> {
-    body(prop: Property<T>): string;
-    updateCode(prop: Property<T>): string;
-}
-
-class CheckboxHTMLRenderer implements HTMLRederer<boolean> {
-    body(prop: Property<boolean>): string {
-        return `<label><input type="checkbox" id=${prop.id} 
-            ${prop.available ? "" : "disabled"} 
-            ${prop.get() ? "checked" : ""}
-            onclick="sendVal('${prop.id}', document.getElementById('${prop.id}').checked)"/>${prop.name}</label>`;
-    }    
-    
-    updateCode(prop: Property<boolean>): string {
-        return `document.getElementById('${prop.id}').checked = val;`;
-    }
-}
-
-class ButtonRendrer implements HTMLRederer<void> {
-    body(prop: Property<void>): string {
-        return `<input ${prop.available ? "" : "disabled"}  type="button" id="${prop.id}" value="${prop.name}" 
-            onclick="sendVal('${prop.id}', '')"></input>`;
-    }
-
-    updateCode(prop: Property<void>): string {
-        return '';
-    }
-}
-
-class SliderHTMLRenderer implements HTMLRederer<number> {
-    body(prop: Property<number>): string {
-        return `<label>${prop.name}<input ${prop.available ? "" : "disabled"}  type="range" id="${prop.id}" min="0" max="100" value="${prop.get()}" 
-            oninput="sendVal('${prop.id}', +document.getElementById('${prop.id}').value)"/></label>`;
-    }
-
-    updateCode(prop: Property<number>): string {
-        return `document.getElementById('${prop.id}').value = val;`;
-    }
-}
-
-class SpanHTMLRenderer implements HTMLRederer<string> {
-    body(prop: Property<string>): string {
-        return `<span id="${prop.id}">${prop.name} : ${prop.get()}</span>`;
-    }
-
-    updateCode(prop: Property<string>): string {
-        return `document.getElementById('${prop.id}').innerHTML = '${prop.name + ' :'}' + val;`;
-    }
-}
-
-interface WriteableProperty<T> extends Property<T> {
-    set(val: T): void;
-}
-
-function isWriteableProperty<T>(object: Property<T>): object is WriteableProperty<T> {
-    return 'set' in object;
-}
-
-interface Controller {
-    readonly name: string;
-    readonly online: boolean;
-    readonly properties: Property<any>[];
-}
-
-class PropertyImpl<T> implements Property<T> {
-    private static _nextId = 0;
-    private static _allProps = new Map<string, Property<any>>();
-
-    protected evs: events.EventEmitter = new events.EventEmitter();
-    private _val: T;
-    public readonly id: string;
-
-    constructor(public readonly name: string, public readonly htmlRenderer: HTMLRederer<T>, readonly initial: T) {
-        this._val = initial;
-        this.id = ("" + (PropertyImpl._nextId++) + "(" + this.name + ")");
-        PropertyImpl._allProps.set(this.id, this);
-    }
-
-    static byId(id: string): Property<any>|undefined {
-        return PropertyImpl._allProps.get(id);
-    }
-
-    get available(): boolean {
-        return true;
-    }
-
-    get(): T {
-        return this._val;
-    }
-
-    public setInternal(val: T) {
-        const shouldFire = this._val != val;
-        this._val = val;
-        if (shouldFire) {
-            this.fireOnChange();
-        }
-    }
-
-    onChange(fn: () => void): void {
-        // TODO: Impl me
-        this.evs.on('change', fn);
-    }
-
-    protected fireOnChange() {
-        this.evs.emit('change');
-    }
-}
-
-abstract class WritablePropertyImpl<T> extends PropertyImpl<T> implements WriteableProperty<T> {
-    constructor(public readonly name: string, readonly htmlRenderer: HTMLRederer<T>, readonly initial: T) {
-        super(name, htmlRenderer, initial);
-    }
-
-    abstract set(val: T): void;
-} 
-
-
-abstract class Relay extends WritablePropertyImpl<boolean> {
+abstract class Relay extends props.WritablePropertyImpl<boolean> {
     constructor(readonly name: string) {
-        super(name, new CheckboxHTMLRenderer(), false);
+        super(name, new props.CheckboxHTMLRenderer(), false);
     }
 
     public abstract switch(on: boolean): Promise<void>;
@@ -244,25 +116,9 @@ abstract class Relay extends WritablePropertyImpl<boolean> {
     }
 }
 
-function runShell(cmd: string, args: string[]): Promise<String> {
-    return new Promise<String>((accept, reject) => {
-        const out: string[] = [];
-        const pr = child_process.spawn(cmd, args);
-        pr.on('error', (err: Error) => {
-            reject(err);
-        });
-        pr.on('close', () => {
-            accept(out.join(''));
-        });
-        pr.stdout.on("data", (d) => {
-            out.push(d.toString());
-        });
-    });
-}
-
-class Button extends WritablePropertyImpl<void> {
+class Button extends props.WritablePropertyImpl<void> {
     constructor(name: string, private action: () => void ) { 
-        super(name, new ButtonRendrer(), void 0); 
+        super(name, new props.ButtonRendrer(), void 0); 
     }
 
     set(val: void): void {
@@ -281,9 +137,9 @@ class GPIORelay extends Relay {
     constructor(readonly name: string, public readonly pin: number) { 
         super(name); 
 
-        this._init = runShell(GPIORelay.gpioCmd, ["-1", "mode", "" + this.pin, "out"])
+        this._init = util.runShell(GPIORelay.gpioCmd, ["-1", "mode", "" + this.pin, "out"])
             .then(() => {
-                return runShell(GPIORelay.gpioCmd, ["-1", "read", "" + this.pin])
+                return util.runShell(GPIORelay.gpioCmd, ["-1", "read", "" + this.pin])
                     .then((str) => {
                         this.setInternal(str.startsWith("0"));
                         return void 0;
@@ -297,21 +153,21 @@ class GPIORelay extends Relay {
     switch(on: boolean): Promise<void> {
         // console.log("Here ", on);
         return this._init.then(() => {
-            return runShell(GPIORelay.gpioCmd, ["-1", "write", "" + this.pin, on ? "0" : "1"])
+            return util.runShell(GPIORelay.gpioCmd, ["-1", "write", "" + this.pin, on ? "0" : "1"])
                 .then(() => this.setInternal(on))
                 .catch(err => console.log(err.errno));
         });
     }
 }
 
-class MiLightBulb implements Controller {
+class MiLightBulb implements props.Controller {
     readonly name = "MiLight";
     readonly online = true;
-    readonly properties: Property<any>[] = [
-        new (class MiLightBulbRelay extends WritablePropertyImpl<boolean> {
+    readonly properties: props.Property<any>[] = [
+        new (class MiLightBulbRelay extends props.WritablePropertyImpl<boolean> {
             constructor(
                 readonly pThis: MiLightBulb) {
-                super("On/off", new CheckboxHTMLRenderer(), false);
+                super("On/off", new props.CheckboxHTMLRenderer(), false);
             }
 
             set(on: boolean): Promise<void> {
@@ -325,18 +181,18 @@ class MiLightBulb implements Controller {
                 }
             }
         })(this),
-        new (class BrightnessProperty extends WritablePropertyImpl<number> {
+        new (class BrightnessProperty extends props.WritablePropertyImpl<number> {
             constructor(public readonly pThis: MiLightBulb) {
-                super("Brightness", new SliderHTMLRenderer(), 50);
+                super("Brightness", new props.SliderHTMLRenderer(), 50);
             }
             public set(val: number): void {
                 this.pThis.send([0x4E, 0x2 + (0x15 * val / 100), 0x55])
                     .then(() => this.setInternal(val));
             }
         })(this),
-        new (class BrightnessProperty extends WritablePropertyImpl<number> {
+        new (class BrightnessProperty extends props.WritablePropertyImpl<number> {
             constructor(public readonly pThis: MiLightBulb) {
-                super("Hue", new SliderHTMLRenderer(), 50);
+                super("Hue", new props.SliderHTMLRenderer(), 50);
             }
             public set(val: number): void {
                 this.pThis.send([0x40, (0xff * val / 100), 0x55])
@@ -362,7 +218,7 @@ class MiLightBulb implements Controller {
     }
 }
 
-class Tablet implements Controller {
+class Tablet implements props.Controller {
     private _name: string;
     private _androidVersion: string;
     public get name() { return this._online ? `${this._name}, android ${this._androidVersion}` : "Getting data"; }
@@ -376,9 +232,9 @@ class Tablet implements Controller {
         this._androidVersion = "<Unknown>";
     }
 
-    private volume = new (class VolumeControl extends WritablePropertyImpl<number> {
+    private volume = new (class VolumeControl extends props.WritablePropertyImpl<number> {
         constructor(private readonly tbl: Tablet) {
-            super("Volume", new SliderHTMLRenderer(), 0);
+            super("Volume", new props.SliderHTMLRenderer(), 0);
         }
 
         set(val: number): void {
@@ -386,7 +242,7 @@ class Tablet implements Controller {
         }
     })(this);
 
-    private battery = new PropertyImpl<string>("Battery", new SpanHTMLRenderer(), "");
+    private battery = new props.PropertyImpl<string>("Battery", new props.SpanHTMLRenderer(), "");
 
     private screenIsOn = new (class TabletOnOffRelay extends Relay {
         constructor(private readonly tbl: Tablet) {
@@ -409,7 +265,7 @@ class Tablet implements Controller {
         }
     })(this);
 
-    public properties: Property<any>[] = [
+    public properties: props.Property<any>[] = [
         this.volume,
         this.screenIsOn,
         this.battery,
@@ -590,14 +446,14 @@ class ControllerRelay extends Relay {
     }
 }
 
-class ClockController implements Controller {
+class ClockController implements props.Controller {
     private pingId = 0;
     private intervalId?: NodeJS.Timer;
     private lastResponse = Date.now();
     private ws?: WebSocket;
-    public readonly properties: Property<any>[];
+    public readonly properties: props.Property<any>[];
 
-    constructor(public readonly ip: string, public readonly name: string, public readonly properties_: Property<any>[], public readonly handle: ChildControllerHandle) {
+    constructor(public readonly ip: string, public readonly name: string, public readonly properties_: props.Property<any>[], public readonly handle: ChildControllerHandle) {
         this.attemptToConnect();
 
         this.properties = properties_.concat([ 
@@ -717,9 +573,9 @@ class App implements ChildControllerHandle {
     private r3 = new GPIORelay("Коридор", 36);
     private r4 = new GPIORelay("Потолок", 32);
 
-    private tempProperty = new (class Temp extends PropertyImpl<string> {
+    private tempProperty = new (class Temp extends props.PropertyImpl<string> {
         constructor() {
-            super("Температура", new SpanHTMLRenderer(), "Нет данных")
+            super("Температура", new props.SpanHTMLRenderer(), "Нет данных")
         }
     })();
 
@@ -749,7 +605,7 @@ class App implements ChildControllerHandle {
 
     private readonly tablets: Map<string, Tablet> = new Map();
 
-    private readonly controllers: Controller[] = [ 
+    private readonly controllers: props.Controller[] = [ 
         this.ctrlGPIO, 
         this.ctrlRoomClock,
         this.ctrlKitchen, 
@@ -783,9 +639,9 @@ class App implements ChildControllerHandle {
             ws.on('message', (message: string) => {
                 const msg = JSON.parse(message);
                 if (msg.type === "setProp") {
-                    const prop = PropertyImpl.byId(msg.id);
+                    const prop = props.PropertyImpl.byId(msg.id);
                     if (prop) {
-                        if (isWriteableProperty(prop)) {
+                        if (props.isWriteableProperty(prop)) {
                             prop.set(msg.val);
                         } else {
                             console.error(`Property ${prop.name} is not writable`);
@@ -897,7 +753,7 @@ class App implements ChildControllerHandle {
         } 
 
         const propChangedMap = this.controllers.map((ctrl, ctrlIndex) => {
-            return ctrl.properties.map((prop: Property<any>, prIndex: number): string => {
+            return ctrl.properties.map((prop: props.Property<any>, prIndex: number): string => {
                 return `'${prop.id}' : (val) => { ${prop.htmlRenderer.updateCode(prop)} }`
             }).join(',\n');
         }).join(',\n');
@@ -933,7 +789,7 @@ class App implements ChildControllerHandle {
         return wrap(["html", { lang: "en"}], 
             wrap("head", hdr.join("\n")) + "\n" +
             wrap("body", this.controllers.map((ctrl) => {
-                return ctrl.name + "<br/>" + ctrl.properties.map((prop: Property<any>): string => {
+                return ctrl.name + "<br/>" + ctrl.properties.map((prop: props.Property<any>): string => {
                     let res = "";
 
                     res = prop.htmlRenderer.body(prop);
