@@ -100,6 +100,7 @@ namespace adbkit {
 }
 
 interface Property<T> {
+    readonly id: string;
     readonly name: string;
     readonly available: boolean;
     get(): T;
@@ -109,52 +110,52 @@ interface Property<T> {
 }
 
 interface HTMLRederer<T> {
-    body(prop: Property<T>, id: string, ctrlIndex: number, prIndex: number): string;
-    updateCode(prop: Property<T>, id: string, ctrlIndex: number, prIndex: number): string;
+    body(prop: Property<T>): string;
+    updateCode(prop: Property<T>): string;
 }
 
 class CheckboxHTMLRenderer implements HTMLRederer<boolean> {
-    body(prop: Property<boolean>, id: string, ctrlIndex: number, prIndex: number): string {
-        return `<label><input type="checkbox" id=${id} 
+    body(prop: Property<boolean>): string {
+        return `<label><input type="checkbox" id=${prop.id} 
             ${prop.available ? "" : "disabled"} 
             ${prop.get() ? "checked" : ""}
-            onclick="sendVal(${ctrlIndex}, ${prIndex}, document.getElementById('${id}').checked)"/>${prop.name}</label>`;
+            onclick="sendVal('${prop.id}', document.getElementById('${prop.id}').checked)"/>${prop.name}</label>`;
     }    
     
-    updateCode(prop: Property<boolean>, id: string, ctrlIndex: number, prIndex: number): string {
-        return `document.getElementById('${id}').checked = val;`;
+    updateCode(prop: Property<boolean>): string {
+        return `document.getElementById('${prop.id}').checked = val;`;
     }
 }
 
 class ButtonRendrer implements HTMLRederer<void> {
-    body(prop: Property<void>, id: string, ctrlIndex: number, prIndex: number): string {
-        return `<input ${prop.available ? "" : "disabled"}  type="button" id="${id}" value="${prop.name}" 
-            onclick="sendVal(${ctrlIndex}, ${prIndex}, '')"></input>`;
+    body(prop: Property<void>): string {
+        return `<input ${prop.available ? "" : "disabled"}  type="button" id="${prop.id}" value="${prop.name}" 
+            onclick="sendVal('${prop.id}', '')"></input>`;
     }
 
-    updateCode(prop: Property<void>, id: string, ctrlIndex: number, prIndex: number): string {
+    updateCode(prop: Property<void>): string {
         return '';
     }
 }
 
 class SliderHTMLRenderer implements HTMLRederer<number> {
-    body(prop: Property<number>, id: string, ctrlIndex: number, prIndex: number): string {
-        return `<label>${prop.name}<input ${prop.available ? "" : "disabled"}  type="range" id="${id}" min="0" max="100" value="${prop.get()}" 
-            oninput="sendVal(${ctrlIndex}, ${prIndex}, +document.getElementById('${id}').value)"/></label>`;
+    body(prop: Property<number>): string {
+        return `<label>${prop.name}<input ${prop.available ? "" : "disabled"}  type="range" id="${prop.id}" min="0" max="100" value="${prop.get()}" 
+            oninput="sendVal('${prop.id}', +document.getElementById('${prop.id}').value)"/></label>`;
     }
 
-    updateCode(prop: Property<number>, id: string, ctrlIndex: number, prIndex: number): string {
-        return `document.getElementById('${id}').value = val;`;
+    updateCode(prop: Property<number>): string {
+        return `document.getElementById('${prop.id}').value = val;`;
     }
 }
 
 class SpanHTMLRenderer implements HTMLRederer<string> {
-    body(prop: Property<string>, id: string, ctrlIndex: number, prIndex: number): string {
-        return `<span id="${id}">${prop.name} : ${prop.get()}</span>`;
+    body(prop: Property<string>): string {
+        return `<span id="${prop.id}">${prop.name} : ${prop.get()}</span>`;
     }
 
-    updateCode(prop: Property<string>, id: string, ctrlIndex: number, prIndex: number): string {
-        return `document.getElementById('${id}').innerHTML = '${prop.name + ' :'}' + val;`;
+    updateCode(prop: Property<string>): string {
+        return `document.getElementById('${prop.id}').innerHTML = '${prop.name + ' :'}' + val;`;
     }
 }
 
@@ -173,11 +174,21 @@ interface Controller {
 }
 
 class PropertyImpl<T> implements Property<T> {
+    private static _nextId = 0;
+    private static _allProps = new Map<string, Property<any>>();
+
     protected evs: events.EventEmitter = new events.EventEmitter();
     private _val: T;
+    public readonly id: string;
 
     constructor(public readonly name: string, public readonly htmlRenderer: HTMLRederer<T>, readonly initial: T) {
         this._val = initial;
+        this.id = ("" + (PropertyImpl._nextId++) + "(" + this.name + ")");
+        PropertyImpl._allProps.set(this.id, this);
+    }
+
+    static byId(id: string): Property<any>|undefined {
+        return PropertyImpl._allProps.get(id);
     }
 
     get available(): boolean {
@@ -772,11 +783,15 @@ class App implements ChildControllerHandle {
             ws.on('message', (message: string) => {
                 const msg = JSON.parse(message);
                 if (msg.type === "setProp") {
-                    const prop = this.controllers[msg.controller].properties[msg.prop];
-                    if (isWriteableProperty(prop)) {
-                        prop.set(msg.val);
+                    const prop = PropertyImpl.byId(msg.id);
+                    if (prop) {
+                        if (isWriteableProperty(prop)) {
+                            prop.set(msg.val);
+                        } else {
+                            console.error(`Property ${prop.name} is not writable`);
+                        }
                     } else {
-                        console.error(`Property ${prop.name} is not writable`);
+                        console.error(`Property with id = ${msg.id} is not found`);
                     }
                 } else {
                     //log the received message and send it back to the client
@@ -856,7 +871,19 @@ class App implements ChildControllerHandle {
             .catch((err: Error) => {
                 console.error('Something went wrong:', err.stack)
             })
-        
+
+        // Subscribe to all the props changes
+        this.controllers.forEach(ct => {
+            ct.properties.forEach(prop => {
+                prop.onChange(() => {
+                    this.wss.clients.forEach(cl => cl.send(JSON.stringify({
+                        type: "onPropChanged",
+                        id: prop.id,
+                        val: prop.get()
+                    })));
+                });    
+            })
+        })
     }
     
     private renderToHTML(): string {
@@ -871,8 +898,7 @@ class App implements ChildControllerHandle {
 
         const propChangedMap = this.controllers.map((ctrl, ctrlIndex) => {
             return ctrl.properties.map((prop: Property<any>, prIndex: number): string => {
-                const id = ctrlIndex + ":" + prIndex;
-                return `'${id}' : (val) => { ${prop.htmlRenderer.updateCode(prop, id, ctrlIndex, prIndex)} }`
+                return `'${prop.id}' : (val) => { ${prop.htmlRenderer.updateCode(prop)} }`
             }).join(',\n');
         }).join(',\n');
 
@@ -896,33 +922,21 @@ class App implements ChildControllerHandle {
                 };
             };
     
-            function sendVal(controllerIndex, propIndex, val) {
+            function sendVal(id, val) {
                 sock.send(JSON.stringify({ 
                     type: 'setProp',
-                    controller: controllerIndex, 
-                    prop: propIndex, 
+                    id: id,
                     val: val }));
             };
             `)
         ];
         return wrap(["html", { lang: "en"}], 
             wrap("head", hdr.join("\n")) + "\n" +
-            wrap("body", this.controllers.map((ctrl, ctrlIndex) => {
-                return ctrl.name + "<br/>" + ctrl.properties.map((prop: Property<any>, prIndex: number): string => {
+            wrap("body", this.controllers.map((ctrl) => {
+                return ctrl.name + "<br/>" + ctrl.properties.map((prop: Property<any>): string => {
                     let res = "";
-                    const id = ctrlIndex + ":" + prIndex;
-    
-                    res = prop.htmlRenderer.body(prop, id, ctrlIndex, prIndex);
-                
-                    prop.onChange(() => {
-                        this.wss.clients.forEach(cl => cl.send(JSON.stringify({
-                            type: "onPropChanged",
-                            controller: ctrlIndex, 
-                            prop: prIndex, 
-                            id: id,
-                            val: prop.get()
-                        })));
-                    });
+
+                    res = prop.htmlRenderer.body(prop);
 
                     return res;
                 }).join("&nbsp;\n")
