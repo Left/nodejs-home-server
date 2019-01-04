@@ -15,6 +15,13 @@ export interface HTMLRederer<T> {
     updateCode(prop: Property<T>): string;
 }
 
+export function voidHTMLRenderer<T>(): HTMLRederer<T> {
+    return {
+        body(prop: Property<T>): string { return ""; },
+        updateCode(prop: Property<T>): string { return " "}
+    };
+}
+
 export class CheckboxHTMLRenderer implements HTMLRederer<boolean> {
     body(prop: Property<boolean>): string {
         return `<label><input type="checkbox" id=${prop.id} 
@@ -51,6 +58,28 @@ export class SliderHTMLRenderer implements HTMLRederer<number> {
     }
 }
 
+
+export class SelectHTMLRenderer<T> implements HTMLRederer<T> {
+    constructor(
+        public readonly choices: T[], 
+        public readonly valToText: (t:T) => string = (x => x.toString())
+    ) {
+    }
+
+    body(prop: Property<T>): string {
+        return `<label>${prop.name}
+            <select id='${prop.id}' name="${prop.name}"
+                onchange="sendVal('${prop.id}', '${prop.name}', +document.getElementById('${prop.id}').selectedOptions[0].value)">
+                ${this.choices.map(v => `<option ${prop.get() === v ? 'selected' : ''} value=${v}>${this.valToText(v)}</option>`).join('')}
+            </select>
+            </label>`;
+    }
+
+    updateCode(prop: Property<T>): string {
+        return `Array.from(document.getElementById('${prop.id}').options).forEach((o, i) => { if (o.value == val) document.getElementById('${prop.id}').selectedIndex = i })`;
+    }
+}
+
 export class SpanHTMLRenderer implements HTMLRederer<string> {
     body(prop: Property<string>): string {
         return `<span id="${prop.id}">${prop.name} : ${prop.get()}</span>`;
@@ -77,11 +106,11 @@ export class StringAndGoRendrer implements HTMLRederer<string> {
     }
 }
 
-export interface WriteableProperty<T> extends Property<T> {
+export interface WritableProperty<T> extends Property<T> {
     set(val: T): void;
 }
 
-export function isWriteableProperty<T>(object: Property<T>): object is WriteableProperty<T> {
+export function isWriteableProperty<T>(object: Property<T>): object is WritableProperty<T> {
     return 'set' in object;
 }
 
@@ -135,10 +164,23 @@ export class PropertyImpl<T> implements Property<T> {
     }
 }
 
-export abstract class WritablePropertyImpl<T> extends PropertyImpl<T> implements WriteableProperty<T> {
+export abstract class WritablePropertyImpl<T> extends PropertyImpl<T> implements WritableProperty<T> {
     constructor(public readonly name: string, readonly htmlRenderer: HTMLRederer<T>, readonly initial: T) {
         super(name, htmlRenderer, initial);
     }
 
     abstract set(val: T): void;
 } 
+
+export function newWritableProperty<T>(
+    name: string, 
+    initial: T, 
+    htmlRenderer: HTMLRederer<T> = voidHTMLRenderer(), 
+    onSet: (v:T)=>void = ()=>{}): WritablePropertyImpl<T> {
+    return new (class WP extends WritablePropertyImpl<T> {
+        set(val: T): void {
+            this.setInternal(val);
+            onSet(val);
+        }
+    })(name, htmlRenderer, initial);
+}

@@ -29,3 +29,20 @@ export function wrapToHTML(tag: string| [string, {[k: string]: string}], body?: 
         return `<${tag[0]} ${props.join(" ")}` + (!!body ? `>\n${body}\n</${tag[0]}>` : ">");
     }
 } 
+
+export function toHourMinSec(seconds: number): string {
+    var data: { n: number, str: string[] }[] = [
+        { n: 3600, str: ["часов", "час", "часа", "часа", "часа", "часов", "часов", "часов", "часов", "часов"]}, 
+        { n: 60, str: ["минут", "минуту", "минуты", "минуты", "минуты", "минут", "минут", "минут", "минут", "минут" ]}, 
+        { n: 1, str: ["секунд", "секунду", "секунды", "секунды", "секунды", "секунд", "секунд", "секунд", "секунд", "секунд"]}
+    ];
+    var res: string[] = [];
+    data.forEach(d => {
+        if (seconds >= d.n) {
+            const v = Math.floor(seconds / d.n);
+            res.push(v + " " + d.str[v % 10]);
+            seconds = seconds % d.n;
+        }
+    });
+    return res.join(' ');
+}

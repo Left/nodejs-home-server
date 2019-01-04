@@ -132,26 +132,29 @@ class Button extends props.WritablePropertyImpl<void> {
 
 class GPIORelay extends Relay {
     private _init: Promise<void>;
+    private _modeWasSet: boolean = false;
     static readonly gpioCmd = "/root/WiringOP/gpio/gpio";
 
     constructor(readonly name: string, public readonly pin: number) { 
         super(name); 
 
-        this._init = util.runShell(GPIORelay.gpioCmd, ["-1", "mode", "" + this.pin, "out"])
-            .then(() => {
-                return util.runShell(GPIORelay.gpioCmd, ["-1", "read", "" + this.pin])
-                    .then((str) => {
-                        this.setInternal(str.startsWith("0"));
-                        return void 0;
-                    })
-                    .catch(err => console.log(err.errno));
-
+        this._init = util.runShell(GPIORelay.gpioCmd, ["-1", "read", "" + this.pin])
+            .then((str) => {
+                this.setInternal(str.startsWith("0"));
+                return void 0;
             })
-            .catch(err => console.log(err.errno));
+            .catch(err => console.log(err.errno))
     }
 
     switch(on: boolean): Promise<void> {
         // console.log("Here ", on);
+        if (!this._modeWasSet) {
+            this._init = this._init.then(() =>
+                util.runShell(GPIORelay.gpioCmd, ["-1", "mode", "" + this.pin, "out"])
+                    .then(() => Promise.resolve(void 0))
+                    .catch(err => console.log(err.errno)));
+        }
+        
         return this._init.then(() => {
             return util.runShell(GPIORelay.gpioCmd, ["-1", "write", "" + this.pin, on ? "0" : "1"])
                 .then(() => this.setInternal(on))
@@ -221,13 +224,13 @@ class MiLightBulb implements props.Controller {
 class Tablet implements props.Controller {
     private _name: string;
     private _androidVersion: string;
-    public get name() { return this._online ? `${this._name}, android ${this._androidVersion}` : "Getting data"; }
+    public get name() { return this._online ? `${this._name}, android ${this._androidVersion}` : "Offline"; }
 
     private _online: boolean = false;
     private _timer?: NodeJS.Timer;
     public get online() { return this._online; }
 
-    constructor(public readonly id: string) {
+    constructor(public readonly id: string, private readonly tryToConnect: boolean) {
         this._name = id;
         this._androidVersion = "<Unknown>";
 
@@ -259,7 +262,7 @@ class Tablet implements props.Controller {
 
     private battery = new props.PropertyImpl<string>("Battery", new props.SpanHTMLRenderer(), "");
 
-    private screenIsOn = new (class TabletOnOffRelay extends Relay {
+    public screenIsOn = new (class TabletOnOffRelay extends Relay {
         constructor(private readonly tbl: Tablet) {
             super("Screen on");
         }
@@ -289,15 +292,41 @@ class Tablet implements props.Controller {
         }
     }
 
-    private shellCmd(cmd: string): Promise<string> {
-        return new Promise<string>((accept, reject) => {
-            adbClient.shell(this.id, cmd)
-                .then(adbkit.util.readAll)
-                .then((output: string) => {
-                    accept(output.toString());
-                })
-                .catch((err: Error) => reject(err));
-            });
+    private _connectingNow = false;
+
+    private connectIfNeeded(): Promise<void> {
+        if (!this._online && this.tryToConnect && !this._connectingNow) {
+            // We should try to connect first
+            const parse = this.id.match(/([^:]*):?(\d*)/);
+            if (parse) {
+                console.log(parse[1], parse[2]);
+                this._connectingNow = true;
+                return new Promise((accept, reject) => {
+                    adbClient.connect(parse[1], +(parse[2])).then(() => {
+                        this._connectingNow = false;
+                        this.init()
+                            .then(() => accept())
+                            .catch(() => reject());
+                    })
+                    .catch(() => {
+                        this._connectingNow = false;
+                    });
+                });
+            }
+        }
+        return Promise.resolve(void 0);
+    }
+
+    private shellCmd(cmd: string): Promise<string> {       
+        return this.connectIfNeeded().then(
+            () => new Promise<string>((accept, reject) => {
+                adbClient.shell(this.id, cmd)
+                    .then(adbkit.util.readAll)
+                    .then((output: string) => {
+                        accept(output.toString());
+                    })
+                    .catch((err: Error) => reject(err));
+                }));
     };
 
     private settingVolume = Promise.resolve(void 0);
@@ -402,20 +431,22 @@ class Tablet implements props.Controller {
         });
     }
 
-    public init() {
+    public init(): Promise<void> {
         // And then open shell
-        adbClient.getProperties(this.id).then((props: {[k: string]: string}) => {
+        return adbClient.getProperties(this.id).then((props: {[k: string]: string}) => {
             this._name = props['ro.product.model'];
             this._androidVersion = props['ro.build.version.release'];
 
+            this._timer = setInterval(() => {
+                this.timerTask();
+            }, 10000);
+    
+            this.timerTask();    
+
             this._online = true;
+
+            return void 0;
         });
-
-        this._timer = setInterval(() => {
-            this.timerTask();
-        }, 10000);
-
-        this.timerTask();
     }
 
     public timerTask() {
@@ -435,6 +466,8 @@ class Tablet implements props.Controller {
             clearInterval(this._timer);
         }
         this._online = false;
+        // Try to connect
+        this.connectIfNeeded();
     }
 }
 
@@ -470,8 +503,9 @@ class ClockController implements props.Controller {
     private lastResponse = Date.now();
     private ws?: WebSocket;
     public readonly properties: props.Property<any>[];
+    public get name() { return this._name + " (" + this.ip + ")"; }
 
-    constructor(public readonly ip: string, public readonly name: string, public readonly properties_: props.Property<any>[], public readonly handle: ChildControllerHandle) {
+    constructor(public readonly ip: string, readonly _name: string, public readonly properties_: props.Property<any>[], public readonly handle: ChildControllerHandle) {
         this.attemptToConnect();
 
         this.properties = properties_.concat([ 
@@ -618,12 +652,109 @@ class App implements ChildControllerHandle {
 */
     private ctrlLamp = new MiLightBulb();
 
-    private readonly kindle: Tablet = new Tablet('192.168.121.166:5556');
-    private readonly nexus7: Tablet = new Tablet('00eaadb6');
+    private readonly kindle: Tablet = new Tablet('192.168.121.166:5556', true);
+    private readonly nexus7: Tablet = new Tablet('00eaadb6', false);
 
     private readonly tablets: Map<string, Tablet> = new Map();
 
+    private timeProp(name: string, upto: number, onChange: (v:number)=>void) : props.WritablePropertyImpl<number> {
+        return props.newWritableProperty<number>(
+            name, 
+            0, 
+            new props.SelectHTMLRenderer<number>(Array.from({length: upto}, (v, k) => k), i => "" + i), 
+            (v:number)=> { onChange(v); });
+   }
+
+    private createTimer(name: string, onFired: ((d: Date) => void)) : { val: Date, controller: props.Controller } {
+        const onDateChanged = () => { that.onDateChanged(); };
+        const hourProp = this.timeProp("Час", 24, onDateChanged);
+        const minProp = this.timeProp("Мин", 60, onDateChanged);
+        const secProp = this.timeProp("Сек", 60, onDateChanged);
+
+        const min = 60;
+        const hour = 60*min;
+        const timerIn = [10, 30, min, 2*min, 3*min, 5*min, 10*min, 15*min, 20*min, 30*min, 45*min, hour, 2*hour, 3*hour, 4*hour, 5*hour, 8*hour, 12*hour, 23*hour];
+
+        const orBeforeProp = props.newWritableProperty<number>(
+            "или через", 
+            timerIn[4], 
+            new props.SelectHTMLRenderer(timerIn, n => util.toHourMinSec(n)), 
+            (v:number)=> {
+                const d = new Date();
+                d.setTime(d.getTime() + v*1000);
+                setNewValue(d);
+            });        
+        const beforeProp = props.newWritableProperty("через", "", new props.SpanHTMLRenderer(), () => {})
+        var timer: NodeJS.Timer;
+
+        function setNewValue(d: Date): void {
+            if (that.val.getTime() != d.getTime()) {
+                that.val = d;
+                const msBefore = (d.getTime() - new Date().getTime());
+                var secBefore = msBefore / 1000;
+                beforeProp.set(util.toHourMinSec(secBefore));
+
+                hourProp.setInternal(that.val.getHours());
+                minProp.setInternal(that.val.getMinutes());
+                secProp.setInternal(that.val.getSeconds());
+
+                // Let's setup timer
+                if (!!timer) {
+                    clearTimeout(timer);
+                }
+                timer = setTimeout(() => {
+                    onFired(d);
+                }, msBefore);
+            }
+        }
+
+        const that = {
+            val: new Date(),
+            onDateChanged: () => {
+                const d = new Date();
+                d.setHours(+hourProp.get());
+                d.setMinutes(+minProp.get());
+                d.setSeconds(+secProp.get());
+                if (d.getTime() < new Date().getTime()) {
+                    // Add a day to point to tomorrow
+                    d.setDate(d.getDate() + 1);
+                }
+                setNewValue(d);
+            },
+            controller: {
+                name: name,
+                online: true, // Always online
+                properties: [ 
+                    hourProp, minProp, secProp, orBeforeProp, beforeProp
+                ]
+            }
+         };
+         return that;
+    }
+
+    private sleepAt = this.createTimer("Выкл", d => { 
+        // console.log("!!! SLEEEP !!!");
+        // console.log(d); 
+        //this.kindle.screenIsOn.set(false);
+        this.nexus7.screenIsOn.set(false);
+    });
+    private wakeAt = this.createTimer("Вкл", d => { 
+        console.log(d); 
+        this.nexus7.screenIsOn.set(true);
+    });
+
+    private ctrlControlOther = {
+        name: "Другое",
+        online: true, // Always online
+        properties: [
+            Button.create("Reboot server", () => util.runShell("reboot", []))
+        ]
+    }
+
     private readonly controllers: props.Controller[] = [ 
+        this.sleepAt.controller,
+        this.wakeAt.controller,
+        this.ctrlControlOther,
         this.ctrlGPIO, 
         this.ctrlRoomClock,
         this.ctrlKitchen, 
@@ -738,6 +869,9 @@ class App implements ChildControllerHandle {
         
         adbClient.listDevices()
             .then((devices: adbkit.Device[]) => {
+                Array.from(this.tablets.values())
+                    .filter(t => !devices.some(dev => dev.id === t.id))
+                    .forEach(t => t.stop());
                 devices.forEach(dev => {
                     this.processDevice(dev);
                 });
