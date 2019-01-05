@@ -237,16 +237,19 @@ class Tablet implements props.Controller {
         const tbl = this;
 
         this.properties = [
-            this.volume,
             this.screenIsOn,
+            this.volume,
             this.battery,
+            this.playingUrl,
             new (class PlayLine extends props.WritablePropertyImpl<string> {
                 set(val: string): void {
                     tbl.playURL(val);
                 }
-            })("Go play", new props.StringAndGoRendrer(), ""),
+            })("Go play", new props.StringAndGoRendrer("Play"), ""),
+            Button.create("Pause", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Pause")),
+            Button.create("Play", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Play")),
+            Button.create("Stop playing", () => this.shellCmd("am force-stop org.videolan.vlc")),
             Button.create("Reset", () => this.shellCmd("reboot")),
-            Button.create("Stop playing", () => this.shellCmd("am force-stop org.videolan.vlc"))
         ];
     }
 
@@ -261,6 +264,8 @@ class Tablet implements props.Controller {
     })(this);
 
     private battery = new props.PropertyImpl<string>("Battery", new props.SpanHTMLRenderer(), "");
+
+    private playingUrl = new props.PropertyImpl<string>("Now playing", new props.SpanHTMLRenderer(), "");
 
     public screenIsOn = new (class TabletOnOffRelay extends Relay {
         constructor(private readonly tbl: Tablet) {
@@ -299,9 +304,8 @@ class Tablet implements props.Controller {
             // We should try to connect first
             const parse = this.id.match(/([^:]*):?(\d*)/);
             if (parse) {
-                console.log(parse[1], parse[2]);
                 this._connectingNow = true;
-                return new Promise((accept, reject) => {
+                return new Promise<void>((accept, reject) => {
                     adbClient.connect(parse[1], +(parse[2])).then(() => {
                         this._connectingNow = false;
                         this.init()
@@ -459,6 +463,24 @@ class Tablet implements props.Controller {
         this.getBatteryLevel().then(vol => {
             this.battery.setInternal(vol + "%");
         });
+        this.playingUrlNow().then(url => {
+            this.playingUrl.setInternal(url || "<nothing>");
+        });
+    }
+
+    public playingUrlNow(): Promise<string|undefined> {
+        return this.shellCmd("dumpsys activity activities | grep 'Intent {'").then(
+            res => {
+                const firstLine = util.splitLines(res)[0];
+                // console.log("playingUrlNow", util.splitLines(res));
+                const match = firstLine.match(/dat=(\S*)\s/);
+                if (match) {
+                    const url = match[1];
+                    return url;
+                }
+                return undefined;
+            }
+        )
     }
 
     public stop() {

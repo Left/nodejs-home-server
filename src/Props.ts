@@ -91,13 +91,15 @@ export class SpanHTMLRenderer implements HTMLRederer<string> {
 }
 
 export class StringAndGoRendrer implements HTMLRederer<string> {
+    constructor(public readonly btnText: string) {}
+
     body(prop: Property<string>): string {
         return `<span>
             <input ${prop.available ? "" : "disabled"}  type="text" 
             id="${prop.id}" 
             placeholder="${prop.name}"
             value="" />&nbsp;
-            <input type="button" value=" Go " onclick="sendVal('${prop.id}', '${prop.name}', document.getElementById('${prop.id}').value)"/>
+            <input type="button" value=" ${this.btnText} " onclick="sendVal('${prop.id}', '${prop.name}', document.getElementById('${prop.id}').value)"/>
             </span>`;
     }
 
