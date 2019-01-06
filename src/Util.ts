@@ -46,3 +46,15 @@ export function toHourMinSec(seconds: number): string {
     });
     return res.join(' ');
 }
+
+export function delay(time: number): Promise<void> {
+    return new Promise<void>(function(resolve) { 
+        setTimeout(resolve, time);
+    });
+ }
+
+export function trace<T>(x: T): T {
+    console.log(x);
+    return x;
+}
+

@@ -3,25 +3,17 @@ import * as http from 'http';
 import * as WebSocket from 'ws';
 // import * as stream from "stream";
 import * as fs from "fs";
+import * as os from "os";
 import * as dgram from "dgram";
+import * as crypto from'crypto';
 
 import * as util from "./Util";
 import * as props from "./Props";
-
-function delay(time: number): Promise<void> {
-    return new Promise<void>(function(resolve) { 
-        setTimeout(resolve, time);
-    });
- }
 
 var adbkit = require('adbkit')
 var adbClient = adbkit.createClient()
 
 /*
-function trace<T>(x: T): T {
-    console.log(x);
-    return x;
-}
 
 interface PingResult {
     result: string;
@@ -39,6 +31,16 @@ interface Temp extends Msg {
     value: number;
 }
 
+interface Weight extends Msg {
+    type: 'weight';
+    value: number;
+}
+
+interface Button extends Msg {
+    type: 'button';
+    value: boolean;
+}
+
 interface Log extends Msg {
     type: 'log';
     val: string;
@@ -48,6 +50,20 @@ interface Hello extends Msg {
     type: 'hello';
     firmware: string;
     afterRestart: number;
+    devParams: {
+        "device.name": string,      // Device Name String("ESP_") + ESP.getChipId()
+        "wifi.name": string,        // WiFi SSID ""
+        // "wifi.pwd": string,         // WiFi Password "true"
+        "websocket.server": string, // WebSocket server ""
+        "websocket.port": string,   // WebSocket port ""
+        "ntpTime": string,          // Get NTP time "true"
+        "invertRelay": string,      // Invert relays "false"
+        "hasScreen": string,        // Has screen "true"
+        "hasHX711": string,         // Has HX711 (weight detector) "false"
+        "hasDS18B20": string,       // Has DS18B20 (temp sensor) "false"
+        "hasButton": string,        // Has button on D7 "false"
+        "brightness": string        // Brightness [0..100] "0"
+    }
 }
 
 interface IRKey extends Msg {
@@ -69,21 +85,9 @@ interface ChildControllerHandle {
     disconnected(controller: ClockController): void;
 }
 
-interface Time {
-    readonly hours: number;
-    readonly minutes: number;
-}
-
-const emptyTime: Time = { hours: -1, minutes: -1 }
-
-interface IConfig {
-    wakeAt: Time;
-    sleepAt: Time;
-}
-
-const emptyConfig: IConfig = {
-    wakeAt: emptyTime,
-    sleepAt: emptyTime
+interface JSONAble<T> {
+    toJsonType(): T;
+    fromJsonType(val: T): void;
 }
 
 namespace adbkit {
@@ -176,7 +180,7 @@ class MiLightBulb implements props.Controller {
             set(on: boolean): Promise<void> {
                 if (on) {
                     return this.pThis.send([0x42, 0x00, 0x55])
-                        .then(() => delay(100).then(
+                        .then(() => util.delay(100).then(
                             () => this.pThis.send([0xC2, 0x00, 0x55])
                         ));
                 } else {
@@ -276,7 +280,7 @@ class Tablet implements props.Controller {
             return this.tbl.screenIsSwitchedOn().then(onNow => {
                 if (on !== onNow) {
                     return this.tbl.shellCmd("input keyevent KEYCODE_POWER").then(res => {
-                        return delay(300).then(() => this.tbl.screenIsSwitchedOn().then(onNow => {
+                        return util.delay(300).then(() => this.tbl.screenIsSwitchedOn().then(onNow => {
                             this.setInternal(onNow);
                             return Promise.resolve(void 0); // Already in this state
                         }));
@@ -559,7 +563,7 @@ class ClockController implements props.Controller {
         this.send({ type: "reboot" });
     }
 
-    public send(json: {}): Promise<void> {
+    public send(json: Object): Promise<void> {
         const txt = JSON.stringify(json);
         console.log(this + " SEND: " + txt);
         if (this.ws) {
@@ -640,7 +644,6 @@ class App implements ChildControllerHandle {
     public server: http.Server;
     public readonly wss: WebSocket.Server;
     public currentTemp?: number;
-    private config: IConfig;
 
     private r1 = new GPIORelay("Лампа на шкафу", 38);
     private r2 = new GPIORelay("Колонки", 40);
@@ -665,6 +668,21 @@ class App implements ChildControllerHandle {
         new ControllerRelay("Лента")
     ], this);
 
+    private serverHashIdPromise: Promise<string> = new Promise((accept, reject) => {
+        const hasho = crypto.createHash('md5');
+        fs.readdir(__dirname, (err, files) => {
+            if (err) {
+                reject(err);
+            }
+            files.forEach(file => {
+                const stat = fs.statSync(__dirname + "/" + file);
+                hasho.update("" + stat.size);
+                hasho.update("" + stat.mtime.getTime());
+            });
+            accept(hasho.digest("hex"));
+          })
+    });
+
 /*
     private ctrlClock = {
         name: "Часы и датчик температуры",
@@ -679,88 +697,119 @@ class App implements ChildControllerHandle {
 
     private readonly tablets: Map<string, Tablet> = new Map();
 
-    private timeProp(name: string, upto: number, onChange: (v:number)=>void) : props.WritablePropertyImpl<number> {
+    private timeProp(name: string, upto: number, onChange: (v:number|null)=>void) : props.WritablePropertyImpl<number|null> {
         return props.newWritableProperty<number>(
             name, 
             0, 
-            new props.SelectHTMLRenderer<number>(Array.from({length: upto}, (v, k) => k), i => "" + i), 
-            (v:number)=> { onChange(v); });
-   }
+            new props.SelectHTMLRenderer<number|null>(Array.from({length: upto + 1}, ((v, k) => k == 0 ? null : k-1)), i => i === null ? " - " : "" + i), 
+            (v:number|null) => { onChange(v); });
+    }
 
-    private createTimer(name: string, onFired: ((d: Date) => void)) : { val: Date, controller: props.Controller } {
-        const onDateChanged = () => { that.onDateChanged(); };
+
+    private createTimer(name: string, onFired: ((d: Date) => void)) : 
+        { val: Date|null, controller: props.Controller } & JSONAble<string> {
+        const onDateChanged = () => {
+            const hh = hourProp.get();
+            const mm = minProp.get();
+
+            if (hh !== null && mm !== null) { 
+                const d = new Date();
+                d.setHours(hh);
+                d.setMinutes(mm);
+                const ss = secProp.get();
+                d.setSeconds(ss !== null ? ss : 0);    
+                if (d.getTime() < new Date().getTime()) {
+                    // Add a day to point to tomorrow
+                    d.setDate(d.getDate() + 1);
+                }    
+                setNewValue(d);
+            } else {
+                setNewValue(null);
+            }
+        };
         const hourProp = this.timeProp("Час", 24, onDateChanged);
         const minProp = this.timeProp("Мин", 60, onDateChanged);
         const secProp = this.timeProp("Сек", 60, onDateChanged);
 
         const min = 60;
         const hour = 60*min;
-        const timerIn = [10, 30, min, 2*min, 3*min, 5*min, 10*min, 15*min, 20*min, 30*min, 45*min, hour, 2*hour, 3*hour, 4*hour, 5*hour, 8*hour, 12*hour, 23*hour];
+        const timerIn = [0, 10, 30, min, 2*min, 3*min, 5*min, 10*min, 15*min, 20*min, 30*min, 45*min, hour, 2*hour, 3*hour, 4*hour, 5*hour, 8*hour, 12*hour, 23*hour];
 
         const orBeforeProp = props.newWritableProperty<number>(
             "или через", 
-            timerIn[4], 
-            new props.SelectHTMLRenderer(timerIn, n => util.toHourMinSec(n)), 
-            (v:number)=> {
-                const d = new Date();
-                d.setTime(d.getTime() + v*1000);
-                setNewValue(d);
-            });        
+            timerIn[0], 
+            new props.SelectHTMLRenderer(timerIn, n => n ? util.toHourMinSec(n) : "никогда"), 
+            (v:number) => {
+                if (v != 0) {
+                    const d = new Date();
+                    d.setTime(d.getTime() + v*1000);
+                    setNewValue(d);
+                } else {
+                    setNewValue(null);
+                }
+            });
         const beforeProp = props.newWritableProperty("через", "", new props.SpanHTMLRenderer(), () => {})
         var timer: NodeJS.Timer;
 
-        function setNewValue(d: Date): void {
-            if (that.val.getTime() != d.getTime()) {
-                that.val = d;
-                const msBefore = (d.getTime() - new Date().getTime());
-                var secBefore = msBefore / 1000;
-                beforeProp.set(util.toHourMinSec(secBefore));
-
-                hourProp.setInternal(that.val.getHours());
-                minProp.setInternal(that.val.getMinutes());
-                secProp.setInternal(that.val.getSeconds());
-
-                // Let's setup timer
+        const setNewValue = (d: Date|null) => {
+            if (d !== that.val) {
+                // that.val === undefined || that.val.getTime() != d.getTime())) {
                 if (!!timer) {
                     clearTimeout(timer);
                 }
-                timer = setTimeout(() => {
-                    onFired(d);
-                }, msBefore);
+
+                that.val = d;
+                if (that.val !== null) {
+                    const msBefore = (that.val.getTime() - new Date().getTime());
+                    var secBefore = msBefore / 1000;
+                    beforeProp.set(util.toHourMinSec(secBefore));
+    
+                    hourProp.setInternal(that.val.getHours());
+                    minProp.setInternal(that.val.getMinutes());
+                    secProp.setInternal(that.val.getSeconds());
+
+                    const tt = that.val;
+                    // Let's setup timer
+                    timer = setTimeout(() => {
+                        onFired(tt);
+                    }, msBefore);
+                } else {
+                    beforeProp.set("никогда");
+                    hourProp.set(null);
+                    minProp.set(null);
+                    secProp.set(null);
+                }
+
+                this.saveConf();
             }
         }
 
         const that = {
-            val: new Date(),
-            onDateChanged: () => {
-                const d = new Date();
-                d.setHours(+hourProp.get());
-                d.setMinutes(+minProp.get());
-                d.setSeconds(+secProp.get());
-                if (d.getTime() < new Date().getTime()) {
-                    // Add a day to point to tomorrow
-                    d.setDate(d.getDate() + 1);
-                }
-                setNewValue(d);
-            },
+            val: null as Date|null,
             controller: {
                 name: name,
                 online: true, // Always online
                 properties: [ 
                     hourProp, minProp, secProp, orBeforeProp, beforeProp
                 ]
+            },
+            toJsonType: () => {
+                return that.val !== null ? that.val.toJSON() : "null";
+            },
+            fromJsonType: (obj: string) => {
+                setNewValue(new Date(obj));
             }
          };
          return that;
     }
 
-    private sleepAt = this.createTimer("Выкл", d => { 
+    public sleepAt = this.createTimer("Выкл", d => { 
         // console.log("!!! SLEEEP !!!");
         // console.log(d); 
         //this.kindle.screenIsOn.set(false);
         this.nexus7.screenIsOn.set(false);
     });
-    private wakeAt = this.createTimer("Вкл", d => { 
+    public wakeAt = this.createTimer("Вкл", d => { 
         console.log(d); 
         this.nexus7.screenIsOn.set(true);
     });
@@ -785,8 +834,18 @@ class App implements ChildControllerHandle {
         this.nexus7 
     ];
 
+    public static confFileName() {
+        return os.homedir() + '/nodeserver.stored.conf.json';
+    }
     private saveConf() {
-        fs.writeFileSync('/root/storedConf.json', JSON.stringify(this.config));
+        const toSerialize = Object.keys(this)
+            .filter(prop => typeof((this as any)[prop]) == "object" && "toJsonType" in (this as any)[prop]);
+        
+        const resJson: any = {};
+        toSerialize.forEach(prop => {
+            resJson[prop] = (this as any)[prop].toJsonType();
+        });
+        fs.writeFileSync(App.confFileName(), JSON.stringify(resJson));
     }
 
     constructor() {
@@ -795,36 +854,62 @@ class App implements ChildControllerHandle {
         this.tablets.set(this.kindle.id, this.kindle);
         this.tablets.set(this.nexus7.id, this.nexus7);
 
-        if (fs.existsSync('/root/storedConf.json')) {
-            const data = fs.readFileSync('/root/storedConf.json');
-            this.config = JSON.parse(data.toString());
-        } else {
-            this.config = emptyConfig;
+        if (fs.existsSync(App.confFileName())) {
+            const data = fs.readFileSync(App.confFileName());
+            const parsed = JSON.parse(data.toString());
+
+            Object.getOwnPropertyNames(parsed).forEach(prop => {
+                (this as any)[prop].fromJsonType(parsed[prop]);
+            })
         }
 
         this.server = http.createServer(this.expressApi);
 
         this.wss = new WebSocket.Server({ server: this.server });
-        this.wss.on('connection', (ws: WebSocket) => {
+        this.wss.on('connection', (ws: WebSocket, request) => {
+            const esp: boolean = request.url === '/esp';
+            const ip = request.connection.remoteAddress;
+            console.log(request.url, request.url === '/esp', ip);
             //connection is up, let's add a simple simple event
-            ws.on('message', (message: string) => {
-                const msg = JSON.parse(message);
-                if (msg.type === "setProp") {
-                    const prop = props.PropertyImpl.byId(msg.id);
-                    if (prop) {
-                        if (props.isWriteableProperty(prop)) {
-                            prop.set(msg.val);
+            if (esp) {
+                // This is ESP controller!
+                ws.on('message', (data: string) => {
+                    const objData = JSON.parse(data);
+                    // console.log(ip, data);
+                    if ('result' in objData) {
+                        // console.log('Pong', objData.pingid);
+                    } else {
+                        this.processMsg({
+                            name: request.connection.remoteAddress,
+                            toString: function () { return this.name; }
+                        } as ClockController, objData);
+                    }
+                });
+            } else {
+                // This is web client. Let's report server revision
+                this.serverHashIdPromise.then((hashId) => {
+                    ws.send(JSON.stringify({type: 'serverVersion', val: hashId}));
+                });
+
+                ws.on('message', (message: string) => {
+                    const msg = JSON.parse(message);
+                    if (msg.type === "setProp") {
+                        const prop = props.PropertyImpl.byId(msg.id);
+                        if (prop) {
+                            if (props.isWriteableProperty(prop)) {
+                                prop.set(msg.val);
+                            } else {
+                                console.error(`Property ${prop.name} is not writable`);
+                            }
                         } else {
-                            console.error(`Property ${prop.name} is not writable`);
+                            console.error(`Property with id = ${msg.id} is not found`);
                         }
                     } else {
-                        console.error(`Property with id = ${msg.id} is not found`);
+                        //log the received message and send it back to the client
+                        console.log('received: %s', message);
                     }
-                } else {
-                    //log the received message and send it back to the client
-                    console.log('received: %s', message);
-                }
-            });
+                });
+            }
 
             //send immediatly a feedback to the incoming connection    
             // ws.send('Hi there, I am a WebSocket server');
@@ -858,20 +943,6 @@ class App implements ChildControllerHandle {
             res.contentType('html');
             res.send(this.renderToHTML());
         });
-
-        router.get('/tablet/wakeat/:h/:m', (req, res) => {
-            const hours = req.params['h'];
-            const mins = req.params['m'];
-
-            this.config.wakeAt = { hours: hours, minutes: mins };
-            this.saveConf();
-            console.log('Will wake up at ' + hours + ':' + mins);
-
-            res.json({
-                result: 0,
-                message: 'OK'
-            })
-        })
         this.expressApi.use('/', router);
 
         adbClient.trackDevices()
@@ -929,21 +1000,47 @@ class App implements ChildControllerHandle {
             util.wrapToHTML(["meta", { name: "viewport", content: "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" }], undefined),
             util.wrapToHTML(["script", {type: "text/javascript"}], 
             `
-            var sock = new WebSocket("ws:/" + location.host);
+            var reconnectInterval;
+            var sock;
+            var serverVersion;
+            function start() {
+                sock = new WebSocket("ws:/" + location.host);
+                sock.onopen = () => {
+                    console.log("Connected to websocket " + (new Date()));
+                    clearInterval(reconnectInterval);
+                    reconnectInterval = undefined;
+
+                    sock.onmessage = function(event) {
+                        // console.log(event.data);
+                        const d = JSON.parse(event.data);
+                        if (d.type === 'onPropChanged') {
+                            propChangeMap[d.id](d.val);
+                        } else if (d.type === 'serverVersion') {
+                            if (!!serverVersion && d.val !== serverVersion) {
+                                // Server was updated, go reload!
+                                location.reload();
+                            }
+                            serverVersion = d.val;
+                        }
+                    };
+                };
+
+                function reconnect() {
+                    if (!reconnectInterval) {
+                        reconnectInterval = setInterval(() => {
+                            start();
+                        }, 2000);
+                    }
+                }
+                sock.onerror = reconnect;
+                sock.onclose = reconnect;
+            }
+            start();
+
             const propChangeMap = {
                 ${propChangedMap}
             };
-            sock.onopen = () => {
-                console.log("socket.onopen");
-                sock.onmessage = function(event) {
-                    console.log(event.data);
-                    const d = JSON.parse(event.data);
-                    if (d.type === 'onPropChanged') {
-                        propChangeMap[d.id](d.val);
-                    }
-                };
-            };
-    
+
             function sendVal(id, name, val) {
                 sock.send(JSON.stringify({ 
                     type: 'setProp',
@@ -969,7 +1066,7 @@ class App implements ChildControllerHandle {
     
     private processDevice(device: adbkit.Device): void {
         // Wait some time for device to auth...
-        delay(1000).then(() => {
+        util.delay(1000).then(() => {
             const found = this.tablets.get(device.id);
             if (found) {
                 found.init();
@@ -990,7 +1087,7 @@ class App implements ChildControllerHandle {
     }
 
     public processMsg(controller: ClockController, data: Msg) {
-        const objData = <Log | Temp | Hello | IRKey> data;
+        const objData = <Log | Temp | Hello | IRKey | Weight | Button> data;
         switch (objData.type) {
             case 'temp':
                 if (this.currentTemp != objData.value) {
@@ -1004,13 +1101,27 @@ class App implements ChildControllerHandle {
                 console.log(controller + " " + "log: ", objData.val);
                 break;
             case 'hello':
-                console.log(controller + " " + "hello: ", objData.firmware, (objData.afterRestart / 1000) + " sec");
+                console.log(controller + " " + "hello: ", 
+                    objData.firmware, 
+                    (objData.afterRestart / 1000) + " sec");
+                if (objData.devParams) {
+                    const name = objData.devParams['device.name'];
+                    if (objData.devParams['hasHX711']){
+                        console.log("Scales was found: " + name);
+                    }
+                }
+                break;
+            case 'button':
+                console.log(controller + " " + "button: ", objData.value);
+                break;
+            case 'weight':
+                console.log(controller + " " + "weight: ", objData.value);
                 break;
             case 'ir_key':
                 console.log(controller + " " + "ir_key: ", objData.remote, objData.key);
                 break;
             default:
-                console.log(controller + " UNKNOWN CMD: " + objData);
+                console.log(controller + " UNKNOWN CMD: ", objData);
         }
     }
 }
