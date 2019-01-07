@@ -85,7 +85,7 @@ interface IRKey extends Msg {
 
 type AnyMessage = Log | Temp | Hello | IRKey | Weight | Button | PingResult | RelayState;
 
-interface JSONAble<T> {
+interface JSONAble<T extends string|number|boolean> {
     toJsonType(): T;
     fromJsonType(val: T): void;
 }
@@ -134,7 +134,7 @@ class Button extends props.WritablePropertyImpl<void> {
     }
 }
 
-class GPIORelay extends Relay {
+class GPIORelay extends Relay implements JSONAble<boolean> {
     private _init: Promise<void>;
     private _modeWasSet: boolean = false;
     static readonly gpioCmd = "/root/WiringOP/gpio/gpio";
@@ -142,12 +142,20 @@ class GPIORelay extends Relay {
     constructor(readonly name: string, public readonly pin: number) { 
         super(name); 
 
-        this._init = util.runShell(GPIORelay.gpioCmd, ["-1", "read", "" + this.pin])
-            .then((str) => {
-                this.setInternal(str.startsWith("0"));
-                return void 0;
-            })
-            .catch(err => console.log(err.errno))
+        if (GPIORelay.gpioInstalled()) {
+            this._init = util.runShell(GPIORelay.gpioCmd, ["-1", "read", "" + this.pin])
+                .then((str) => {
+                    this.setInternal(str.startsWith("0"));
+                    return void 0;
+                })
+                .catch(err => console.log(err.errno))
+        } else {
+            this._init = Promise.resolve(void 0);
+        }
+    }
+
+    static gpioInstalled(): boolean {
+        return fs.existsSync(GPIORelay.gpioCmd);
     }
 
     switch(on: boolean): Promise<void> {
@@ -164,6 +172,13 @@ class GPIORelay extends Relay {
                 .then(() => this.setInternal(on))
                 .catch(err => console.log(err.errno));
         });
+    }
+
+    public toJsonType() { 
+        return this.get(); 
+    }
+    public fromJsonType(val: boolean): void {
+        this.set(val);
     }
 }
 
@@ -729,7 +744,7 @@ class App {
 
     private ctrlGPIO = {
         name: "Комната",
-        online: true, // Always online
+        online: GPIORelay.gpioInstalled(), // 
         properties: [this.r1, this.r2, this.r3, this.r4]
     }
 
@@ -799,13 +814,11 @@ class App {
         const onDateChanged = () => {
             const hh = hourProp.get();
             const mm = minProp.get();
+            const ss = secProp.get();
 
             if (hh !== null && mm !== null) { 
-                const d = new Date();
-                d.setHours(hh);
-                d.setMinutes(mm);
-                const ss = secProp.get();
-                d.setSeconds(ss !== null ? ss : 0);    
+                const now = new Date();
+                const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm, ss !== null ? ss : 0);
                 if (d.getTime() < new Date().getTime()) {
                     // Add a day to point to tomorrow
                     d.setDate(d.getDate() + 1);
@@ -834,7 +847,6 @@ class App {
                     setNewValue(null);
                 }
             });
-        const beforeProp = props.newWritableProperty("через", "", new props.SpanHTMLRenderer(), () => {})
         var timer: NodeJS.Timer;
 
         const setNewValue = (d: Date|null) => {
@@ -845,11 +857,11 @@ class App {
                 }
 
                 that.val = d;
+                console.trace(name, d);
                 if (that.val !== null) {
                     const msBefore = (that.val.getTime() - new Date().getTime());
                     var secBefore = msBefore / 1000;
-                    beforeProp.set(util.toHourMinSec(secBefore));
-    
+
                     hourProp.setInternal(that.val.getHours());
                     minProp.setInternal(that.val.getMinutes());
                     secProp.setInternal(that.val.getSeconds());
@@ -860,10 +872,12 @@ class App {
                         onFired(tt);
                     }, msBefore);
                 } else {
-                    beforeProp.set("никогда");
-                    hourProp.set(null);
-                    minProp.set(null);
-                    secProp.set(null);
+                    console.log("!!!!");
+                    // Dropped timer
+                    beforeProp.setInternal("никогда");
+                    hourProp.setInternal(null);
+                    minProp.setInternal(null);
+                    secProp.setInternal(null);
                 }
 
                 this.saveConf();
@@ -876,14 +890,18 @@ class App {
                 name: name,
                 online: true, // Always online
                 properties: [ 
-                    hourProp, minProp, secProp, orBeforeProp, beforeProp
+                    hourProp, minProp, secProp, orBeforeProp
                 ]
             },
             toJsonType: () => {
                 return that.val !== null ? that.val.toJSON() : "null";
             },
             fromJsonType: (obj: string) => {
-                setNewValue(new Date(obj));
+                if (obj == "null") {
+                    setNewValue(null);
+                } else {
+                    setNewValue(new Date(obj));
+                }
             },
             sleepInSec: (sec: number) => {
                 const d = new Date();
@@ -938,12 +956,16 @@ class App {
             props.newWritableProperty("Switch devices to server", "192.168.121.38", new props.StringAndGoRendrer("Go"), (val: string) => {
                 for (const ctrl of this.dynamicControllers.values()) {
                     ctrl.send({ type: 'setProp', prop: 'websocket.server', value: val });
-                    ctrl.send({ type: 'setProp', prop: 'websocket.port', value: '3000' });
+                    ctrl.send({ type: 'setProp', prop: 'websocket.port', value: '8080' });
                     util.delay(1000).then(() => ctrl.reboot());
                 }
                 console.log('Switch all devices to other server');    
             })
         ]
+    }
+
+    private get onlineControllers(): props.Controller[] {
+        return this.controllers.filter(c => c.online);
     }
 
     private get controllers(): props.Controller[] {
@@ -1042,15 +1064,27 @@ class App {
     public static confFileName() {
         return os.homedir() + '/nodeserver.stored.conf.json';
     }
+
+    private _lastSavedConfHash = "";
     private saveConf() {
-        const toSerialize = Object.keys(this)
-            .filter(prop => typeof((this as any)[prop]) == "object" && "toJsonType" in (this as any)[prop]);
-        
-        const resJson: any = {};
-        toSerialize.forEach(prop => {
-            resJson[prop] = (this as any)[prop].toJsonType();
+        util.delay(1).then(() => {
+            const hasho = crypto.createHash('md5');
+
+            const toSerialize = Object.keys(this)
+                .filter(prop => typeof((this as any)[prop]) == "object" && "toJsonType" in (this as any)[prop]);
+            
+            const resJson: any = {};
+            toSerialize.forEach(prop => {
+                resJson[prop] = (this as any)[prop].toJsonType();
+                hasho.update(resJson[prop].toString());
+            });
+
+            const thisSavedHash = hasho.digest("hex");
+            if (thisSavedHash != this._lastSavedConfHash) {
+                fs.writeFileSync(App.confFileName(), JSON.stringify(resJson));
+                this._lastSavedConfHash = thisSavedHash;
+            }
         });
-        fs.writeFileSync(App.confFileName(), JSON.stringify(resJson));
     }
 
     constructor() {
@@ -1284,7 +1318,7 @@ class App {
     }
     
     private renderToHTML(): string {
-        const propChangedMap = this.controllers.map((ctrl, ctrlIndex) => {
+        const propChangedMap = this.onlineControllers.map((ctrl, ctrlIndex) => {
             return ctrl.properties.map((prop: props.Property<any>, prIndex: number): string => {
                 return `'${prop.id}' : (val) => { ${prop.htmlRenderer.updateCode(prop)} }`
             }).join(',\n');
@@ -1349,14 +1383,14 @@ class App {
         ];
         return util.wrapToHTML(["html", { lang: "en"}], 
             util.wrapToHTML("head", hdr.join("\n")) + "\n" +
-            util.wrapToHTML("body", this.controllers.map((ctrl) => {
+            util.wrapToHTML("body", this.onlineControllers.map((ctrl) => {
                 return ctrl.name + "<br/>" + ctrl.properties.map((prop: props.Property<any>): string => {
-                    let res = "";
+                        let res = "";
 
-                    res = prop.htmlRenderer.body(prop);
+                        res = prop.htmlRenderer.body(prop);
 
-                    return res;
-                }).join("&nbsp;\n")
+                        return res;
+                    }).join("&nbsp;\n");
             }).join("<hr/>\n"))
         );
     }
