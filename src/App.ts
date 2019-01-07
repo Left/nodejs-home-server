@@ -634,7 +634,7 @@ class ClockController extends props.ClassWithId implements props.Controller {
         return Promise.resolve(void 0);
     }
 
-    public toString() : string { return this.name + "(" + this.ip + ")"; }
+    public toString() : string { return this.name; }
 
     protected wasRecentlyContacted() {
         return Date.now() - this.lastResponse < 4000;
@@ -661,15 +661,14 @@ class ClockController extends props.ClassWithId implements props.Controller {
             case 'pingresult':
                 break;
             case 'temp':
-                // this.wss.clients.forEach(cl => cl.send(objData.value));
                 this.tempProperty.setInternal(objData.value + "&#8451;");
+                this.handler.onTemperatureChanged(objData.value);
                 break;
             case 'log':
                 console.log(this + " " + "log: ", objData.val);
                 break;
             case 'button':
                 this.tare();
-                // console.log(this + " " + "button: ", objData.value);
                 break;
             case 'weight':
                 if (!this.baseWeight) {
@@ -888,7 +887,15 @@ class App {
         name: "Другое",
         online: true, // Always online
         properties: [
-            Button.create("Reboot server", () => util.runShell("reboot", []))
+            Button.create("Reboot server", () => util.runShell("reboot", [])),
+            props.newWritableProperty("Switch devices to server", "192.168.121.38", new props.StringAndGoRendrer("Go"), (val: string) => {
+                for (const ctrl of this.dynamicControllers.values()) {
+                    ctrl.send({ type: 'setProp', prop: 'websocket.server', value: val });
+                    ctrl.send({ type: 'setProp', prop: 'websocket.port', value: '3000' });
+                    util.delay(1000).then(() => ctrl.reboot());
+                }
+                console.log('Switch all devices to other server');    
+            })
         ]
     }
 
@@ -901,8 +908,6 @@ class App {
             this.wakeAt.controller,
             this.ctrlControlOther,
             this.ctrlGPIO, 
-            // this.ctrlRoomClock,
-            // this.ctrlKitchen, 
             this.ctrlLamp, 
             this.kindle, 
             this.nexus7 
@@ -968,7 +973,7 @@ class App {
                                 this.allInformers.runningLine('Отключено ' + clockController.name);
                             },
                             onTemperatureChanged: (temp: number) => {
-
+                                this.allInformers.additionalInfo((temp == 0 ? "" : (temp > 0 ? "+" : "-")) + temp + "\xB0");
                             },
                             onWeightChanged: (weight: number) => {
                                 this.allInformers.staticLine(weight + "г");
@@ -1095,9 +1100,6 @@ class App {
             .catch((err: Error) => {
                 console.error('Something went wrong:', err.stack)
             })
-
-        // this.ctrlKitchen.init();
-        // this.ctrlRoomClock.init();
 
         // Subscribe to all the props changes
         this.controllers.forEach(ct => {
