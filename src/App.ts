@@ -170,33 +170,38 @@ class GPIORelay extends Relay {
 class MiLightBulb implements props.Controller {
     readonly name = "MiLight";
     readonly online = true;
-    readonly properties: props.Property<any>[] = [
-        new (class MiLightBulbRelay extends props.WritablePropertyImpl<boolean> {
-            constructor(
-                readonly pThis: MiLightBulb) {
-                super("On/off", new props.CheckboxHTMLRenderer(), false);
-            }
 
-            set(on: boolean): Promise<void> {
-                if (on) {
-                    return this.pThis.send([0x42, 0x00, 0x55])
-                        .then(() => util.delay(100).then(
-                            () => this.pThis.send([0xC2, 0x00, 0x55])
-                        ));
-                } else {
-                    return this.pThis.send([0x46, 0x00, 0x55]);
-                }
+    public readonly switchOn = new (class MiLightBulbRelay extends props.WritablePropertyImpl<boolean> {
+        constructor(
+            readonly pThis: MiLightBulb) {
+            super("On/off", new props.CheckboxHTMLRenderer(), false);
+        }
+
+        set(on: boolean): Promise<void> {
+            if (on) {
+                return this.pThis.send([0x42, 0x00, 0x55])
+                    .then(() => util.delay(100).then(
+                        () => this.pThis.send([0xC2, 0x00, 0x55])
+                    ));
+            } else {
+                return this.pThis.send([0x46, 0x00, 0x55]);
             }
-        })(this),
-        new (class BrightnessProperty extends props.WritablePropertyImpl<number> {
-            constructor(public readonly pThis: MiLightBulb) {
-                super("Brightness", new props.SliderHTMLRenderer(), 50);
-            }
-            public set(val: number): void {
-                this.pThis.send([0x4E, 0x2 + (0x15 * val / 100), 0x55])
-                    .then(() => this.setInternal(val));
-            }
-        })(this),
+        }
+    })(this);
+    
+    public readonly brightness = new (class BrightnessProperty extends props.WritablePropertyImpl<number> {
+        constructor(public readonly pThis: MiLightBulb) {
+            super("Brightness", new props.SliderHTMLRenderer(), 50);
+        }
+        public set(val: number): void {
+            this.pThis.send([0x4E, 0x2 + (0x15 * val / 100), 0x55])
+                .then(() => this.setInternal(val));
+        }
+    })(this);
+
+    readonly properties: props.Property<any>[] = [
+        this.switchOn,
+        this.brightness,
         new (class BrightnessProperty extends props.WritablePropertyImpl<number> {
             constructor(public readonly pThis: MiLightBulb) {
                 super("Hue", new props.SliderHTMLRenderer(), 50);
@@ -461,15 +466,21 @@ class Tablet implements props.Controller {
         this.screenIsSwitchedOn().then(on => {
             this.screenIsOn.setInternal(on);
         });
-        this.getVolume().then(vol => {
-            this.volume.setInternal(vol);
-        });
-        this.getBatteryLevel().then(vol => {
-            this.battery.setInternal(vol + "%");
-        });
-        this.playingUrlNow().then(url => {
-            this.playingUrl.setInternal(url || "<nothing>");
-        });
+        this.getVolume()
+            .then(vol => {
+                this.volume.setInternal(vol);
+            })
+            .catch(e => console.log(e));
+        this.getBatteryLevel()
+            .then(vol => {
+                this.battery.setInternal(vol + "%");
+            })
+            .catch(e => console.log(e));
+        this.playingUrlNow()
+            .then(url => {
+                this.playingUrl.setInternal(url || "<nothing>");
+            })
+            .catch(e => console.log(e));
     }
 
     public playingUrlNow(): Promise<string|undefined> {
@@ -529,7 +540,10 @@ interface ClockControllerEvents {
     onTemperatureChanged: (temp: number) => void;
     onWeightReset: () => void;
     onWeightChanged: (weight: number) => void;
+    onIRKey: (remoteId: string, keyId: string) => void;
 }
+
+type TimerProp = { val: Date|null, controller: props.Controller, sleepInSec: (sec: number) => void } & JSONAble<string>;
 
 class ClockController extends props.ClassWithId implements props.Controller {
     protected pingId = 0;
@@ -539,12 +553,13 @@ class ClockController extends props.ClassWithId implements props.Controller {
     public readonly properties: props.Property<any>[];
     public get name() { return this._name + " (" + this.ip + ")"; }
     public readonly lcdInformer?: LcdInformer;
+    public readonly internalName: string;
 
     private tempProperty = new props.PropertyImpl<string>("Температура", new props.SpanHTMLRenderer(), "Нет данных");
     private weightProperty = new props.PropertyImpl<string>("Вес", new props.SpanHTMLRenderer(), "Нет данных");
     private baseWeight?: number;
     private lastWeight?: number;
-    private relays: ControllerRelay[] = [];
+    public readonly relays: ControllerRelay[] = [];
 
     constructor(private readonly ws: WebSocket, 
         public readonly ip: string, 
@@ -552,7 +567,9 @@ class ClockController extends props.ClassWithId implements props.Controller {
         private readonly handler: ClockControllerEvents) {
         super();
 
-        this._name = hello.devParams['device.name.russian'] || hello.devParams['device.name'];
+        this.internalName = hello.devParams['device.name'];
+
+        this._name = hello.devParams['device.name.russian'] || this.internalName;
         this.lastResponse = Date.now();
 
         this.properties = [];
@@ -680,7 +697,8 @@ class ClockController extends props.ClassWithId implements props.Controller {
                 // console.log(this + " " + "weight: ", objData.value);
                 break;
             case 'ir_key':
-                console.log(this + " " + "irKey: ", objData.remote, objData.key);
+                this.handler.onIRKey(objData.remote, objData.key);
+                // console.log(this + " " + "irKey: ", );
                 break;
             case 'relayState':
                 // console.log(this + " " + "relayState: ", objData.id, objData.value);
@@ -692,6 +710,11 @@ class ClockController extends props.ClassWithId implements props.Controller {
     }
 } 
 
+interface IRKeysHandler {
+    remote?: string;
+    partial(arr: string[]): boolean;
+    complete(arr: string[]): void;
+}
 
 class App {
     public expressApi: express.Express;
@@ -711,6 +734,17 @@ class App {
     }
 
     private dynamicControllers: Map<string, ClockController> = new Map();
+
+    findDynController(internalName: string): ClockController|undefined {
+        for (const ctrl of this.dynamicControllers.values()) {
+            if (ctrl.internalName == internalName) {
+                return ctrl;
+            }
+        }
+        return undefined;
+    }
+
+
     private dynamicInformers: Map<string, LcdInformer> = new Map();
     // Show the message on all informers
     private allInformers: LcdInformer = {
@@ -746,7 +780,7 @@ class App {
           })
     });
 
-    private ctrlLamp = new MiLightBulb();
+    private readonly miLight = new MiLightBulb();
 
     private readonly kindle: Tablet = new Tablet('192.168.121.166:5556', true);
     private readonly nexus7: Tablet = new Tablet('00eaadb6', false);
@@ -761,9 +795,7 @@ class App {
             (v:number|null) => { onChange(v); });
     }
 
-
-    private createTimer(name: string, onFired: ((d: Date) => void)) : 
-        { val: Date|null, controller: props.Controller } & JSONAble<string> {
+    private createTimer(name: string, onFired: ((d: Date) => void)) : TimerProp {
         const onDateChanged = () => {
             const hh = hourProp.get();
             const mm = minProp.get();
@@ -797,9 +829,7 @@ class App {
             new props.SelectHTMLRenderer(timerIn, n => n ? util.toHourMinSec(n) : "никогда"), 
             (v:number) => {
                 if (v != 0) {
-                    const d = new Date();
-                    d.setTime(d.getTime() + v*1000);
-                    setNewValue(d);
+                    that.sleepInSec(v);
                 } else {
                     setNewValue(null);
                 }
@@ -854,6 +884,11 @@ class App {
             },
             fromJsonType: (obj: string) => {
                 setNewValue(new Date(obj));
+            },
+            sleepInSec: (sec: number) => {
+                const d = new Date();
+                d.setTime(d.getTime() + sec * 1000);
+                setNewValue(d);
             }
          };
          return that;
@@ -873,14 +908,26 @@ class App {
     }
 
     public sleepAt = this.createTimer("Выкл", d => { 
+        console.log("SLEEP", d); 
         // console.log("!!! SLEEEP !!!");
         // console.log(d); 
         //this.kindle.screenIsOn.set(false);
-        this.nexus7.screenIsOn.set(false);
+        for (const ctrl of this.controllers) {
+            if (ctrl.online) {
+                for (const prop of ctrl.properties) {
+                    if (prop instanceof Relay) {
+                        prop.set(false);
+                    }
+                }
+            }
+        }
     });
     public wakeAt = this.createTimer("Вкл", d => { 
-        console.log(d); 
-        this.nexus7.screenIsOn.set(true);
+        console.log("WAKE", d); 
+        //this.nexus7.screenIsOn.set(true);
+        this.kindle.screenIsOn.set(true);
+        this.miLight.switchOn.set(true);
+        this.miLight.brightness.set(50);
     });
 
     private ctrlControlOther = {
@@ -908,10 +955,88 @@ class App {
             this.wakeAt.controller,
             this.ctrlControlOther,
             this.ctrlGPIO, 
-            this.ctrlLamp, 
+            this.miLight, 
             this.kindle, 
             this.nexus7 
         ], dynPropsArray);
+    }
+
+    private simpleCmd(prefix: string[], showName: string, action: () => void): IRKeysHandler {
+        return {
+            partial: arr => {
+                return util.arraysAreEqual(prefix.slice(0, arr.length), arr);
+            },
+            complete: arr => {
+                this.allInformers.runningLine(showName);
+                action();
+            } 
+        };
+    }
+
+    private createPowerOnOffTimerKeys(prefix: string[], showName: string, valueName: string, action: (dd: number) => void): IRKeysHandler {
+        return {
+            partial: arr => {
+                const ret = util.isKeyAndNum(prefix, arr);
+                if (ret) {
+                    if (arr.length == prefix.length) {
+                        this.allInformers.staticLine(showName);
+                    } else {
+                        this.allInformers.staticLine(util.numArrToVal(arr.slice(prefix.length)) + valueName);
+                    }
+                }
+                return ret;
+            },
+            complete: arr => {
+                const dd = util.numArrToVal(arr.slice(prefix.length));
+                action(dd);
+            } 
+        };
+    }
+
+    private irKeyHandlers: IRKeysHandler[] = [
+        this.createPowerOnOffTimerKeys(['power'], "Выкл", "мин", (dd) => {
+            this.sleepAt.sleepInSec(dd * 60);
+        }),
+        this.createPowerOnOffTimerKeys(['power', 'power'], "Вкл", "мин", (dd) => {
+            this.wakeAt.sleepInSec(dd * 60);
+        }),
+        this.createPowerOnOffTimerKeys(['ent'], "Канал", "", (dd) => {
+            this.allInformers.runningLine("Включаем " + dd);
+        }),
+        this.simpleCmd(['n0', 'n1'], "Комната 1", () => {
+            this.r1.switch(!this.r1.get());
+        }),
+        this.simpleCmd(["record"], "Комната 1", () => {
+            this.r1.switch(!this.r1.get());
+        }),
+        this.simpleCmd(['n0', 'n2'], "Комната 2", () => {
+            this.r1.switch(!this.r2.get());
+        }),
+        this.simpleCmd(['n0', 'n3'], "Комната 3", () => {
+            this.r1.switch(!this.r3.get());
+        }),
+        this.simpleCmd(['stop'], "Комната 3", () => {
+            this.r1.switch(!this.r3.get());
+        }),
+        this.simpleCmd(['n0', 'n4'], "Комната 4", () => {
+            this.r1.switch(!this.r3.get());
+        }),
+        this.simpleCmd(['time_shift'], "Комната 4", () => {
+            this.r1.switch(!this.r3.get());
+        }),
+        this.simpleCmd(['n0', 'n5'], "Потолок на кухне", () => {
+            this.toggleRelay('KitchenRelay', 0);
+        }),
+        this.simpleCmd(['n0', 'n6'], "Лента на кухне", () => {
+            this.toggleRelay('KitchenRelay', 1);
+        }),
+    ];
+
+    public toggleRelay(internalName: string, index: number): void {
+        const kitchenRelay = this.findDynController(internalName);
+        if (kitchenRelay) {
+            kitchenRelay.relays[index].switch(!kitchenRelay.relays[index].get());
+        }       
     }
 
     public static confFileName() {
@@ -956,55 +1081,106 @@ class App {
             if (esp) {
                 // This is ESP controller!
                 ws.on('message', (data: string) => {
-                    const objData = JSON.parse(data);
-                    const controller = this.dynamicControllers.get(ip);
+                    try {
+                        const objData = JSON.parse(data);
+                        const controller = this.dynamicControllers.get(ip);
 
-                    // It might be hello message
-                    if ('type' in objData && objData.type == 'hello') {
-                        const hello = objData as Hello;
+                        // It might be hello message
+                        if ('type' in objData && objData.type == 'hello') {
+                            const hello = objData as Hello;
+                            const mapIRs = new Map<string, { 
+                                lastRemote: number,
+                                seq: string[],
+                                handler?: IRKeysHandler
+                            }>();
 
-                        const clockController = new ClockController(ws, ip, hello, {
-                            onDisconnect: () => {
-                                this.dynamicControllers.delete(ip);
-                                if (clockController.lcdInformer) {
-                                    this.dynamicInformers.delete(ip);
+                            const clockController = new ClockController(ws, ip, hello, {
+                                onDisconnect: () => {
+                                    this.dynamicControllers.delete(ip);
+                                    if (clockController.lcdInformer) {
+                                        this.dynamicInformers.delete(ip);
+                                    }
+                                    this.broadcastToWebClients({ type: "reloadProps" });
+                                    this.allInformers.runningLine('Отключено ' + clockController.name);
+                                },
+                                onTemperatureChanged: (temp: number) => {
+                                    this.allInformers.additionalInfo((temp == 0 ? "" : (temp > 0 ? "+" : "-")) + temp + "\xB0");
+                                },
+                                onWeightChanged: (weight: number) => {
+                                    this.allInformers.staticLine(weight + "г");
+                                },
+                                onWeightReset: () => {
+                                    this.allInformers.staticLine("Сброс");
+                                },
+                                onIRKey: (remoteId: string, keyId: string) => {
+                                    var _irState;
+                                    if (!mapIRs.has(remoteId)) {
+                                        _irState = { lastRemote: 0, seq: [] };
+                                        mapIRs.set(remoteId, _irState);
+                                    } else {
+                                        _irState = mapIRs.get(remoteId);
+                                    }
+
+                                    const irState = _irState!;
+                                    const now = new Date().getTime();
+                                    if (now - irState.lastRemote > 200) {
+                                        // console.log(remoteId, keyId, (now - irState.lastRemote) );
+                                        irState.seq.push(keyId);
+                                        var toHandle;
+                                        for (const handler of this.irKeyHandlers) {
+                                            if (handler.partial(irState.seq)) {
+                                                toHandle = handler;
+                                            }
+                                        }
+                                        if (toHandle) {
+                                            irState.handler = toHandle;
+                                        } else {
+                                            console.log('Ignored ' + irState.seq.join(","));
+                                            irState.seq = [];
+                                        }
+
+                                        util.delay(1500).then(() => {
+                                            const now = new Date().getTime();
+                                            if (now - irState.lastRemote >= 1500) {
+                                                // Go!
+                                                if (irState.handler && irState.handler.partial(irState.seq)) {
+                                                    irState.handler.complete(irState.seq);
+                                                }
+
+                                                irState.seq = [];
+                                                irState.lastRemote = now;
+                                            }
+                                        });
+                                    }
+                                    irState.lastRemote = now;
                                 }
-                                this.broadcastToWebClients({ type: "reloadProps" });
-                                this.allInformers.runningLine('Отключено ' + clockController.name);
-                            },
-                            onTemperatureChanged: (temp: number) => {
-                                this.allInformers.additionalInfo((temp == 0 ? "" : (temp > 0 ? "+" : "-")) + temp + "\xB0");
-                            },
-                            onWeightChanged: (weight: number) => {
-                                this.allInformers.staticLine(weight + "г");
-                            },
-                            onWeightReset: () => {
-                                this.allInformers.staticLine("Сброс");
+                            } as ClockControllerEvents);
+                            if (!!controller) {
+                                // What is happening here:
+                                // hello comes again from the same controller
+                                // it means it was reset - let's re-init it
+                                controller.dropConnection();
                             }
-                        } as ClockControllerEvents);
-                        if (!!controller) {
-                            // What is happening here:
-                            // hello comes again from the same controller
-                            // it means it was reset - let's re-init it
-                            controller.dropConnection();
+                            this.dynamicControllers.set(ip, clockController);
+                            if (clockController.lcdInformer) {
+                                this.dynamicInformers.set(ip, clockController.lcdInformer);
+                            }
+                            this.initController(clockController);
+
+                            this.allInformers.runningLine('Подключено ' + clockController.name);
+
+                            // Reload
+                            this.broadcastToWebClients({ type: "reloadProps" });
+
+                            ws.on('error', () => { clockController.dropConnection(); });
+                            ws.on('close', () => { clockController.dropConnection(); });                        
+                        } else if (controller) {
+                            controller.processMsg(objData);
+                        } else {
+                            console.error('Shall never be here', data);
                         }
-                        this.dynamicControllers.set(ip, clockController);
-                        if (clockController.lcdInformer) {
-                            this.dynamicInformers.set(ip, clockController.lcdInformer);
-                        }
-                        this.initController(clockController);
-
-                        this.allInformers.runningLine('Подключено ' + clockController.name);
-
-                        // Reload
-                        this.broadcastToWebClients({ type: "reloadProps" });
-
-                        ws.on('error', () => { clockController.dropConnection(); });
-                        ws.on('close', () => { clockController.dropConnection(); });                        
-                    } else if (controller) {
-                        controller.processMsg(objData);
-                    } else {
-                        console.error('Shall never be here', data);
+                    } catch (e) {
+                        console.error('Can not process message:', data);
                     }
                 });
             } else if (url === '/web') {

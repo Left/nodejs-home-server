@@ -65,3 +65,18 @@ export function parseOr(str: string, regex:RegExp, fallback: string): string {
     }
     return fallback;
 }
+
+export function numArrToVal(arr: string[], limitSize: number = 3): number {
+    return arr.slice(Math.max(arr.length - limitSize, 0)).reduce((x: number, curr: string) => {
+        return x * 10 + +(curr.substr(1));
+    }, 0)
+}
+
+export function arraysAreEqual(a1: string[], a2: string[]) {
+    return a1.length == a2.length && a1.every((el, ind) => el === a2[ind]);
+}
+
+export function isKeyAndNum(prefix: string[], arr: string[]): boolean {
+    return arraysAreEqual(arr.slice(0, prefix.length), prefix) && 
+        arr.slice(prefix.length).every(n => n.length == 2 && n[0] === 'n');
+}
