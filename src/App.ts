@@ -139,7 +139,7 @@ class GPIORelay extends Relay implements JSONAble<boolean> {
     private _modeWasSet: boolean = false;
     static readonly gpioCmd = "/root/WiringOP/gpio/gpio";
 
-    constructor(readonly name: string, public readonly pin: number) { 
+    constructor(readonly name: string, public readonly pin: number, public readonly onChanged: () => void) { 
         super(name); 
 
         if (GPIORelay.gpioInstalled()) {
@@ -159,7 +159,7 @@ class GPIORelay extends Relay implements JSONAble<boolean> {
     }
 
     switch(on: boolean): Promise<void> {
-        // console.log("Here ", on);
+        // console.trace("GPIO switch ", on);
         if (!this._modeWasSet) {
             this._init = this._init.then(() =>
                 util.runShell(GPIORelay.gpioCmd, ["-1", "mode", "" + this.pin, "out"])
@@ -169,7 +169,7 @@ class GPIORelay extends Relay implements JSONAble<boolean> {
         
         return this._init.then(() => {
             return util.runShell(GPIORelay.gpioCmd, ["-1", "write", "" + this.pin, on ? "0" : "1"])
-                .then(() => this.setInternal(on))
+                .then(() => { this.setInternal(on); this.onChanged(); })
                 .catch(err => console.log(err.errno));
         });
     }
@@ -737,10 +737,10 @@ class App {
     public readonly wss: WebSocket.Server;
     public currentTemp?: number;
 
-    private r1 = new GPIORelay("Лампа на шкафу", 38);
-    private r2 = new GPIORelay("Колонки", 40);
-    private r3 = new GPIORelay("Коридор", 36);
-    private r4 = new GPIORelay("Потолок", 32);
+    private r1 = new GPIORelay("Лампа на шкафу", 38, () => this.saveConf());
+    private r2 = new GPIORelay("Колонки", 40, () => this.saveConf());
+    private r3 = new GPIORelay("Коридор", 36, () => this.saveConf()); 
+    private r4 = new GPIORelay("Потолок", 32, () => this.saveConf());
 
     private ctrlGPIO = {
         name: "Комната",
@@ -802,12 +802,12 @@ class App {
 
     private readonly tablets: Map<string, Tablet> = new Map();
 
-    private timeProp(name: string, upto: number, onChange: (v:number|null)=>void) : props.WritablePropertyImpl<number|null> {
+    private timeProp(name: string, upto: number, onChange: (v:number)=>void) : props.WritablePropertyImpl<number> {
         return props.newWritableProperty<number>(
             name, 
             0, 
-            new props.SelectHTMLRenderer<number|null>(Array.from({length: upto + 1}, ((v, k) => k == 0 ? null : k-1)), i => i === null ? " - " : "" + i), 
-            (v:number|null) => { onChange(v); });
+            new props.SelectHTMLRenderer<number>(Array.from({length: upto}, ((v, k) => k)), i => "" + i), 
+            (v:number) => { onChange(v); });
     }
 
     private createTimer(name: string, onFired: ((d: Date) => void)) : TimerProp {
@@ -815,15 +815,11 @@ class App {
             const hh = hourProp.get();
             const mm = minProp.get();
             const ss = secProp.get();
+            console.log('onDateChanged ', hh, mm, ss);
 
             if (hh !== null && mm !== null) { 
-                const now = new Date();
-                const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm, ss !== null ? ss : 0);
-                if (d.getTime() < new Date().getTime()) {
-                    // Add a day to point to tomorrow
-                    d.setDate(d.getDate() + 1);
-                }    
-                setNewValue(d);
+                setNewValue(util.thisOrNextDayFromHMS(hh, mm, ss || 0));
+                orBeforeProp.setInternal(1);
             } else {
                 setNewValue(null);
             }
@@ -834,22 +830,40 @@ class App {
 
         const min = 60;
         const hour = 60*min;
-        const timerIn = [0, 10, 30, min, 2*min, 3*min, 5*min, 10*min, 15*min, 20*min, 30*min, 45*min, hour, 2*hour, 3*hour, 4*hour, 5*hour, 8*hour, 12*hour, 23*hour];
+        const timerIn: string[] = 
+            ["never", "atdate"].concat(
+                [10, 15, 20, 30, 45, min, 2*min, 3*min, 5*min, 10*min, 15*min, 20*min, 30*min, 45*min, 
+                    hour, 2*hour, 3*hour, 4*hour, 5*hour, 8*hour, 12*hour, 23*hour].map(n => "val" + n));
 
-        const orBeforeProp = props.newWritableProperty<number>(
-            "или через", 
-            timerIn[0], 
-            new props.SelectHTMLRenderer(timerIn, n => n ? util.toHourMinSec(n) : "никогда"), 
-            (v:number) => {
-                if (v != 0) {
-                    that.sleepInSec(v);
-                } else {
+        const orBeforeProp: props.WritablePropertyImpl<number> = props.newWritableProperty<number>(
+            "через", 
+            0, 
+            new props.SelectHTMLRenderer<number>(Array.from({length: timerIn.length}, (e, i) => i), _n => {
+                // console.log(_n);
+                const n = timerIn[_n];
+                if (n.startsWith("val")) {
+                    return util.toHourMinSec(+n.slice(3));
+                } else if (n === "never") {
+                    return "никогда"; 
+                } else if (n === "atdate") {
+                    return "в момент";
+                }
+                return "";
+            }),
+            (_n:number) => {
+                const n = timerIn[_n];
+                if (n.startsWith("val")) {
+                    that.sleepInSec(+n.slice(3));
+                } else if (n === "never") {
                     setNewValue(null);
+                } else if (n === "atdate") {
+                    onDateChanged();
                 }
             });
         var timer: NodeJS.Timer;
 
         const setNewValue = (d: Date|null) => {
+            console.log(name + " --> " + d);
             if (d !== that.val) {
                 // that.val === undefined || that.val.getTime() != d.getTime())) {
                 if (!!timer) {
@@ -857,27 +871,26 @@ class App {
                 }
 
                 that.val = d;
-                console.trace(name, d);
                 if (that.val !== null) {
                     const msBefore = (that.val.getTime() - new Date().getTime());
-                    var secBefore = msBefore / 1000;
 
                     hourProp.setInternal(that.val.getHours());
                     minProp.setInternal(that.val.getMinutes());
                     secProp.setInternal(that.val.getSeconds());
+                    orBeforeProp.setInternal(1);
 
                     const tt = that.val;
                     // Let's setup timer
                     timer = setTimeout(() => {
                         onFired(tt);
+                        setNewValue(null);
                     }, msBefore);
                 } else {
-                    console.log("!!!!");
                     // Dropped timer
-                    beforeProp.setInternal("никогда");
-                    hourProp.setInternal(null);
-                    minProp.setInternal(null);
-                    secProp.setInternal(null);
+                    // hourProp.setInternal(0);
+                    // minProp.setInternal(null);
+                    // secProp.setInternal(null);
+                    orBeforeProp.setInternal(0);
                 }
 
                 this.saveConf();
@@ -925,27 +938,42 @@ class App {
         })
     }
 
+    public relaysState = {
+        wasOnIds: [] as string[],
+        toJsonType: function () {
+            return JSON.stringify(this.wasOnIds);
+        },
+        fromJsonType(val: string): void {
+            this.wasOnIds = JSON.parse(val);
+        }
+    }
+
     public sleepAt = this.createTimer("Выкл", d => { 
-        console.log("SLEEP", d); 
-        // console.log("!!! SLEEEP !!!");
-        // console.log(d); 
+        console.log("SLEEP", d);
         //this.kindle.screenIsOn.set(false);
+        const wasOnIds = [];
         for (const ctrl of this.controllers) {
             if (ctrl.online) {
                 for (const prop of ctrl.properties) {
                     if (prop instanceof Relay) {
+                        if (prop.get()) {
+                            wasOnIds.push(prop.id);
+                        }
                         prop.set(false);
                     }
                 }
             }
         }
+        this.relaysState.wasOnIds = wasOnIds;
     });
+
     public wakeAt = this.createTimer("Вкл", d => { 
         console.log("WAKE", d); 
         //this.nexus7.screenIsOn.set(true);
-        this.kindle.screenIsOn.set(true);
-        this.miLight.switchOn.set(true);
-        this.miLight.brightness.set(50);
+        for (const wo of this.relaysState.wasOnIds) {
+            (props.ClassWithId.byId(wo) as Relay).set(true);
+        }
+        // this.miLight.brightness.set(50);
     });
 
     private ctrlControlOther = {

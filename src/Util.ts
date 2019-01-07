@@ -30,6 +30,10 @@ export function wrapToHTML(tag: string| [string, {[k: string]: string}], body?: 
     }
 } 
 
+export function toHMS(d: Date): string {
+    return d.getHours() + ":" + d.getMinutes() + "." + d.getSeconds();
+}
+
 export function toHourMinSec(seconds: number): string {
     var data: { n: number, str: string[] }[] = [
         { n: 3600, str: ["часов", "час", "часа", "часа", "часа", "часов", "часов", "часов", "часов", "часов"]}, 
@@ -79,4 +83,14 @@ export function arraysAreEqual(a1: string[], a2: string[]) {
 export function isKeyAndNum(prefix: string[], arr: string[]): boolean {
     return arraysAreEqual(arr.slice(0, prefix.length), prefix) && 
         arr.slice(prefix.length).every(n => n.length == 2 && n[0] === 'n');
+}
+
+export function thisOrNextDayFromHMS(hh: number, mm: number, ss: number): Date {
+    const now = new Date();
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm, ss !== null ? ss : 0)
+    if (d.getTime() < new Date().getTime()) {
+        // Add a day to point to tomorrow
+        d.setDate(d.getDate() + 1);
+    }
+    return d;
 }
