@@ -524,6 +524,13 @@ interface LcdInformer {
     additionalInfo(str: string): void;
 }
 
+interface ClockControllerEvents {
+    onDisconnect: () => void;
+    onTemperatureChanged: (temp: number) => void;
+    onWeightReset: () => void;
+    onWeightChanged: (weight: number) => void;
+}
+
 class ClockController extends props.ClassWithId implements props.Controller {
     protected pingId = 0;
     protected intervalId?: NodeJS.Timer;
@@ -542,7 +549,7 @@ class ClockController extends props.ClassWithId implements props.Controller {
     constructor(private readonly ws: WebSocket, 
         public readonly ip: string, 
         readonly hello: Hello,
-        private readonly onDrop: () => void) {
+        private readonly handler: ClockControllerEvents) {
         super();
 
         this._name = hello.devParams['device.name.russian'] || hello.devParams['device.name'];
@@ -590,6 +597,8 @@ class ClockController extends props.ClassWithId implements props.Controller {
                 this.send({ type: 'ping', pingid: ("" + (this.pingId++)) } as Ping);
             }
         }, 2000);
+
+        console.log('Connected ' + this.name);
     }
 
     public get online() {
@@ -601,7 +610,7 @@ class ClockController extends props.ClassWithId implements props.Controller {
         if (this.intervalId) {
             clearInterval(this.intervalId);
             this.intervalId = undefined;
-            this.onDrop();
+            this.handler.onDisconnect();
         }
         if (this.ws.readyState === this.ws.OPEN) {
             // console.log(this.ip, "CLOSE");
@@ -632,12 +641,17 @@ class ClockController extends props.ClassWithId implements props.Controller {
     }
 
     private tare(): void {
-        this.baseWeight = this.lastWeight;
+        this.handler.onWeightReset();
+        util.delay(500).then(() => {
+            this.baseWeight = this.lastWeight;
+        });
     }
 
     private reportWeight(): void {
         if (this.lastWeight && this.baseWeight) {
-            this.weightProperty.setInternal(Math.floor((this.lastWeight - this.baseWeight) / 410) + " г");
+            const gramms = Math.floor((this.lastWeight - this.baseWeight) / 410);
+            this.weightProperty.setInternal(gramms + " г");
+            this.handler.onWeightChanged(gramms);
         }
     }
 
@@ -654,10 +668,8 @@ class ClockController extends props.ClassWithId implements props.Controller {
                 console.log(this + " " + "log: ", objData.val);
                 break;
             case 'button':
-                util.delay(1000).then(() => {
-                    this.tare();
-                });
-                console.log(this + " " + "button: ", objData.value);
+                this.tare();
+                // console.log(this + " " + "button: ", objData.value);
                 break;
             case 'weight':
                 if (!this.baseWeight) {
@@ -710,7 +722,7 @@ class App {
         },
         staticLine: (str) => {
             for (const inf of this.dynamicInformers.values()) {
-                inf.runningLine(str);
+                inf.staticLine(str);
             }
         },
         additionalInfo: (str) => {
@@ -946,14 +958,25 @@ class App {
                     if ('type' in objData && objData.type == 'hello') {
                         const hello = objData as Hello;
 
-                        const clockController = new ClockController(ws, ip, hello, () => {
-                            this.dynamicControllers.delete(ip);
-                            if (clockController.lcdInformer) {
-                                this.dynamicInformers.delete(ip);
+                        const clockController = new ClockController(ws, ip, hello, {
+                            onDisconnect: () => {
+                                this.dynamicControllers.delete(ip);
+                                if (clockController.lcdInformer) {
+                                    this.dynamicInformers.delete(ip);
+                                }
+                                this.broadcastToWebClients({ type: "reloadProps" });
+                                this.allInformers.runningLine('Отключено ' + clockController.name);
+                            },
+                            onTemperatureChanged: (temp: number) => {
+
+                            },
+                            onWeightChanged: (weight: number) => {
+                                this.allInformers.staticLine(weight + "г");
+                            },
+                            onWeightReset: () => {
+                                this.allInformers.staticLine("Сброс");
                             }
-                            this.broadcastToWebClients({ type: "reloadProps" });
-                            this.allInformers.runningLine('Отключено ' + clockController.name);
-                        });
+                        } as ClockControllerEvents);
                         if (!!controller) {
                             // What is happening here:
                             // hello comes again from the same controller
@@ -1185,5 +1208,10 @@ class App {
     }
 
 }
+
+process.on('uncaughtException', (err: Error) => {
+    console.error(err.stack);
+    console.log("Node NOT Exiting...");
+});
 
 export default new App()
