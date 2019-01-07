@@ -13,13 +13,11 @@ import * as props from "./Props";
 var adbkit = require('adbkit')
 var adbClient = adbkit.createClient()
 
-/*
-
 interface PingResult {
+    type: 'pingresult';
     result: string;
     pingid: string;
 }
-*/
 
 interface Msg {
     type: string;
@@ -46,23 +44,36 @@ interface Log extends Msg {
     val: string;
 }
 
+interface Ping extends Msg {
+    type: 'ping';
+    pingid: string;
+}
+
+interface RelayState extends Msg {
+    type: 'relayState';
+    id: number;
+    value: boolean;
+}
+
 interface Hello extends Msg {
     type: 'hello';
     firmware: string;
     afterRestart: number;
     devParams: {
-        "device.name": string,      // Device Name String("ESP_") + ESP.getChipId()
-        "wifi.name": string,        // WiFi SSID ""
+        "device.name": string,         // Device Name String("ESP_") + ESP.getChipId()
+        "device.name.russian": string, // Device Name (russian)
+        "wifi.name": string,           // WiFi SSID ""
         // "wifi.pwd": string,         // WiFi Password "true"
-        "websocket.server": string, // WebSocket server ""
-        "websocket.port": string,   // WebSocket port ""
-        "ntpTime": string,          // Get NTP time "true"
-        "invertRelay": string,      // Invert relays "false"
-        "hasScreen": string,        // Has screen "true"
-        "hasHX711": string,         // Has HX711 (weight detector) "false"
-        "hasDS18B20": string,       // Has DS18B20 (temp sensor) "false"
-        "hasButton": string,        // Has button on D7 "false"
-        "brightness": string        // Brightness [0..100] "0"
+        "websocket.server": string,    // WebSocket server ""
+        "websocket.port": string,      // WebSocket port ""
+        "ntpTime": string,             // Get NTP time "true"
+        "invertRelay": string,         // Invert relays "false"
+        "hasScreen": string,           // Has screen "true"
+        "hasHX711": string,            // Has HX711 (weight detector) "false"
+        "hasDS18B20": string,          // Has DS18B20 (temp sensor) "false"
+        "hasButton": string,           // Has button on D7 "false"
+        "brightness": string           // Brightness [0..100] "0"
+        "relay.names": string          // Relay names, separated by ;
     }
 }
 
@@ -72,18 +83,7 @@ interface IRKey extends Msg {
     key: string;
 }
 
-/*
-interface Ping extends Msg {
-    type: 'ping';
-    pingid: string;
-}
-*/
-
-interface ChildControllerHandle {
-    processMsg(controller: ClockController, packet: Msg): void;
-    connected(controller: ClockController): void;
-    disconnected(controller: ClockController): void;
-}
+type AnyMessage = Log | Temp | Hello | IRKey | Weight | Button | PingResult | RelayState;
 
 interface JSONAble<T> {
     toJsonType(): T;
@@ -498,16 +498,11 @@ class Tablet implements props.Controller {
 }
 
 class ControllerRelay extends Relay {
-    constructor(readonly name: string) {
+    constructor(
+        private readonly controller: ClockController, 
+        private readonly index: number, 
+        readonly name: string) {
         super(name);
-    }
-
-    private controller?: ClockController;
-    private index?: number;
-
-    init(controller: ClockController, index: number): any {
-        this.controller = controller;
-        this.index = index;
     }
 
     switch(on: boolean): Promise<void> {
@@ -523,26 +518,78 @@ class ControllerRelay extends Relay {
     }
 }
 
-class ClockController implements props.Controller {
-    private pingId = 0;
-    private intervalId?: NodeJS.Timer;
-    private lastResponse = Date.now();
-    private ws?: WebSocket;
+interface LcdInformer {
+    runningLine(str: string): void;
+    staticLine(str: string): void;
+    additionalInfo(str: string): void;
+}
+
+class ClockController extends props.ClassWithId implements props.Controller {
+    protected pingId = 0;
+    protected intervalId?: NodeJS.Timer;
+    protected lastResponse = Date.now();
+    private readonly _name: string;
     public readonly properties: props.Property<any>[];
     public get name() { return this._name + " (" + this.ip + ")"; }
+    public readonly lcdInformer?: LcdInformer;
 
-    constructor(public readonly ip: string, readonly _name: string, public readonly properties_: props.Property<any>[], public readonly handle: ChildControllerHandle) {
-        this.attemptToConnect();
+    private tempProperty = new props.PropertyImpl<string>("Температура", new props.SpanHTMLRenderer(), "Нет данных");
+    private weightProperty = new props.PropertyImpl<string>("Вес", new props.SpanHTMLRenderer(), "Нет данных");
+    private baseWeight?: number;
+    private lastWeight?: number;
+    private relays: ControllerRelay[] = [];
 
-        this.properties = properties_.concat([ 
-            Button.create("Restart", () => this.reboot()),
-        ]);
+    constructor(private readonly ws: WebSocket, 
+        public readonly ip: string, 
+        readonly hello: Hello,
+        private readonly onDrop: () => void) {
+        super();
 
-        this.properties.forEach((p, index) => {
-            if (p instanceof ControllerRelay) {
-                p.init(this, index);
+        this._name = hello.devParams['device.name.russian'] || hello.devParams['device.name'];
+        this.lastResponse = Date.now();
+
+        this.properties = [];
+        if (hello.devParams['hasHX711'] === 'true') {
+            this.properties.push(this.weightProperty);
+            this.properties.push(Button.create("Weight reset", () => this.tare()));
+        }
+        if (hello.devParams['hasDS18B20'] === 'true') {
+            this.properties.push(this.tempProperty);
+        }
+        if (hello.devParams["hasScreen"]) {
+            this.lcdInformer = {
+                runningLine: (str) => {
+                    this.send({ type: 'show', text: str });
+                },
+                staticLine: (str) => {
+                    this.send({ type: 'tune', text: str });
+                },
+                additionalInfo: (str) => {
+                    this.send({ type: 'additional-info', text: str });
+                }
+            };
+        }
+        if (!!hello.devParams['relay.names']) {
+            hello.devParams['relay.names']
+                .split(';')
+                .forEach((rn, index) => {
+                    const relay = new ControllerRelay(this, index, rn);
+                    this.relays.push(relay);
+                    this.properties.push(relay);
+                });
+        }
+
+        this.properties.push(Button.create("Restart", () => this.reboot()));
+
+        this.intervalId = setInterval(() => {
+            // console.log(this.name, "wasRecentlyContacted", this.wasRecentlyContacted());
+            if (!this.wasRecentlyContacted()) {
+                // 6 seconds passed, no repsonse. Drop the connection and re-try
+                this.dropConnection();
+            } else {
+                this.send({ type: 'ping', pingid: ("" + (this.pingId++)) } as Ping);
             }
-        });
+        }, 2000);
     }
 
     public get online() {
@@ -550,13 +597,16 @@ class ClockController implements props.Controller {
     }
 
     public dropConnection() {
-        if (!!this.ws) {
-            if (this.ws.readyState == this.ws.OPEN) {
-                this.ws.close();
-            }
+        // console.log(this.ip, "dropConnection", this.ws.readyState, [this.ws.CONNECTING, this.ws.OPEN]);
+        if (this.intervalId) {
+            clearInterval(this.intervalId);
+            this.intervalId = undefined;
+            this.onDrop();
         }
-        this.ws = undefined;
-        this.handle.disconnected(this);
+        if (this.ws.readyState === this.ws.OPEN) {
+            // console.log(this.ip, "CLOSE");
+            this.ws.close();
+        }
     }
 
     public reboot(): void {
@@ -565,81 +615,74 @@ class ClockController implements props.Controller {
 
     public send(json: Object): Promise<void> {
         const txt = JSON.stringify(json);
-        console.log(this + " SEND: " + txt);
-        if (this.ws) {
+        // console.log(this + " SEND: " + txt);
+        try {
             this.ws.send(txt);
+        } catch (err) {
+            // Failed to send, got error, let's reconnect
+            this.dropConnection();
         }
         return Promise.resolve(void 0);
     }
 
-    public attemptToConnect() {
-        if (!!this.ws)
-            return; // We're already attempting to connect
-
-        this.ws = new WebSocket('ws://' + this.ip + ":8081");
-
-        this.ws.on('open', () => {
-            // ws.send('something');
-            this.handle.connected(this);
-            this.lastResponse = Date.now();
-            
-            if (!!this.intervalId) {
-                clearInterval(this.intervalId);
-            }
-            this.intervalId = setInterval(() => {
-                if (!this.wasRecentlyContacted()) {
-                    // 6 seconds passed, no repsonse. Drop the connection and re-try
-                    this.dropConnection();
-                    this.attemptToConnect();
-                } else {
-                    const pingText = JSON.stringify({ 'type': 'ping', 'pingig': "" + (this.pingId++)});
-                    try {
-                        if (!!this.ws) {
-                            this.ws.send(pingText);
-                        }
-                    } catch (err) {
-                        // Failed to send, got error, let's reconnect
-                        this.dropConnection();
-                        this.attemptToConnect();
-                    }
-                }
-            }, 6000);
-        });
-
-        this.ws.on('message', (data) => {
-            this.lastResponse = Date.now();
-            if (typeof data == "string") {
-                const objData = JSON.parse(data);
-                if ('result' in objData) {
-                    // console.log('Pong', objData.pingid);
-                } else {
-                    this.handle.processMsg(this, objData);
-                }
-            }
-        });
-
-        this.ws.on('error', (err: Error) => {
-            console.log("Error: " + err);
-            this.dropConnection();
-            setTimeout(() => this.attemptToConnect(), 3000);
-        });
-
-        this.ws.on('close', (code: number, reason: string) => {
-            console.log("Closed: " + code + " " + reason);
-            this.dropConnection();
-            setTimeout(() => this.attemptToConnect(), 3000);
-        });
-    }
-
     public toString() : string { return this.name + "(" + this.ip + ")"; }
 
-    private wasRecentlyContacted() {
-        return Date.now() - this.lastResponse < 10000;
+    protected wasRecentlyContacted() {
+        return Date.now() - this.lastResponse < 4000;
     }
 
+    private tare(): void {
+        this.baseWeight = this.lastWeight;
+    }
+
+    private reportWeight(): void {
+        if (this.lastWeight && this.baseWeight) {
+            this.weightProperty.setInternal(Math.floor((this.lastWeight - this.baseWeight) / 410) + " г");
+        }
+    }
+
+    public processMsg(objData: AnyMessage) {
+        this.lastResponse = Date.now();
+        switch (objData.type) {
+            case 'pingresult':
+                break;
+            case 'temp':
+                // this.wss.clients.forEach(cl => cl.send(objData.value));
+                this.tempProperty.setInternal(objData.value + "&#8451;");
+                break;
+            case 'log':
+                console.log(this + " " + "log: ", objData.val);
+                break;
+            case 'button':
+                util.delay(1000).then(() => {
+                    this.tare();
+                });
+                console.log(this + " " + "button: ", objData.value);
+                break;
+            case 'weight':
+                if (!this.baseWeight) {
+                    this.baseWeight = objData.value;
+                }
+                this.lastWeight = objData.value;
+                this.reportWeight();
+                
+                // console.log(this + " " + "weight: ", objData.value);
+                break;
+            case 'ir_key':
+                console.log(this + " " + "irKey: ", objData.remote, objData.key);
+                break;
+            case 'relayState':
+                // console.log(this + " " + "relayState: ", objData.id, objData.value);
+                this.relays[objData.id].setInternal(objData.value);
+                break;
+            default:
+                console.log(this + " UNKNOWN CMD: ", objData);
+        }
+    }
 } 
 
-class App implements ChildControllerHandle {
+
+class App {
     public expressApi: express.Express;
     public server: http.Server;
     public readonly wss: WebSocket.Server;
@@ -650,23 +693,32 @@ class App implements ChildControllerHandle {
     private r3 = new GPIORelay("Коридор", 36);
     private r4 = new GPIORelay("Потолок", 32);
 
-    private tempProperty = new (class Temp extends props.PropertyImpl<string> {
-        constructor() {
-            super("Температура", new props.SpanHTMLRenderer(), "Нет данных")
-        }
-    })();
-
     private ctrlGPIO = {
         name: "Комната",
         online: true, // Always online
         properties: [this.r1, this.r2, this.r3, this.r4]
     }
 
-    private ctrlRoomClock = new ClockController("192.168.121.75", "Часы в комнате", [ this.tempProperty ], this);
-    private ctrlKitchen = new ClockController("192.168.121.131", "Часы на кухне", [ 
-        new ControllerRelay("Потолок"),
-        new ControllerRelay("Лента")
-    ], this);
+    private dynamicControllers: Map<string, ClockController> = new Map();
+    private dynamicInformers: Map<string, LcdInformer> = new Map();
+    // Show the message on all informers
+    private allInformers: LcdInformer = {
+        runningLine: (str) => {
+            for (const inf of this.dynamicInformers.values()) {
+                inf.runningLine(str);
+            }
+        },
+        staticLine: (str) => {
+            for (const inf of this.dynamicInformers.values()) {
+                inf.runningLine(str);
+            }
+        },
+        additionalInfo: (str) => {
+            for (const inf of this.dynamicInformers.values()) {
+                inf.additionalInfo(str);
+            }
+        }
+    };
 
     private serverHashIdPromise: Promise<string> = new Promise((accept, reject) => {
         const hasho = crypto.createHash('md5');
@@ -683,13 +735,6 @@ class App implements ChildControllerHandle {
           })
     });
 
-/*
-    private ctrlClock = {
-        name: "Часы и датчик температуры",
-        online: true,
-        properties: [  ]
-    }
-*/
     private ctrlLamp = new MiLightBulb();
 
     private readonly kindle: Tablet = new Tablet('192.168.121.166:5556', true);
@@ -803,6 +848,19 @@ class App implements ChildControllerHandle {
          return that;
     }
 
+    private initController(ct: props.Controller): void {
+        ct.properties.forEach(prop => {
+            prop.onChange(() => {
+                this.broadcastToWebClients({
+                    type: "onPropChanged",
+                    id: prop.id,
+                    name: prop.name,
+                    val: prop.get()
+                });
+            });    
+        })
+    }
+
     public sleepAt = this.createTimer("Выкл", d => { 
         // console.log("!!! SLEEEP !!!");
         // console.log(d); 
@@ -822,17 +880,22 @@ class App implements ChildControllerHandle {
         ]
     }
 
-    private readonly controllers: props.Controller[] = [ 
-        this.sleepAt.controller,
-        this.wakeAt.controller,
-        this.ctrlControlOther,
-        this.ctrlGPIO, 
-        this.ctrlRoomClock,
-        this.ctrlKitchen, 
-        this.ctrlLamp, 
-        this.kindle, 
-        this.nexus7 
-    ];
+    private get controllers(): props.Controller[] {
+        const dynPropsArray = Array.from(this.dynamicControllers.values());
+        dynPropsArray.sort((a, b) => a.id == b.id ? 0 : (a.id < b.id ? -1 : 1));
+
+        return Array.prototype.concat([ 
+            this.sleepAt.controller,
+            this.wakeAt.controller,
+            this.ctrlControlOther,
+            this.ctrlGPIO, 
+            // this.ctrlRoomClock,
+            // this.ctrlKitchen, 
+            this.ctrlLamp, 
+            this.kindle, 
+            this.nexus7 
+        ], dynPropsArray);
+    }
 
     public static confFileName() {
         return os.homedir() + '/nodeserver.stored.conf.json';
@@ -867,25 +930,56 @@ class App implements ChildControllerHandle {
 
         this.wss = new WebSocket.Server({ server: this.server });
         this.wss.on('connection', (ws: WebSocket, request) => {
-            const esp: boolean = request.url === '/esp';
-            const ip = request.connection.remoteAddress;
-            console.log(request.url, request.url === '/esp', ip);
+            const url = request.url;
+            // console.log("Connection from", request.connection.remoteAddress, request.url);
+            const esp: boolean = url === '/esp';
+            const remoteAddress = request.connection.remoteAddress;
+            const ip = util.parseOr(remoteAddress, /::ffff:(.*)/, remoteAddress);
             //connection is up, let's add a simple simple event
             if (esp) {
                 // This is ESP controller!
                 ws.on('message', (data: string) => {
                     const objData = JSON.parse(data);
-                    // console.log(ip, data);
-                    if ('result' in objData) {
-                        // console.log('Pong', objData.pingid);
+                    const controller = this.dynamicControllers.get(ip);
+
+                    // It might be hello message
+                    if ('type' in objData && objData.type == 'hello') {
+                        const hello = objData as Hello;
+
+                        const clockController = new ClockController(ws, ip, hello, () => {
+                            this.dynamicControllers.delete(ip);
+                            if (clockController.lcdInformer) {
+                                this.dynamicInformers.delete(ip);
+                            }
+                            this.broadcastToWebClients({ type: "reloadProps" });
+                            this.allInformers.runningLine('Отключено ' + clockController.name);
+                        });
+                        if (!!controller) {
+                            // What is happening here:
+                            // hello comes again from the same controller
+                            // it means it was reset - let's re-init it
+                            controller.dropConnection();
+                        }
+                        this.dynamicControllers.set(ip, clockController);
+                        if (clockController.lcdInformer) {
+                            this.dynamicInformers.set(ip, clockController.lcdInformer);
+                        }
+                        this.initController(clockController);
+
+                        this.allInformers.runningLine('Подключено ' + clockController.name);
+
+                        // Reload
+                        this.broadcastToWebClients({ type: "reloadProps" });
+
+                        ws.on('error', () => { clockController.dropConnection(); });
+                        ws.on('close', () => { clockController.dropConnection(); });                        
+                    } else if (controller) {
+                        controller.processMsg(objData);
                     } else {
-                        this.processMsg({
-                            name: request.connection.remoteAddress,
-                            toString: function () { return this.name; }
-                        } as ClockController, objData);
+                        console.error('Shall never be here', data);
                     }
                 });
-            } else {
+            } else if (url === '/web') {
                 // This is web client. Let's report server revision
                 this.serverHashIdPromise.then((hashId) => {
                     ws.send(JSON.stringify({type: 'serverVersion', val: hashId}));
@@ -894,7 +988,7 @@ class App implements ChildControllerHandle {
                 ws.on('message', (message: string) => {
                     const msg = JSON.parse(message);
                     if (msg.type === "setProp") {
-                        const prop = props.PropertyImpl.byId(msg.id);
+                        const prop = props.ClassWithId.byId<props.Property<any>>(msg.id);
                         if (prop) {
                             if (props.isWriteableProperty(prop)) {
                                 prop.set(msg.val);
@@ -909,6 +1003,12 @@ class App implements ChildControllerHandle {
                         console.log('received: %s', message);
                     }
                 });
+
+                ws.on('close', (message: string) => {
+                    // console.log('closed web client');
+                });
+            } else {
+                console.log("WTH???");
             }
 
             //send immediatly a feedback to the incoming connection    
@@ -973,18 +1073,12 @@ class App implements ChildControllerHandle {
                 console.error('Something went wrong:', err.stack)
             })
 
+        // this.ctrlKitchen.init();
+        // this.ctrlRoomClock.init();
+
         // Subscribe to all the props changes
         this.controllers.forEach(ct => {
-            ct.properties.forEach(prop => {
-                prop.onChange(() => {
-                    this.wss.clients.forEach(cl => cl.send(JSON.stringify({
-                        type: "onPropChanged",
-                        id: prop.id,
-                        name: prop.name,
-                        val: prop.get()
-                    })));
-                });    
-            })
+            this.initController(ct);
         })
     }
     
@@ -1004,7 +1098,7 @@ class App implements ChildControllerHandle {
             var sock;
             var serverVersion;
             function start() {
-                sock = new WebSocket("ws:/" + location.host);
+                sock = new WebSocket("ws:/" + location.host + "/web");
                 sock.onopen = () => {
                     console.log("Connected to websocket " + (new Date()));
                     clearInterval(reconnectInterval);
@@ -1015,6 +1109,8 @@ class App implements ChildControllerHandle {
                         const d = JSON.parse(event.data);
                         if (d.type === 'onPropChanged') {
                             propChangeMap[d.id](d.val);
+                        } else if (d.type === 'reloadProps') {
+                            location.reload(); // Temp, will be impl in other way
                         } else if (d.type === 'serverVersion') {
                             if (!!serverVersion && d.val !== serverVersion) {
                                 // Server was updated, go reload!
@@ -1078,52 +1174,16 @@ class App implements ChildControllerHandle {
         this.server.listen(port, errCont);
     }
 
-    public connected(controller: ClockController) {
-        console.log(controller + " " + "Connected");
+    private broadcastToWebClients(arg: Object): void {
+        this.wss.clients.forEach(cl => {
+            try {
+                cl.send(JSON.stringify(arg));
+            } catch (e) {
+                // Ignore it
+            }
+        });
     }
 
-    public disconnected(controller: ClockController) {
-        console.log(controller + " " + "Disconnected");
-    }
-
-    public processMsg(controller: ClockController, data: Msg) {
-        const objData = <Log | Temp | Hello | IRKey | Weight | Button> data;
-        switch (objData.type) {
-            case 'temp':
-                if (this.currentTemp != objData.value) {
-                    // console.log(controller + " " + "temperature: ", objData.value);
-                    // this.wss.clients.forEach(cl => cl.send(objData.value));
-                    this.currentTemp = objData.value;
-                    this.tempProperty.setInternal(this.currentTemp + "&#8451;");
-                }
-                break;
-            case 'log':
-                console.log(controller + " " + "log: ", objData.val);
-                break;
-            case 'hello':
-                console.log(controller + " " + "hello: ", 
-                    objData.firmware, 
-                    (objData.afterRestart / 1000) + " sec");
-                if (objData.devParams) {
-                    const name = objData.devParams['device.name'];
-                    if (objData.devParams['hasHX711']){
-                        console.log("Scales was found: " + name);
-                    }
-                }
-                break;
-            case 'button':
-                console.log(controller + " " + "button: ", objData.value);
-                break;
-            case 'weight':
-                console.log(controller + " " + "weight: ", objData.value);
-                break;
-            case 'ir_key':
-                console.log(controller + " " + "ir_key: ", objData.remote, objData.key);
-                break;
-            default:
-                console.log(controller + " UNKNOWN CMD: ", objData);
-        }
-    }
 }
 
 export default new App()

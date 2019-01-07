@@ -122,22 +122,28 @@ export interface Controller {
     readonly properties: Property<any>[];
 }
 
-export class PropertyImpl<T> implements Property<T> {
+export class ClassWithId {
     private static _nextId = 0;
-    private static _allProps = new Map<string, Property<any>>();
-
-    protected evs: events.EventEmitter = new events.EventEmitter();
-    private _val: T;
+    private static _allProps = new Map<string, any>();
     public readonly id: string;
 
-    constructor(public readonly name: string, public readonly htmlRenderer: HTMLRederer<T>, readonly initial: T) {
-        this._val = initial;
+    constructor() {
         this.id = ("" + (PropertyImpl._nextId++));
         PropertyImpl._allProps.set(this.id, this);
     }
 
-    static byId(id: string): Property<any>|undefined {
-        return PropertyImpl._allProps.get(id);
+    static byId<T>(id: string): T {
+        return PropertyImpl._allProps.get(id) as T;
+    }
+}
+
+export class PropertyImpl<T> extends ClassWithId implements Property<T> {
+    protected evs: events.EventEmitter = new events.EventEmitter();
+    private _val: T;
+
+    constructor(public readonly name: string, public readonly htmlRenderer: HTMLRederer<T>, readonly initial: T) {
+        super();
+        this._val = initial;
     }
 
     get available(): boolean {
