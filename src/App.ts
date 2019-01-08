@@ -186,13 +186,13 @@ class MiLightBulb implements props.Controller {
     readonly name = "MiLight";
     readonly online = true;
 
-    public readonly switchOn = new (class MiLightBulbRelay extends props.WritablePropertyImpl<boolean> {
+    public readonly switchOn = new (class MiLightBulbRelay extends Relay {
         constructor(
             readonly pThis: MiLightBulb) {
-            super("On/off", new props.CheckboxHTMLRenderer(), false);
+            super("On/off");
         }
 
-        set(on: boolean): Promise<void> {
+        public switch(on: boolean): Promise<void> {
             if (on) {
                 return this.pThis.send([0x42, 0x00, 0x55])
                     .then(() => util.delay(100).then(
