@@ -195,46 +195,42 @@ class MiLightBulb implements props.Controller {
         }
 
         public switch(on: boolean): Promise<void> {
-            if (on) {
-                return this.pThis.send([0x42, 0x00, 0x55])
-                    .then(() => util.delay(100).then(
-                        () => this.pThis.send([0xC2, 0x00, 0x55])
-                    ));
-            } else {
-                return this.pThis.send([0x46, 0x00, 0x55]);
-            }
-        }
-    })(this);
-    
-    public readonly brightness = new (class BrightnessProperty extends props.WritablePropertyImpl<number> {
-        constructor(public readonly pThis: MiLightBulb) {
-            super("Brightness", new props.SliderHTMLRenderer(), 50);
-        }
-        public set(val: number): void {
-            this.pThis.send([0x4E, 0x2 + (0x15 * val / 100), 0x55])
-                .then(() => this.setInternal(val));
+            return this.pThis.send([on ? 0x42 : 0x46, 0x00, 0x55])
+                .then(() => this.setInternal(on));
         }
     })(this);
 
+    public readonly allWhite = props.newWritableProperty<boolean>("All white", false, new props.CheckboxHTMLRenderer(), 
+        (val: boolean) => {
+            if (val) {
+                this.send([0xC2, 0x00, 0x55]);
+            } else {
+                this.send([0x40, (0xff * this.hue.get() / 100), 0x55]);
+            }
+        });
+    
+    public readonly brightness = props.newWritableProperty<number>("Brightness", 50, new props.SliderHTMLRenderer(), 
+        (val: number) => {
+            this.send([0x4E, 0x2 + (0x15 * val / 100), 0x55]);
+        });
+
+    public readonly hue = props.newWritableProperty<number>("Hue", 50, new props.SliderHTMLRenderer(), 
+        (val: number) => {
+            this.allWhite.set(false);
+        });
+
     readonly properties: props.Property<any>[] = [
         this.switchOn,
+        this.allWhite,
         this.brightness,
-        new (class BrightnessProperty extends props.WritablePropertyImpl<number> {
-            constructor(public readonly pThis: MiLightBulb) {
-                super("Hue", new props.SliderHTMLRenderer(), 50);
-            }
-            public set(val: number): void {
-                this.pThis.send([0x40, (0xff * val / 100), 0x55])
-                    .then(() => this.setInternal(val));
-            }
-        })(this)
+        this.hue
     ];
 
     private send(buf: number[]): Promise<void> {
         const sock = dgram.createSocket("udp4");
         return new Promise<void>((accept, reject) => {
             sock.send(
-                new Buffer(buf), this.port, this.ip,
+                Buffer.from(buf), this.port, this.ip,
                 (err, bytes) => {
                     if (!!err) {
                         reject(err);
@@ -396,6 +392,10 @@ class Tablet implements props.Controller {
                 .then((str: string) => {
                     const allTheLines = str.split('- STREAM_');
                     const musicLines = allTheLines.filter(ll => ll.startsWith('MUSIC:'))[0];
+                    if (musicLines.length < 0) {
+                        reject(new Error("Empty resopnce of dumpsys audio"));
+                        return;
+                    }
                     const musicLinesArray = util.splitLines(musicLines);
                     const muteCountLine = musicLinesArray.filter(ll => ll.startsWith("   Mute count:"))[0];
                     const mutedLine = musicLinesArray.filter(ll => ll.startsWith("   Muted:"))[0];
@@ -559,7 +559,7 @@ interface ClockControllerEvents {
     onIRKey: (remoteId: string, keyId: string) => void;
 }
 
-type TimerProp = { val: Date|null, controller: props.Controller, sleepInSec: (sec: number) => void } & JSONAble<string>;
+type TimerProp = { val: Date|null, controller: props.Controller, fireInSeconds: (sec: number) => void } & JSONAble<string>;
 
 class ClockController extends props.ClassWithId implements props.Controller {
     protected pingId = 0;
@@ -832,7 +832,7 @@ class App {
         const hour = 60*min;
         const timerIn: string[] = 
             ["never", "atdate"].concat(
-                [5, 10, 15, 20, 30, 45, min, 2*min, 3*min, 5*min, 10*min, 15*min, 20*min, 30*min, 45*min, 
+                [1, 5, 10, 15, 20, 30, 45, min, 2*min, 3*min, 5*min, 10*min, 15*min, 20*min, 30*min, 45*min, 
                     hour, 2*hour, 3*hour, 4*hour, 5*hour, 8*hour, 12*hour, 23*hour].map(n => "val" + n));
 
         const orBeforeProp: props.WritablePropertyImpl<number> = props.newWritableProperty<number>(
@@ -853,7 +853,7 @@ class App {
             (_n:number) => {
                 const n = timerIn[_n];
                 if (n.startsWith("val")) {
-                    that.sleepInSec(+n.slice(3));
+                    that.fireInSeconds(+n.slice(3));
                 } else if (n === "never") {
                     setNewValue(null);
                 } else if (n === "atdate") {
@@ -890,6 +890,9 @@ class App {
                     // hourProp.setInternal(0);
                     // minProp.setInternal(null);
                     // secProp.setInternal(null);
+                    hourProp.setInternal(0);
+                    minProp.setInternal(0);
+                    secProp.setInternal(0);
                     orBeforeProp.setInternal(0);
                 }
 
@@ -916,7 +919,7 @@ class App {
                     setNewValue(new Date(obj));
                 }
             },
-            sleepInSec: (sec: number) => {
+            fireInSeconds: (sec: number) => {
                 const d = new Date();
                 d.setTime(d.getTime() + sec * 1000);
                 setNewValue(d);
@@ -967,6 +970,65 @@ class App {
         this.relaysState.wasOnIds = wasOnIds;
     });
 
+    public timer = this.createTimer("Таймер", d => { 
+        console.log("Timer!");
+        const ml = this.miLight;
+        const oldOn = ml.switchOn.get();
+        const oldAllWhite = ml.allWhite.get();
+        const oldBright = ml.brightness.get();
+        const oldHue = ml.hue.get();
+
+        this.allInformers.staticLine("Время!");
+
+        async function singleBlink() {
+            ml.brightness.set(100);
+            await util.delay(500);
+            ml.brightness.set(20);
+            await util.delay(200);
+        };
+
+        async function blinkMiLight() {
+            await util.delay(300);
+            await ml.switchOn.switch(true);
+            await util.delay(200);
+            ml.brightness.set(100);
+            await util.delay(200);
+            ml.hue.set(69); // reasonable red
+            await util.delay(200);
+            await singleBlink();
+            await singleBlink();
+            await singleBlink();
+            await util.delay(200);
+            if (!oldAllWhite) {
+                ml.hue.set(oldHue);
+                await util.delay(200);    
+            } else {
+                ml.allWhite.set(oldAllWhite);
+            }
+            ml.brightness.set(oldBright);
+            await util.delay(200);
+            ml.switchOn.set(oldOn);
+        }
+
+        const kr = this.findDynController('KitchenRelay');
+        if (kr) {
+            const stripeRelay = kr.relays[1];
+            async function blinkKitchenStripe() {
+                const wasOn = stripeRelay.get();
+                for (var i = 0; i < 3; ++i) { 
+                    stripeRelay.set(false);
+                    await util.delay(600);
+                    stripeRelay.set(true);
+                    await util.delay(600);
+                }
+                stripeRelay.set(wasOn);
+            }
+            blinkKitchenStripe();
+        }
+
+        blinkMiLight();
+    });
+
     public wakeAt = this.createTimer("Вкл", d => { 
         console.log("WAKE", d); 
         //this.nexus7.screenIsOn.set(true);
@@ -1003,6 +1065,7 @@ class App {
         return Array.prototype.concat([ 
             this.sleepAt.controller,
             this.wakeAt.controller,
+            this.timer.controller,
             this.ctrlControlOther,
             this.ctrlGPIO, 
             this.miLight, 
@@ -1045,10 +1108,16 @@ class App {
 
     private irKeyHandlers: IRKeysHandler[] = [
         this.createPowerOnOffTimerKeys(['power'], "Выкл", "мин", (dd) => {
-            this.sleepAt.sleepInSec(dd * 60);
+            this.sleepAt.fireInSeconds(dd * 60);
         }),
         this.createPowerOnOffTimerKeys(['power', 'power'], "Вкл", "мин", (dd) => {
-            this.wakeAt.sleepInSec(dd * 60);
+            this.wakeAt.fireInSeconds(dd * 60);
+        }),
+        this.createPowerOnOffTimerKeys(['power', 'power', 'power'], "Таймер", "мин", (dd) => {
+            this.timer.fireInSeconds(dd * 60);
+        }),
+        this.createPowerOnOffTimerKeys(['power', 'power', 'power', 'power'], "Микро", "сек", (dd) => {
+            this.timer.fireInSeconds(dd);
         }),
         this.createPowerOnOffTimerKeys(['ent'], "Канал", "", (dd) => {
             this.allInformers.runningLine("Включаем " + dd);
