@@ -185,6 +185,8 @@ class GPIORelay extends Relay implements JSONAble<boolean> {
 class MiLightBulb implements props.Controller {
     readonly name = "MiLight";
     readonly online = true;
+    readonly ip = "192.168.121.35";
+    readonly port = 8899;
 
     public readonly switchOn = new (class MiLightBulbRelay extends Relay {
         constructor(
@@ -232,9 +234,8 @@ class MiLightBulb implements props.Controller {
         const sock = dgram.createSocket("udp4");
         return new Promise<void>((accept, reject) => {
             sock.send(
-                new Buffer(buf), 
-                8899, 
-                "192.168.121.35", (err, bytes) => {
+                new Buffer(buf), this.port, this.ip,
+                (err, bytes) => {
                     if (!!err) {
                         reject(err);
                     } else {
@@ -815,7 +816,6 @@ class App {
             const hh = hourProp.get();
             const mm = minProp.get();
             const ss = secProp.get();
-            console.log('onDateChanged ', hh, mm, ss);
 
             if (hh !== null && mm !== null) { 
                 setNewValue(util.thisOrNextDayFromHMS(hh, mm, ss || 0));
@@ -832,7 +832,7 @@ class App {
         const hour = 60*min;
         const timerIn: string[] = 
             ["never", "atdate"].concat(
-                [10, 15, 20, 30, 45, min, 2*min, 3*min, 5*min, 10*min, 15*min, 20*min, 30*min, 45*min, 
+                [5, 10, 15, 20, 30, 45, min, 2*min, 3*min, 5*min, 10*min, 15*min, 20*min, 30*min, 45*min, 
                     hour, 2*hour, 3*hour, 4*hour, 5*hour, 8*hour, 12*hour, 23*hour].map(n => "val" + n));
 
         const orBeforeProp: props.WritablePropertyImpl<number> = props.newWritableProperty<number>(
