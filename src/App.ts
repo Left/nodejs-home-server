@@ -369,6 +369,16 @@ class Tablet implements props.Controller {
             }));
     }
 
+    public changeVolume(up: boolean): Promise<void> {
+        return this.getVolume().then((volNow: number) => {
+            if ((volNow < 5 && !up) || (volNow > 95 && up)) {
+                return Promise.resolve(void 0);
+            }
+
+            return this.shellCmd("input keyevent KEYCODE_VOLUME_" + (up ? "UP" : "DOWN")).then(() => void 0)
+        });
+    }
+
     public setVolume(vol: number): Promise<void> {
         return this.settingVolume.then(() => 
             this.settingVolume = this.getVolume().then(volNow => {
@@ -732,7 +742,13 @@ class ClockController extends props.ClassWithId implements props.Controller {
 
 interface IRKeysHandler {
     remote?: string;
-    partial(arr: string[]): boolean;
+    /**
+     * This method should check array and return milliseconds before accepting
+     */
+    partial(arr: string[]): number|null;
+    /**
+     * Accept the command
+     */
     complete(arr: string[]): void;
 }
 
@@ -1333,10 +1349,17 @@ class App {
         );
     }
 
-    private simpleCmd(prefix: string[], showName: string, action: () => void): IRKeysHandler {
+    private simpleCmd(prefixes: string[][], showName: string, action: () => void): IRKeysHandler {
         return {
             partial: arr => {
-                return util.arraysAreEqual(prefix.slice(0, arr.length), arr);
+                if (prefixes.some(prefix => util.arraysAreEqual(prefix, arr))) {
+                    return 0; // Accept immediatelly
+                }
+
+                if (prefixes.some(prefix => util.arraysAreEqual(prefix.slice(0, arr.length), arr))) {
+                    return 1500; // Wait for cmd to complete
+                }
+                return null;
             },
             complete: arr => {
                 this.allInformers.runningLine(showName);
@@ -1355,8 +1378,11 @@ class App {
                     } else {
                         this.allInformers.staticLine(util.numArrToVal(arr.slice(prefix.length)) + valueName);
                     }
+                    return 1500;
+                } else {
+                    return null; // We didn't recognize the command
                 }
-                return ret;
+                
             },
             complete: arr => {
                 const dd = util.numArrToVal(arr.slice(prefix.length));
@@ -1381,40 +1407,52 @@ class App {
         this.createPowerOnOffTimerKeys(['ent'], "Канал", "", (dd) => {
             this.allInformers.runningLine("Включаем " + dd);
         }),
-        this.simpleCmd(['n0', 'n1'], "Комната 1", () => {
+        this.simpleCmd([['fullscreen']], "MiLight", () => {
+            this.miLight.switchOn.switch(!this.miLight.switchOn.get());
+        }),
+        this.simpleCmd([['n0', 'n1'], ["record"]], "Лампа на шкафу", () => {
             this.r1.switch(!this.r1.get());
         }),
-        this.simpleCmd(["record"], "Комната 1", () => {
-            this.r1.switch(!this.r1.get());
+        this.simpleCmd([['n0', 'n2']], "Колонки", () => {
+            this.r2.switch(!this.r2.get());
         }),
-        this.simpleCmd(['n0', 'n2'], "Комната 2", () => {
-            this.r1.switch(!this.r2.get());
+        this.simpleCmd([['n0', 'n3'], ['stop']], "Коридор", () => {
+            this.r3.switch(!this.r3.get());
         }),
-        this.simpleCmd(['n0', 'n3'], "Комната 3", () => {
-            this.r1.switch(!this.r3.get());
+        this.simpleCmd([['n0', 'n4'], ['time_shift']], "Потолок", () => {
+            this.r4.switch(!this.r4.get());
         }),
-        this.simpleCmd(['stop'], "Комната 3", () => {
-            this.r1.switch(!this.r3.get());
-        }),
-        this.simpleCmd(['n0', 'n4'], "Комната 4", () => {
-            this.r1.switch(!this.r3.get());
-        }),
-        this.simpleCmd(['time_shift'], "Комната 4", () => {
-            this.r1.switch(!this.r3.get());
-        }),
-        this.simpleCmd(['n0', 'n5'], "Потолок на кухне", () => {
+        this.simpleCmd([['n0', 'n5'], ['av_source'], ['mts']], "Потолок на кухне", () => {
             this.toggleRelay('KitchenRelay', 0);
         }),
-        this.simpleCmd(['n0', 'n6'], "Лента на кухне", () => {
+        this.simpleCmd([['n0', 'n6'], ['clear'], ['min']], "Лента на кухне", () => {
             this.toggleRelay('KitchenRelay', 1);
         }),
-        this.simpleCmd(['volume_up'], "Звук+", () => {
-            this.kindle.volume.set(this.kindle.volume.get() + 100/15);
-        }),
-        this.simpleCmd(['volume_down'], "Звук-", () => {
-            this.kindle.volume.set(this.kindle.volume.get() - 100/15);
-        }),
 
+        // Sound controls
+        (() => {
+            return {
+                partial: arr => {
+                    const allAreKeyControls = arr.length > 0 && arr.every(k => k === 'volume_up' || k === 'volume_down');
+                    if (allAreKeyControls) {
+                        const reportValue = (v: number) => this.allInformers.staticLine(String.fromCharCode(0xe000) + 
+                            Math.floor(v) + "%");
+
+                        reportValue(this.kindle.volume.get());
+                        const last = arr[arr.length-1];
+                        this.kindle.changeVolume(last == 'volume_up').then(
+                            () => this.kindle.getVolume().then(reportValue));
+                        return 2500;
+                    } else {
+                        return null; // We didn't recognize the command
+                    }
+                    
+                },
+                complete: arr => {
+                    console.log("Nothing to do");
+                }     
+            } as IRKeysHandler;
+        })(),
     ];
 
     public toggleRelay(internalName: string, index: number): void {
@@ -1488,7 +1526,8 @@ class App {
                             const mapIRs = new Map<string, { 
                                 lastRemote: number,
                                 seq: string[],
-                                handler?: IRKeysHandler
+                                handler?: IRKeysHandler,
+                                wait: number
                             }>();
 
                             const clockController = new ClockController(ws, ip, hello, {
@@ -1512,7 +1551,7 @@ class App {
                                 onIRKey: (remoteId: string, keyId: string) => {
                                     var _irState;
                                     if (!mapIRs.has(remoteId)) {
-                                        _irState = { lastRemote: 0, seq: [] };
+                                        _irState = { lastRemote: 0, seq: [], wait: 1500 };
                                         mapIRs.set(remoteId, _irState);
                                     } else {
                                         _irState = mapIRs.get(remoteId);
@@ -1525,8 +1564,10 @@ class App {
                                         irState.seq.push(keyId);
                                         var toHandle;
                                         for (const handler of this.irKeyHandlers) {
-                                            if (handler.partial(irState.seq)) {
+                                            const toWait = handler.partial(irState.seq);
+                                            if (toWait != null) {
                                                 toHandle = handler;
+                                                irState.wait = toWait;
                                             }
                                         }
                                         if (toHandle) {
@@ -1536,11 +1577,11 @@ class App {
                                             irState.seq = [];
                                         }
 
-                                        util.delay(1500).then(() => {
+                                        util.delay(irState.wait).then(() => {
                                             const now = new Date().getTime();
-                                            if (now - irState.lastRemote >= 1500) {
+                                            if ((now - irState.lastRemote) >= irState.wait) {
                                                 // Go!
-                                                if (irState.handler && irState.handler.partial(irState.seq)) {
+                                                if (irState.handler && irState.handler.partial(irState.seq) !== null) {
                                                     irState.handler.complete(irState.seq);
                                                 }
 
