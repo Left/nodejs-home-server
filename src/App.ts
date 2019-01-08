@@ -269,12 +269,12 @@ class Tablet implements props.Controller {
             })("Go play", new props.StringAndGoRendrer("Play"), ""),
             Button.create("Pause", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Pause")),
             Button.create("Play", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Play")),
-            Button.create("Stop playing", () => this.shellCmd("am force-stop org.videolan.vlc")),
+            Button.create("Stop playing", () => this.stopPlaying()),
             Button.create("Reset", () => this.shellCmd("reboot")),
         ];
     }
 
-    private volume = new (class VolumeControl extends props.WritablePropertyImpl<number> {
+    public volume = new (class VolumeControl extends props.WritablePropertyImpl<number> {
         constructor(private readonly tbl: Tablet) {
             super("Volume", new props.SliderHTMLRenderer(), 0);
         }
@@ -356,13 +356,17 @@ class Tablet implements props.Controller {
 
     private settingVolume = Promise.resolve(void 0);
 
+    public stopPlaying(): Promise<void> {
+        return this.shellCmd("am force-stop org.videolan.vlc").then(() => void 0);
+    }
+
     public playURL(url: string): Promise<void> {
-        return this.shellCmd(
+        return this.stopPlaying().then(() => this.shellCmd(
             "am start -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity -a android.intent.action.VIEW -d \"" + 
                 url.replace("&", "\&")+ "\" --ez force_fullscreen true")
             .then(() => {
                 return Promise.resolve(void 0);
-            })
+            }));
     }
 
     public setVolume(vol: number): Promise<void> {
@@ -980,13 +984,6 @@ class App {
 
         this.allInformers.staticLine("Время!");
 
-        async function singleBlink() {
-            ml.brightness.set(100);
-            await util.delay(500);
-            ml.brightness.set(20);
-            await util.delay(200);
-        };
-
         async function blinkMiLight() {
             await util.delay(300);
             await ml.switchOn.switch(true);
@@ -995,16 +992,19 @@ class App {
             await util.delay(200);
             ml.hue.set(69); // reasonable red
             await util.delay(200);
-            await singleBlink();
-            await singleBlink();
-            await singleBlink();
-            await util.delay(200);
-            if (!oldAllWhite) {
-                ml.hue.set(oldHue);
-                await util.delay(200);    
-            } else {
-                ml.allWhite.set(oldAllWhite);
+            for (var i = 0; i < 5; ++i) {
+                ml.brightness.set(100);
+                await util.delay(500);
+                ml.brightness.set(20);
+                await util.delay(500);    
             }
+            await util.delay(200);
+            if (oldAllWhite) {
+                ml.allWhite.set(oldAllWhite);
+            } else {
+                ml.hue.set(oldHue);                
+            }
+            await util.delay(200);
             ml.brightness.set(oldBright);
             await util.delay(200);
             ml.switchOn.set(oldOn);
@@ -1058,6 +1058,262 @@ class App {
         return this.controllers.filter(c => c.online);
     }
 
+    private channelsHistory = this.makeChannelsHistory();
+    
+    private makeChannelsHistory() {
+        const that = this;
+        var history = 
+        [
+            {
+                "name": "24 \u0422\u0435\u0445\u043d\u043e",
+                "cat": "history",
+                "url": "http://172.31.254.110:5000/c12",
+                "channel": 12
+            },
+            {
+                "name": "Discovery Science HD",
+                "cat": "history",
+                "url": "http://live02-cdn.tv.ti.ru/dtv/id248_NBN_SG--DiscoveryScienceHD/04/plst.m3u8",
+                "channel": 14
+            },
+            {
+                "name": "\u0416\u0438\u0432\u0430\u044f \u043f\u043b\u0430\u043d\u0435\u0442\u0430",
+                "cat": "history",
+                "url": "http://172.31.254.110:5000/c37",
+                "channel": 16
+            },
+            {
+                "name": "History",
+                "cat": "history",
+                "url": "http://213.59.128.162:9999/play/History",
+                "channel": 17
+            },
+            {
+                "name": "National Geographic",
+                "cat": "history",
+                "url": "http://37.208.104.194:8090/ch-256/index.m3u8",
+                "channel": 18
+            },
+            {
+                "name": "\u0417\u0432\u0435\u0437\u0434\u0430",
+                "cat": "history",
+                "url": "https://strm.yandex.ru/kal/zvezda/zvezda0.m3u8",
+                "channel": 19
+            },
+            {
+                "name": "\u041a\u0412\u041d",
+                "cat": "history",
+                "url": "http://109.248.236.41:4433/udp/238.1.1.111:1234",
+                "channel": 20
+            },
+            {
+                "name": "Galaxy",
+                "cat": "history",
+                "url": "http://hlstv.kem.211.ru/239.211.211.39/stream.m3u8",
+                "channel": 21
+            },
+            {
+                "name": "\u041c\u043e\u044f \u041f\u043b\u0430\u043d\u0435\u0442\u0430",
+                "cat": "history",
+                "url": "http://172.31.254.110:5000/c7",
+                "channel": 22
+            },
+            {
+                "name": "\u041f\u043b\u0430\u043d\u0435\u0442\u0430 HD",
+                "cat": "history",
+                "url": "http://hlstv.kem.211.ru/239.211.200.19/stream.m3u8",
+                "channel": 25
+            },
+            {
+                "name": "Nat Geo Wild",
+                "cat": "history",
+                "url": "http://37.208.104.194:8090/ch-253/index.m3u8",
+                "channel": 26
+            },
+            {
+                "name": "Animal Planet",
+                "cat": "history",
+                "url": "http://hlstv.kem.211.ru/239.211.211.34/stream.m3u8",
+                "channel": 27
+            },
+            {
+                "name": "Nat Geo",
+                "cat": "history",
+                "url": "http://hlstv.kem.211.ru/239.211.211.40/stream.m3u8",
+                "channel": 45
+            },
+            {
+                "name": "Viasat History",
+                "cat": "history",
+                "url": "http://stream.euroasia.lfstrm.tv/viasat_history/1/index.m3u8",
+                "channel": 37
+            },
+            {
+                "name": "https://www.radioparadise.com/m3u/mp3-192.m3u",
+                "cat": "history",
+                "url": "https://www.radioparadise.com/m3u/mp3-192.m3u",
+                "channel": 13
+            },
+            {
+                "name": "\u0420\u0430\u0434\u0438\u043e \u041c\u0430\u044f\u043a",
+                "cat": "history",
+                "url": "http://icecast.vgtrk.cdnvideo.ru/mayakfm_mp3_192kbps",
+                "channel": 24
+            },
+            {
+                "name": "Investigation Discovery",
+                "cat": "history",
+                "url": "http://91.204.199.145:8000/play/a02x/index.m3u8",
+                "channel": 28
+            },
+            {
+                "name": "Relax FM",
+                "cat": "history",
+                "url": "http://ic2.101.ru:8000/v13_1?setst=094548200140236612420140625&amp;tok=75urgZKbvvpyTQMDZ1H4Hfqy5FKeKsXaPod7argnUF%2BwRqI%2Fy3MhBg%3D%3D",
+                "channel": 23
+            },
+            {
+                "name": "Viasat History",
+                "cat": "history",
+                "url": "http://ott-cdn.ucom.am/s70/index.m3u8",
+                "channel": 15
+            },
+            {
+                "name": "\u0421\u0442\u0430\u043d\u0438\u0441\u043b\u0430\u0432 \u0414\u0440\u043e\u0431\u044b\u0448\u0435\u0432\u0441\u043a\u0438\u0439: \"\u0421\u0435\u043d\u0441\u0430\u0446\u0438\u0438 \u0432 \u0430\u043d\u0442\u0440\u043e\u043f\u043e\u0433\u0435\u043d\u0435\u0437\u0435\"",
+                "cat": "history",
+                "url": "https://www.youtube.com/watch?v=jFRlBQnKRrk"
+            },
+            {
+                "name": "http://ic5.101.ru:8000/a157?userid=0&setst=e5l2bv8j2v1jsagt3rtc3teoq8&tok=07790631dkVJeVFPUWNKdjRGRFp2d0tySWJST3JWQy8yVnphbHVTL3R3QmJJeEZ1WjEvY3ViV3RtUjJrZ3UrVWFualdDVA%3D%3D2",
+                "cat": "history",
+                "url": "http://ic5.101.ru:8000/a157?userid=0&setst=e5l2bv8j2v1jsagt3rtc3teoq8&tok=07790631dkVJeVFPUWNKdjRGRFp2d0tySWJST3JWQy8yVnphbHVTL3R3QmJJeEZ1WjEvY3ViV3RtUjJrZ3UrVWFualdDVA%3D%3D2",
+                "channel": 29
+            },
+            {
+                "name": "12. \u0421\u043e\u0437\u0434\u0430\u043d\u0438\u0435 \u0441\u0430\u0439\u0442\u0430 \u043d\u0430 Node.js, Express, MongoDB | \u0420\u0435\u0430\u043b\u0438\u0437\u0443\u0435\u043c \u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u044e",
+                "cat": "history",
+                "url": "https://www.youtube.com/watch?v=NDUKqVWIyo4"
+            },
+            {
+                "name": "\u041c\u0438\u0445\u0430\u0438\u043b \u041d\u0438\u043a\u0438\u0442\u0438\u043d: \"\u041c\u0435\u0441\u0442\u043e \u043f\u0440\u043e\u0438\u0441\u0445\u043e\u0436\u0434\u0435\u043d\u0438\u044f \u0436\u0438\u0437\u043d\u0438. \u041f\u0435\u0440\u0432\u0438\u0447\u043d\u044b\u0439 \u0431\u0443\u043b\u044c\u043e\u043d, \u043f\u0438\u0446\u0446\u0430 \u0438 \u043c\u0430\u0439\u043e\u043d\u0435\u0437\"",
+                "cat": "history",
+                "url": "https://www.youtube.com/watch?v=o76vD_u6uNw"
+            },
+            {
+                "name": "\u0410\u043d\u0434\u0440\u0435\u0439 \u0416\u0443\u0440\u0430\u0432\u043b\u0435\u0432: \"\u041a\u0430\u043a \u0431\u0430\u043a\u0442\u0435\u0440\u0438\u0438 \u0441\u043e\u0437\u0434\u0430\u043b\u0438 \u0430\u0442\u043c\u043e\u0441\u0444\u0435\u0440\u0443 \u0438 \u0432\u0441\u0451 \u043f\u0440\u043e\u0447\u0435\u0435 [4000-550 \u043c\u043b\u043d \u043b\u0435\u0442 \u043d\u0430\u0437\u0430\u0434]\"",
+                "cat": "history",
+                "url": "https://www.youtube.com/watch?v=7-oUVQn3yrQ"
+            },
+            {
+                "name": "\u041c\u0438\u0445\u0430\u0438\u043b \u041d\u0438\u043a\u0438\u0442\u0438\u043d: \"\u0417\u0430\u0440\u043e\u0436\u0434\u0435\u043d\u0438\u0435 \u0436\u0438\u0437\u043d\u0438 \u043d\u0430 \u0417\u0435\u043c\u043b\u0435 \u0438 \u0434\u0440\u0443\u0433\u0438\u0445 \u043f\u043b\u0430\u043d\u0435\u0442\u0430\u0445\"",
+                "cat": "history",
+                "url": "https://www.youtube.com/watch?v=j8EWEeav42Q"
+            },
+            {
+                "name": "\u041c\u0438\u0445\u0430\u0438\u043b \u041d\u0438\u043a\u0438\u0442\u0438\u043d: \"\u0418\u0441\u0442\u043e\u0440\u0438\u044f \u0444\u043e\u0442\u043e\u0441\u0438\u043d\u0442\u0435\u0437\u0430, \u0438\u043b\u0438 \u043a\u0442\u043e \u0441\u0434\u0435\u043b\u0430\u043b \u043d\u0435\u0431\u043e \u0433\u043e\u043b\u0443\u0431\u044b\u043c\".",
+                "cat": "history",
+                "url": "https://www.youtube.com/watch?v=eXc1eXbJBIU"
+            },
+            {
+                "name": "\u0410\u043d\u0442\u0438-\u0412\u0438\u0442\u0442\u0435. \u041a\u0430\u043a \u0420\u043e\u0441\u0441\u0438\u0439\u0441\u043a\u0430\u044f \u0438\u043c\u043f\u0435\u0440\u0438\u044f \u0440\u0443\u0445\u043d\u0443\u043b\u0430 \u0432 \u043f\u0440\u043e\u043f\u0430\u0441\u0442\u044c. \u0424\u0451\u0434\u043e\u0440 \u041b\u0438\u0441\u0438\u0446\u044b\u043d",
+                "cat": "history",
+                "url": "https://www.youtube.com/watch?v=i63w0xL87uA"
+            },
+            {
+                "name": "\u041d\u0435 \u0444\u0430\u043a\u0442! \u0412\u0435\u0447\u043d\u0430\u044f \u0436\u0438\u0437\u043d\u044c",
+                "cat": "history",
+                "url": "https://www.youtube.com/watch?v=882wyVeW9_U"
+            },
+            {
+                "name": "\u0414\u0438\u0441\u043a\u0443\u0441\u0441\u0438\u044f \"\u0412\u0438\u0440\u0443\u0441 \u0436\u0438\u0437\u043d\u0438. \u041c\u043e\u0436\u0435\u043c \u043b\u0438 \u043c\u044b \u0437\u0430\u043d\u0435\u0441\u0442\u0438 \u0436\u0438\u0437\u043d\u044c \u043d\u0430 \u0434\u0440\u0443\u0433\u0438\u0435 \u043f\u043b\u0430\u043d\u0435\u0442\u044b?\"",
+                "cat": "history",
+                "url": "https://www.youtube.com/watch?v=e-AUCrmAyRo"
+            },
+            {
+                "name": "\"\u0412\u043e\u0437\u043c\u043e\u0436\u043d\u0430 \u043b\u0438 \u0436\u0438\u0437\u043d\u044c \u0431\u0435\u0437 \u0432\u043e\u0434\u044b \u0438 \u0436\u0438\u0437\u043d\u044c \u0431\u0435\u0437 \u0443\u0433\u043b\u0435\u0440\u043e\u0434\u0430?\" \"\u0413\u0438\u043f\u0435\u0440\u0438\u043e\u043d\", 27.09.16",
+                "cat": "history",
+                "url": "https://www.youtube.com/watch?v=3DRSf0q-i4M"
+            },
+            {
+                "name": "\u041f\u043e\u0431\u0435\u0433\u0443\u0442 \u0432\u0441\u043b\u0435\u0434 \u0437\u0430 \u042f\u043d\u0443\u043a\u043e\u0432\u0438\u0447\u0435\u043c \u0438 \u041a\u043e\u043b\u043e\u043c\u043e\u0439\u0441\u043a\u0438\u043c. \u0420\u0443\u0441\u043b\u0430\u043d \u0411\u043e\u0440\u0442\u043d\u0438\u043a",
+                "cat": "history",
+                "url": "https://www.youtube.com/watch?v=917XT8ch1h0"
+            },
+            {
+                "name": "\u041f\u043e\u0431\u0435\u0434\u0430 \u041fopo\u0448\u0435\u043d\u043a\u043e! \u041e\u0438\u0306, \u0442\u043e ec\u0442\u044c \u0422\u0438\u043co\u0448e\u043d\u043a\u043e!",
+                "cat": "history",
+                "url": "https://www.youtube.com/watch?v=JdKqhe7-YUk"
+            },
+            {
+                "name": "\u041c\u043e\u0441\u043a\u0432\u0430 \u2014 \u041a\u0438\u0435\u0432 \u2014 \u041c\u043e\u0441\u043a\u0432\u0430 (\u0414. \u0414\u0436\u0430\u043d\u0433\u0438\u0440\u043e\u0432 , \u0411. \u041a\u0430\u0433\u0430\u0440\u043b\u0438\u0446\u043a\u0438\u0439)",
+                "cat": "history",
+                "url": "https://www.youtube.com/watch?v=EQOJP9QTvio"
+            },
+            {
+                "name": "\u041c\u0443\u0442\u043d\u043e\u0435 \u0434\u0435\u043b\u043e \u0411\u0430\u0431\u0447\u0435\u043d\u043a\u043e. \u041d\u043e\u0432\u0430\u044f \"\u0436ep\u0442\u0432a\"",
+                "cat": "history",
+                "url": "https://www.youtube.com/watch?v=S9LEpT2W-IY"
+            },
+            {
+                "name": "\u041e\u043b\u044c\u0433\u0430 \u0424\u0438\u043b\u0430\u0442\u043e\u0432\u0430: \u041a\u0430\u043a \u0438\u0437\u0443\u0447\u0430\u044e\u0442 \u043a\u043e\u0441\u0430\u0442\u043e\u043a?",
+                "cat": "history",
+                "url": "https://www.youtube.com/watch?v=rR9r4BK29II"
+            },
+            {
+                "name": "\u041c\u0438\u0445\u0430\u0438\u043b \u041b\u0435\u0431\u0435\u0434\u0435\u0432: \"\u0418\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441 \u043c\u0435\u0436\u0434\u0443 \u043c\u043e\u0437\u0433\u043e\u043c \u0438 \u043a\u043e\u043c\u043f\u044c\u044e\u0442\u0435\u0440\u043e\u043c\"",
+                "cat": "history",
+                "url": "https://www.youtube.com/watch?v=7gwb6TW5D6Q"
+            },
+            {
+                "name": "\u0411\u043e\u0440\u0438\u0441 \u0428\u0442\u0435\u0440\u043d: \"\u0417\u043e\u043e\u043f\u0430\u0440\u043a \u0447\u0435\u0440\u043d\u044b\u0445 \u0434\u044b\u0440\"",
+                "cat": "history",
+                "url": "https://www.youtube.com/watch?v=r8cyGXHGiUs"
+            },
+            {
+                "name": "\u0428\u043e\u043a! \u041c\u0430\u0442\u0435\u043c\u0430\u0442\u0438\u043a \u0441\u0434\u0435\u043b\u0430\u043b \u044d\u0442\u043e! \u0425\u0438\u043c\u0438\u044f/\u041c\u0430\u0442\u0435\u043c\u0430\u0442\u0438\u043a\u0430 \u2013\u00a0\u041f\u0440\u043e\u0441\u0442\u043e",
+                "cat": "history",
+                "url": "https://www.youtube.com/watch?v=Byw49v8uAPo"
+            },
+            {
+                "name": "\u0418\u041d\u0422\u0415\u0420",
+                "cat": "history",
+                "url": "http://176.120.119.93:805/72/index.m3u8",
+                "channel": 47
+            },
+            {
+                "name": "\u041d\u0430\u0443\u043a\u0430 2.0",
+                "cat": "history",
+                "url": "http://172.31.254.110:5000/c36",
+                "channel": 10
+            },
+            {
+                "name": "\u0420\u043e\u0441\u0441\u0438\u044f 24",
+                "cat": "history",
+                "url": "http://ott-cdn.ucom.am/s21/index.m3u8",
+                "channel": 11
+            }
+        ]
+        ;
+        return {
+            renderChannels() {
+                const channels = [];
+                for (const h of history) {
+                    channels.push(new (class Channels implements props.Controller {
+                        public readonly name = "";
+                        public readonly online = true; // Always online
+                        public get properties(): props.Property<any>[] {
+                            return [
+                                props.newWritableProperty<string>("Канал", h.name, new props.SpanHTMLRenderer()),
+                                Button.create("Play", () => that.kindle.playURL(h.url)),
+                            ];
+                        } 
+                    }));
+                }
+                return channels;
+            }
+        }
+    }
+
     private get controllers(): props.Controller[] {
         const dynPropsArray = Array.from(this.dynamicControllers.values());
         dynPropsArray.sort((a, b) => a.id == b.id ? 0 : (a.id < b.id ? -1 : 1));
@@ -1071,7 +1327,10 @@ class App {
             this.miLight, 
             this.kindle, 
             this.nexus7 
-        ], dynPropsArray);
+        ], 
+        dynPropsArray,
+        this.channelsHistory.renderChannels()
+        );
     }
 
     private simpleCmd(prefix: string[], showName: string, action: () => void): IRKeysHandler {
@@ -1149,6 +1408,13 @@ class App {
         this.simpleCmd(['n0', 'n6'], "Лента на кухне", () => {
             this.toggleRelay('KitchenRelay', 1);
         }),
+        this.simpleCmd(['volume_up'], "Звук+", () => {
+            this.kindle.volume.set(this.kindle.volume.get() + 100/15);
+        }),
+        this.simpleCmd(['volume_down'], "Звук-", () => {
+            this.kindle.volume.set(this.kindle.volume.get() - 100/15);
+        }),
+
     ];
 
     public toggleRelay(internalName: string, index: number): void {
