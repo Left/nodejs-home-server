@@ -85,12 +85,6 @@ interface IRKey extends Msg {
 
 type AnyMessage = Log | Temp | Hello | IRKey | Weight | Button | PingResult | RelayState;
 
-interface JSONAble<T extends string|number|boolean> {
-    toJsonType(): T;
-    fromJsonType(val: T): void;
-}
-
-
 
 namespace adbkit {
     export interface Device { 
@@ -136,13 +130,15 @@ class Button extends props.WritablePropertyImpl<void> {
     }
 }
 
-class GPIORelay extends Relay implements JSONAble<boolean> {
+class GPIORelay extends Relay  {
     private _init: Promise<void>;
     private _modeWasSet: boolean = false;
     static readonly gpioCmd = "/root/WiringOP/gpio/gpio";
 
-    constructor(readonly name: string, public readonly pin: number, public readonly onChanged: () => void) { 
+    constructor(readonly name: string, public readonly pin: number, private readonly conf: util.Config<{ relays: boolean[] }>, private readonly index: number) { 
         super(name); 
+
+        this.conf.read().then(conf => this.setInternal(conf.relays[this.index]));
 
         if (GPIORelay.gpioInstalled()) {
             this._init = util.runShell(GPIORelay.gpioCmd, ["-1", "read", "" + this.pin])
@@ -171,16 +167,12 @@ class GPIORelay extends Relay implements JSONAble<boolean> {
         
         return this._init.then(() => {
             return util.runShell(GPIORelay.gpioCmd, ["-1", "write", "" + this.pin, on ? "0" : "1"])
-                .then(() => { this.setInternal(on); this.onChanged(); })
+                .then(() => { 
+                    this.setInternal(on); 
+                    return this.conf.change(d => d.relays[this.index] = on); 
+                })
                 .catch(err => console.log(err.errno));
         });
-    }
-
-    public toJsonType() { 
-        return this.get(); 
-    }
-    public fromJsonType(val: boolean): void {
-        this.set(val);
     }
 }
 
@@ -598,7 +590,7 @@ interface ClockControllerEvents {
     onIRKey: (remoteId: string, keyId: string) => void;
 }
 
-type TimerProp = { val: Date|null, controller: props.Controller, fireInSeconds: (sec: number) => void } & JSONAble<string>;
+type TimerProp = { val: Date|null, controller: props.Controller, fireInSeconds: (sec: number) => void };
 
 class ClockController extends props.ClassWithId implements props.Controller {
     protected pingId = 0;
@@ -777,6 +769,14 @@ interface IRKeysHandler {
     complete(arr: string[]): void;
 }
 
+interface Channel {
+    "name": string;
+    "cat": string;
+    "url": string;
+    "channel"?: number;
+}
+
+
 class App {
     public expressApi: express.Express;
     public server: http.Server;
@@ -785,10 +785,10 @@ class App {
 
     private gpioRelays = util.newConfig({ relays: [false, false, false, false] }, "relays");
 
-    private r1 = new GPIORelay("Лампа на шкафу", 38, () => this.saveConf());
-    private r2 = new GPIORelay("Колонки", 40, () => this.saveConf());
-    private r3 = new GPIORelay("Коридор", 36, () => this.saveConf()); 
-    private r4 = new GPIORelay("Потолок", 32, () => this.saveConf());
+    private r1 = new GPIORelay("Лампа на шкафу", 38, this.gpioRelays, 0);
+    private r2 = new GPIORelay("Колонки", 40, this.gpioRelays, 1);
+    private r3 = new GPIORelay("Коридор", 36, this.gpioRelays, 2); 
+    private r4 = new GPIORelay("Потолок", 32, this.gpioRelays, 3);
 
     private ctrlGPIO = {
         name: "Комната",
@@ -862,7 +862,16 @@ class App {
             (v:number) => { onChange(v); });
     }
 
-    private createTimer(name: string, onFired: ((d: Date) => void)) : TimerProp {
+    private createTimer(name: string, confName: string, onFired: ((d: Date) => void)) : TimerProp {
+        interface Conf {
+            val: string|null;
+        }
+        
+        const conf = util.newConfig({ val: null } as Conf, confName);
+        conf.read().then(conf => {
+            setNewValue(conf.val ? new Date(conf.val) : null);
+        })
+
         const onDateChanged = () => {
             const hh = hourProp.get();
             const mm = minProp.get();
@@ -936,6 +945,7 @@ class App {
                         onFired(tt);
                         setNewValue(null);
                     }, msBefore);
+                    conf.change(t => t.val = that.val!.toJSON());
                 } else {
                     // Dropped timer
                     // hourProp.setInternal(0);
@@ -945,11 +955,11 @@ class App {
                     minProp.setInternal(0);
                     secProp.setInternal(0);
                     orBeforeProp.setInternal(0);
+                    conf.change(t => t.val = null);
                 }
-
-                this.saveConf();
             }
         }
+
 
         const that = {
             val: null as Date|null,
@@ -959,16 +969,6 @@ class App {
                 properties: [ 
                     hourProp, minProp, secProp, orBeforeProp
                 ]
-            },
-            toJsonType: () => {
-                return that.val !== null ? that.val.toJSON() : "null";
-            },
-            fromJsonType: (obj: string) => {
-                if (obj == "null") {
-                    setNewValue(null);
-                } else {
-                    setNewValue(new Date(obj));
-                }
             },
             fireInSeconds: (sec: number) => {
                 const d = new Date();
@@ -1002,7 +1002,7 @@ class App {
         }
     }
 
-    public sleepAt = this.createTimer("Выкл", d => { 
+    public sleepAt = this.createTimer("Выкл", "off", d => { 
         console.log("SLEEP", d);
         //this.kindle.screenIsOn.set(false);
         const wasOnIds = [];
@@ -1021,7 +1021,7 @@ class App {
         this.relaysState.wasOnIds = wasOnIds;
     });
 
-    public timer = this.createTimer("Таймер", d => { 
+    public timer = this.createTimer("Таймер", "timer", d => { 
         console.log("Timer!");
         const ml = this.miLight;
         const oldOn = ml.switchOn.get();
@@ -1076,7 +1076,7 @@ class App {
         blinkMiLight();
     });
 
-    public wakeAt = this.createTimer("Вкл", d => { 
+    public wakeAt = this.createTimer("Вкл", "on", d => { 
         console.log("WAKE", d); 
         //this.nexus7.screenIsOn.set(true);
         for (const wo of this.relaysState.wasOnIds) {
@@ -1105,246 +1105,17 @@ class App {
         return this.controllers.filter(c => c.online);
     }
 
-    private channelsHistory = this.makeChannelsHistory();
-    
+    private history: Channel[] = [];
+    private channelsHistory = this.makeChannelsHistory();   
+    private channelsHistoryConf = util.newConfig([], "channels");
+
     private makeChannelsHistory() {
         const that = this;
-        var history = 
-        [
-            {
-                "name": "24 \u0422\u0435\u0445\u043d\u043e",
-                "cat": "history",
-                "url": "http://172.31.254.110:5000/c12",
-                "channel": 12
-            },
-            {
-                "name": "Discovery Science HD",
-                "cat": "history",
-                "url": "http://live02-cdn.tv.ti.ru/dtv/id248_NBN_SG--DiscoveryScienceHD/04/plst.m3u8",
-                "channel": 14
-            },
-            {
-                "name": "\u0416\u0438\u0432\u0430\u044f \u043f\u043b\u0430\u043d\u0435\u0442\u0430",
-                "cat": "history",
-                "url": "http://172.31.254.110:5000/c37",
-                "channel": 16
-            },
-            {
-                "name": "History",
-                "cat": "history",
-                "url": "http://213.59.128.162:9999/play/History",
-                "channel": 17
-            },
-            {
-                "name": "National Geographic",
-                "cat": "history",
-                "url": "http://37.208.104.194:8090/ch-256/index.m3u8",
-                "channel": 18
-            },
-            {
-                "name": "\u0417\u0432\u0435\u0437\u0434\u0430",
-                "cat": "history",
-                "url": "https://strm.yandex.ru/kal/zvezda/zvezda0.m3u8",
-                "channel": 19
-            },
-            {
-                "name": "\u041a\u0412\u041d",
-                "cat": "history",
-                "url": "http://109.248.236.41:4433/udp/238.1.1.111:1234",
-                "channel": 20
-            },
-            {
-                "name": "Galaxy",
-                "cat": "history",
-                "url": "http://hlstv.kem.211.ru/239.211.211.39/stream.m3u8",
-                "channel": 21
-            },
-            {
-                "name": "\u041c\u043e\u044f \u041f\u043b\u0430\u043d\u0435\u0442\u0430",
-                "cat": "history",
-                "url": "http://172.31.254.110:5000/c7",
-                "channel": 22
-            },
-            {
-                "name": "\u041f\u043b\u0430\u043d\u0435\u0442\u0430 HD",
-                "cat": "history",
-                "url": "http://hlstv.kem.211.ru/239.211.200.19/stream.m3u8",
-                "channel": 25
-            },
-            {
-                "name": "Nat Geo Wild",
-                "cat": "history",
-                "url": "http://37.208.104.194:8090/ch-253/index.m3u8",
-                "channel": 26
-            },
-            {
-                "name": "Animal Planet",
-                "cat": "history",
-                "url": "http://hlstv.kem.211.ru/239.211.211.34/stream.m3u8",
-                "channel": 27
-            },
-            {
-                "name": "Nat Geo",
-                "cat": "history",
-                "url": "http://hlstv.kem.211.ru/239.211.211.40/stream.m3u8",
-                "channel": 45
-            },
-            {
-                "name": "Viasat History",
-                "cat": "history",
-                "url": "http://stream.euroasia.lfstrm.tv/viasat_history/1/index.m3u8",
-                "channel": 37
-            },
-            {
-                "name": "https://www.radioparadise.com/m3u/mp3-192.m3u",
-                "cat": "history",
-                "url": "https://www.radioparadise.com/m3u/mp3-192.m3u",
-                "channel": 13
-            },
-            {
-                "name": "\u0420\u0430\u0434\u0438\u043e \u041c\u0430\u044f\u043a",
-                "cat": "history",
-                "url": "http://icecast.vgtrk.cdnvideo.ru/mayakfm_mp3_192kbps",
-                "channel": 24
-            },
-            {
-                "name": "Investigation Discovery",
-                "cat": "history",
-                "url": "http://91.204.199.145:8000/play/a02x/index.m3u8",
-                "channel": 28
-            },
-            {
-                "name": "Relax FM",
-                "cat": "history",
-                "url": "http://ic2.101.ru:8000/v13_1?setst=094548200140236612420140625&amp;tok=75urgZKbvvpyTQMDZ1H4Hfqy5FKeKsXaPod7argnUF%2BwRqI%2Fy3MhBg%3D%3D",
-                "channel": 23
-            },
-            {
-                "name": "Viasat History",
-                "cat": "history",
-                "url": "http://ott-cdn.ucom.am/s70/index.m3u8",
-                "channel": 15
-            },
-            {
-                "name": "\u0421\u0442\u0430\u043d\u0438\u0441\u043b\u0430\u0432 \u0414\u0440\u043e\u0431\u044b\u0448\u0435\u0432\u0441\u043a\u0438\u0439: \"\u0421\u0435\u043d\u0441\u0430\u0446\u0438\u0438 \u0432 \u0430\u043d\u0442\u0440\u043e\u043f\u043e\u0433\u0435\u043d\u0435\u0437\u0435\"",
-                "cat": "history",
-                "url": "https://www.youtube.com/watch?v=jFRlBQnKRrk"
-            },
-            {
-                "name": "http://ic5.101.ru:8000/a157?userid=0&setst=e5l2bv8j2v1jsagt3rtc3teoq8&tok=07790631dkVJeVFPUWNKdjRGRFp2d0tySWJST3JWQy8yVnphbHVTL3R3QmJJeEZ1WjEvY3ViV3RtUjJrZ3UrVWFualdDVA%3D%3D2",
-                "cat": "history",
-                "url": "http://ic5.101.ru:8000/a157?userid=0&setst=e5l2bv8j2v1jsagt3rtc3teoq8&tok=07790631dkVJeVFPUWNKdjRGRFp2d0tySWJST3JWQy8yVnphbHVTL3R3QmJJeEZ1WjEvY3ViV3RtUjJrZ3UrVWFualdDVA%3D%3D2",
-                "channel": 29
-            },
-            {
-                "name": "12. \u0421\u043e\u0437\u0434\u0430\u043d\u0438\u0435 \u0441\u0430\u0439\u0442\u0430 \u043d\u0430 Node.js, Express, MongoDB | \u0420\u0435\u0430\u043b\u0438\u0437\u0443\u0435\u043c \u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u044e",
-                "cat": "history",
-                "url": "https://www.youtube.com/watch?v=NDUKqVWIyo4"
-            },
-            {
-                "name": "\u041c\u0438\u0445\u0430\u0438\u043b \u041d\u0438\u043a\u0438\u0442\u0438\u043d: \"\u041c\u0435\u0441\u0442\u043e \u043f\u0440\u043e\u0438\u0441\u0445\u043e\u0436\u0434\u0435\u043d\u0438\u044f \u0436\u0438\u0437\u043d\u0438. \u041f\u0435\u0440\u0432\u0438\u0447\u043d\u044b\u0439 \u0431\u0443\u043b\u044c\u043e\u043d, \u043f\u0438\u0446\u0446\u0430 \u0438 \u043c\u0430\u0439\u043e\u043d\u0435\u0437\"",
-                "cat": "history",
-                "url": "https://www.youtube.com/watch?v=o76vD_u6uNw"
-            },
-            {
-                "name": "\u0410\u043d\u0434\u0440\u0435\u0439 \u0416\u0443\u0440\u0430\u0432\u043b\u0435\u0432: \"\u041a\u0430\u043a \u0431\u0430\u043a\u0442\u0435\u0440\u0438\u0438 \u0441\u043e\u0437\u0434\u0430\u043b\u0438 \u0430\u0442\u043c\u043e\u0441\u0444\u0435\u0440\u0443 \u0438 \u0432\u0441\u0451 \u043f\u0440\u043e\u0447\u0435\u0435 [4000-550 \u043c\u043b\u043d \u043b\u0435\u0442 \u043d\u0430\u0437\u0430\u0434]\"",
-                "cat": "history",
-                "url": "https://www.youtube.com/watch?v=7-oUVQn3yrQ"
-            },
-            {
-                "name": "\u041c\u0438\u0445\u0430\u0438\u043b \u041d\u0438\u043a\u0438\u0442\u0438\u043d: \"\u0417\u0430\u0440\u043e\u0436\u0434\u0435\u043d\u0438\u0435 \u0436\u0438\u0437\u043d\u0438 \u043d\u0430 \u0417\u0435\u043c\u043b\u0435 \u0438 \u0434\u0440\u0443\u0433\u0438\u0445 \u043f\u043b\u0430\u043d\u0435\u0442\u0430\u0445\"",
-                "cat": "history",
-                "url": "https://www.youtube.com/watch?v=j8EWEeav42Q"
-            },
-            {
-                "name": "\u041c\u0438\u0445\u0430\u0438\u043b \u041d\u0438\u043a\u0438\u0442\u0438\u043d: \"\u0418\u0441\u0442\u043e\u0440\u0438\u044f \u0444\u043e\u0442\u043e\u0441\u0438\u043d\u0442\u0435\u0437\u0430, \u0438\u043b\u0438 \u043a\u0442\u043e \u0441\u0434\u0435\u043b\u0430\u043b \u043d\u0435\u0431\u043e \u0433\u043e\u043b\u0443\u0431\u044b\u043c\".",
-                "cat": "history",
-                "url": "https://www.youtube.com/watch?v=eXc1eXbJBIU"
-            },
-            {
-                "name": "\u0410\u043d\u0442\u0438-\u0412\u0438\u0442\u0442\u0435. \u041a\u0430\u043a \u0420\u043e\u0441\u0441\u0438\u0439\u0441\u043a\u0430\u044f \u0438\u043c\u043f\u0435\u0440\u0438\u044f \u0440\u0443\u0445\u043d\u0443\u043b\u0430 \u0432 \u043f\u0440\u043e\u043f\u0430\u0441\u0442\u044c. \u0424\u0451\u0434\u043e\u0440 \u041b\u0438\u0441\u0438\u0446\u044b\u043d",
-                "cat": "history",
-                "url": "https://www.youtube.com/watch?v=i63w0xL87uA"
-            },
-            {
-                "name": "\u041d\u0435 \u0444\u0430\u043a\u0442! \u0412\u0435\u0447\u043d\u0430\u044f \u0436\u0438\u0437\u043d\u044c",
-                "cat": "history",
-                "url": "https://www.youtube.com/watch?v=882wyVeW9_U"
-            },
-            {
-                "name": "\u0414\u0438\u0441\u043a\u0443\u0441\u0441\u0438\u044f \"\u0412\u0438\u0440\u0443\u0441 \u0436\u0438\u0437\u043d\u0438. \u041c\u043e\u0436\u0435\u043c \u043b\u0438 \u043c\u044b \u0437\u0430\u043d\u0435\u0441\u0442\u0438 \u0436\u0438\u0437\u043d\u044c \u043d\u0430 \u0434\u0440\u0443\u0433\u0438\u0435 \u043f\u043b\u0430\u043d\u0435\u0442\u044b?\"",
-                "cat": "history",
-                "url": "https://www.youtube.com/watch?v=e-AUCrmAyRo"
-            },
-            {
-                "name": "\"\u0412\u043e\u0437\u043c\u043e\u0436\u043d\u0430 \u043b\u0438 \u0436\u0438\u0437\u043d\u044c \u0431\u0435\u0437 \u0432\u043e\u0434\u044b \u0438 \u0436\u0438\u0437\u043d\u044c \u0431\u0435\u0437 \u0443\u0433\u043b\u0435\u0440\u043e\u0434\u0430?\" \"\u0413\u0438\u043f\u0435\u0440\u0438\u043e\u043d\", 27.09.16",
-                "cat": "history",
-                "url": "https://www.youtube.com/watch?v=3DRSf0q-i4M"
-            },
-            {
-                "name": "\u041f\u043e\u0431\u0435\u0433\u0443\u0442 \u0432\u0441\u043b\u0435\u0434 \u0437\u0430 \u042f\u043d\u0443\u043a\u043e\u0432\u0438\u0447\u0435\u043c \u0438 \u041a\u043e\u043b\u043e\u043c\u043e\u0439\u0441\u043a\u0438\u043c. \u0420\u0443\u0441\u043b\u0430\u043d \u0411\u043e\u0440\u0442\u043d\u0438\u043a",
-                "cat": "history",
-                "url": "https://www.youtube.com/watch?v=917XT8ch1h0"
-            },
-            {
-                "name": "\u041f\u043e\u0431\u0435\u0434\u0430 \u041fopo\u0448\u0435\u043d\u043a\u043e! \u041e\u0438\u0306, \u0442\u043e ec\u0442\u044c \u0422\u0438\u043co\u0448e\u043d\u043a\u043e!",
-                "cat": "history",
-                "url": "https://www.youtube.com/watch?v=JdKqhe7-YUk"
-            },
-            {
-                "name": "\u041c\u043e\u0441\u043a\u0432\u0430 \u2014 \u041a\u0438\u0435\u0432 \u2014 \u041c\u043e\u0441\u043a\u0432\u0430 (\u0414. \u0414\u0436\u0430\u043d\u0433\u0438\u0440\u043e\u0432 , \u0411. \u041a\u0430\u0433\u0430\u0440\u043b\u0438\u0446\u043a\u0438\u0439)",
-                "cat": "history",
-                "url": "https://www.youtube.com/watch?v=EQOJP9QTvio"
-            },
-            {
-                "name": "\u041c\u0443\u0442\u043d\u043e\u0435 \u0434\u0435\u043b\u043e \u0411\u0430\u0431\u0447\u0435\u043d\u043a\u043e. \u041d\u043e\u0432\u0430\u044f \"\u0436ep\u0442\u0432a\"",
-                "cat": "history",
-                "url": "https://www.youtube.com/watch?v=S9LEpT2W-IY"
-            },
-            {
-                "name": "\u041e\u043b\u044c\u0433\u0430 \u0424\u0438\u043b\u0430\u0442\u043e\u0432\u0430: \u041a\u0430\u043a \u0438\u0437\u0443\u0447\u0430\u044e\u0442 \u043a\u043e\u0441\u0430\u0442\u043e\u043a?",
-                "cat": "history",
-                "url": "https://www.youtube.com/watch?v=rR9r4BK29II"
-            },
-            {
-                "name": "\u041c\u0438\u0445\u0430\u0438\u043b \u041b\u0435\u0431\u0435\u0434\u0435\u0432: \"\u0418\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441 \u043c\u0435\u0436\u0434\u0443 \u043c\u043e\u0437\u0433\u043e\u043c \u0438 \u043a\u043e\u043c\u043f\u044c\u044e\u0442\u0435\u0440\u043e\u043c\"",
-                "cat": "history",
-                "url": "https://www.youtube.com/watch?v=7gwb6TW5D6Q"
-            },
-            {
-                "name": "\u0411\u043e\u0440\u0438\u0441 \u0428\u0442\u0435\u0440\u043d: \"\u0417\u043e\u043e\u043f\u0430\u0440\u043a \u0447\u0435\u0440\u043d\u044b\u0445 \u0434\u044b\u0440\"",
-                "cat": "history",
-                "url": "https://www.youtube.com/watch?v=r8cyGXHGiUs"
-            },
-            {
-                "name": "\u0428\u043e\u043a! \u041c\u0430\u0442\u0435\u043c\u0430\u0442\u0438\u043a \u0441\u0434\u0435\u043b\u0430\u043b \u044d\u0442\u043e! \u0425\u0438\u043c\u0438\u044f/\u041c\u0430\u0442\u0435\u043c\u0430\u0442\u0438\u043a\u0430 \u2013\u00a0\u041f\u0440\u043e\u0441\u0442\u043e",
-                "cat": "history",
-                "url": "https://www.youtube.com/watch?v=Byw49v8uAPo"
-            },
-            {
-                "name": "\u0418\u041d\u0422\u0415\u0420",
-                "cat": "history",
-                "url": "http://176.120.119.93:805/72/index.m3u8",
-                "channel": 47
-            },
-            {
-                "name": "\u041d\u0430\u0443\u043a\u0430 2.0",
-                "cat": "history",
-                "url": "http://172.31.254.110:5000/c36",
-                "channel": 10
-            },
-            {
-                "name": "\u0420\u043e\u0441\u0441\u0438\u044f 24",
-                "cat": "history",
-                "url": "http://ott-cdn.ucom.am/s21/index.m3u8",
-                "channel": 11
-            }
-        ]
-        ;
+        
         return {
             renderChannels() {
                 const channels = [];
-                for (const h of history) {
+                for (const h of that.history) {
                     channels.push(new (class Channels implements props.Controller {
                         public readonly name = "";
                         public readonly online = true; // Always online
@@ -1495,7 +1266,7 @@ class App {
     public static confFileName() {
         return os.homedir() + '/nodeserver.stored.conf.json';
     }
-
+/*
     private _lastSavedConfHash = "";
     private saveConf() {
         util.delay(1).then(() => {
@@ -1517,21 +1288,17 @@ class App {
             }
         });
     }
-
+*/
     constructor() {
+        this.channelsHistoryConf.read().then(h => {
+            this.history = h;
+        });
+        this.channelsHistoryConf.change(h => h);
+
         this.expressApi = express();
 
         this.tablets.set(this.kindle.id, this.kindle);
         this.tablets.set(this.nexus7.id, this.nexus7);
-
-        if (fs.existsSync(App.confFileName())) {
-            const data = fs.readFileSync(App.confFileName());
-            const parsed = JSON.parse(data.toString());
-
-            Object.getOwnPropertyNames(parsed).forEach(prop => {
-                (this as any)[prop].fromJsonType(parsed[prop]);
-            })
-        }
 
         this.server = http.createServer(this.expressApi);
 

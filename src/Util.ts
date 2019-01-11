@@ -104,6 +104,7 @@ export interface Config<T> {
 
 export function newConfig<T extends Object>(initial: T, fileName: string): Config<T> {
     return new (class C implements Config<T> {
+        private _read: boolean = false;
         private _data?: T;
 
         private fullConfFilePath(): string {
@@ -112,6 +113,12 @@ export function newConfig<T extends Object>(initial: T, fileName: string): Confi
 
         read(): Promise<T> {
             return new Promise<T>((accept, reject) => {
+                if (this._read) {
+                    // Nothing to do, data was already read
+                    accept(this._data);
+                    return;
+                }
+
                 const fname = this.fullConfFilePath();
                 fs.exists(fname, (exists) => {
                     if (exists) {
@@ -119,17 +126,25 @@ export function newConfig<T extends Object>(initial: T, fileName: string): Confi
                             if (err) {
                                 reject(err);
                             } else {
-                                const parsed = JSON.parse(data.toString()) as T;
-                                this._data = parsed;
-                                accept(this._data);
+                                try {
+                                    const parsed = JSON.parse(data.toString()) as T;
+                                    this._data = parsed;
+                                    this._read = true;
+                                    accept(this._data);
+                                } catch (e) {
+                                    console.log('Bad file ', this.fullConfFilePath(), data.toString()); 
+                                    // 
+                                    reject(e);
+                                }
                             }
                         });
                     } else {
                         this._data = initial;
+                        this._read = true;
                         accept(this._data);
                     }
                 })
-            });
+            }); 
         }
 
         change(changer: (t: T) => void): Promise<void> {
@@ -137,6 +152,7 @@ export function newConfig<T extends Object>(initial: T, fileName: string): Confi
                 changer(data);
                 fs.writeFile(this.fullConfFilePath(), JSON.stringify(this._data), (err) => {
                     if (err) {
+                        console.log('Bad file ', this.fullConfFilePath(), this._data);
                         reject(err);
                     } else {
                         accept(void 0);
@@ -144,5 +160,6 @@ export function newConfig<T extends Object>(initial: T, fileName: string): Confi
                 })
             }));
         }
+
     })();
 }
