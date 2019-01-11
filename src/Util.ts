@@ -1,4 +1,6 @@
 import * as child_process from "child_process";
+import * as fs from "fs";
+import * as os from "os";
 
 export function splitLines(s: string): string[] {
     return s.split(/\r\n|\r|\n/);
@@ -93,4 +95,54 @@ export function thisOrNextDayFromHMS(hh: number, mm: number, ss: number): Date {
         d.setDate(d.getDate() + 1);
     }
     return d;
+}
+
+export interface Config<T> {
+    read(): Promise<T>;
+    change(changer: (t: T) => void): Promise<void>;
+}
+
+export function newConfig<T extends Object>(initial: T, fileName: string): Config<T> {
+    return new (class C implements Config<T> {
+        private _data?: T;
+
+        private fullConfFilePath(): string {
+            return os.homedir() + `/${fileName}.conf.json`;
+        }
+
+        read(): Promise<T> {
+            return new Promise<T>((accept, reject) => {
+                const fname = this.fullConfFilePath();
+                fs.exists(fname, (exists) => {
+                    if (exists) {
+                        fs.readFile(fname, (err, data) => {
+                            if (err) {
+                                reject(err);
+                            } else {
+                                const parsed = JSON.parse(data.toString()) as T;
+                                this._data = parsed;
+                                accept(this._data);
+                            }
+                        });
+                    } else {
+                        this._data = initial;
+                        accept(this._data);
+                    }
+                })
+            });
+        }
+
+        change(changer: (t: T) => void): Promise<void> {
+            return this.read().then(data => new Promise<void>((accept, reject) => {
+                changer(data);
+                fs.writeFile(this.fullConfFilePath(), JSON.stringify(this._data), (err) => {
+                    if (err) {
+                        reject(err);
+                    } else {
+                        accept(void 0);
+                    }
+                })
+            }));
+        }
+    })();
 }

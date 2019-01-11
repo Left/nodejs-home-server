@@ -90,6 +90,8 @@ interface JSONAble<T extends string|number|boolean> {
     fromJsonType(val: T): void;
 }
 
+
+
 namespace adbkit {
     export interface Device { 
         id: string;
@@ -182,11 +184,27 @@ class GPIORelay extends Relay implements JSONAble<boolean> {
     }
 }
 
+interface MiLightBulbState { 
+    on: boolean;
+    allWhite: boolean; 
+    brightness: number;
+    hue: number;
+}
+
 class MiLightBulb implements props.Controller {
     readonly name = "MiLight";
     readonly online = true;
     readonly ip = "192.168.121.35";
     readonly port = 8899;
+
+    constructor(private config: util.Config<MiLightBulbState>) {
+        config.read().then(conf => {
+            this.switchOn.setInternal(conf.on);
+            this.allWhite.setInternal(conf.allWhite);
+            this.brightness.setInternal(conf.brightness);
+            this.hue.setInternal(conf.hue);
+        })
+    }
 
     public readonly switchOn = new (class MiLightBulbRelay extends Relay {
         constructor(
@@ -195,28 +213,35 @@ class MiLightBulb implements props.Controller {
         }
 
         public switch(on: boolean): Promise<void> {
-            return this.pThis.send([on ? 0x42 : 0x46, 0x00, 0x55])
-                .then(() => this.setInternal(on));
+            return this.pThis.config.change(conf => conf.on = on)
+                .then(() => this.pThis.send([on ? 0x42 : 0x46, 0x00, 0x55])
+                .then(() => this.setInternal(on)));
         }
     })(this);
 
     public readonly allWhite = props.newWritableProperty<boolean>("All white", false, new props.CheckboxHTMLRenderer(), 
         (val: boolean) => {
-            if (val) {
-                this.send([0xC2, 0x00, 0x55]);
-            } else {
-                this.send([0x40, (0xff * this.hue.get() / 100), 0x55]);
-            }
+            this.config.change(conf => conf.allWhite = val).then(() => {
+                if (val) {
+                    this.send([0xC2, 0x00, 0x55]);
+                } else {
+                    this.send([0x40, (0xff * this.hue.get() / 100), 0x55]);
+                }    
+            });
         });
     
     public readonly brightness = props.newWritableProperty<number>("Brightness", 50, new props.SliderHTMLRenderer(), 
         (val: number) => {
-            this.send([0x4E, 0x2 + (0x15 * val / 100), 0x55]);
+            this.config.change(conf => conf.brightness = val).then(() => {
+                this.send([0x4E, 0x2 + (0x15 * val / 100), 0x55]);
+            });
         });
 
     public readonly hue = props.newWritableProperty<number>("Hue", 50, new props.SliderHTMLRenderer(), 
         (val: number) => {
-            this.allWhite.set(false);
+            this.config.change(conf => { conf.hue = val; conf.allWhite = false; }).then(() => {
+                this.allWhite.set(false);
+            });
         });
 
     readonly properties: props.Property<any>[] = [
@@ -758,6 +783,8 @@ class App {
     public readonly wss: WebSocket.Server;
     public currentTemp?: number;
 
+    private gpioRelays = util.newConfig({ relays: [false, false, false, false] }, "relays");
+
     private r1 = new GPIORelay("Лампа на шкафу", 38, () => this.saveConf());
     private r2 = new GPIORelay("Колонки", 40, () => this.saveConf());
     private r3 = new GPIORelay("Коридор", 36, () => this.saveConf()); 
@@ -816,7 +843,11 @@ class App {
           })
     });
 
-    private readonly miLight = new MiLightBulb();
+
+    private miLightNow = { on: false, brightness: 0, hue: 0, allWhite: true };
+    private miLightState = util.newConfig(this.miLightNow, "miLight");
+
+    private readonly miLight = new MiLightBulb(this.miLightState);
 
     private readonly kindle: Tablet = new Tablet('192.168.121.166:5556', true);
     private readonly nexus7: Tablet = new Tablet('00eaadb6', false);
@@ -1428,15 +1459,14 @@ class App {
         this.simpleCmd([['n0', 'n6'], ['clear'], ['min']], "Лента на кухне", () => {
             this.toggleRelay('KitchenRelay', 1);
         }),
-
         // Sound controls
         (() => {
             return {
                 partial: arr => {
                     const allAreKeyControls = arr.length > 0 && arr.every(k => k === 'volume_up' || k === 'volume_down');
                     if (allAreKeyControls) {
-                        const reportValue = (v: number) => this.allInformers.staticLine(String.fromCharCode(0xe000) + 
-                            Math.floor(v) + "%");
+                        const reportValue = (v: number) => this.allInformers.staticLine(
+                            String.fromCharCode(0xe000) + Math.floor(v) + "%");
 
                         reportValue(this.kindle.volume.get());
                         const last = arr[arr.length-1];
