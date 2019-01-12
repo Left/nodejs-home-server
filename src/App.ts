@@ -1127,43 +1127,51 @@ class App {
         return this.controllers.filter(c => c.online);
     }
 
-    private channelsHistoryConf2 = util.newConfig({ "channels": [] as Channel[] }, "tv_channels");
+    private channelsHistoryConf = util.newConfig({ "channels": [] as Channel[] }, "tv_channels");
     private loadedChannels: Channel[] = [];
 
-    private channelAsController(h: Channel, additionalProps: props.Property<any>[]): props.Controller {
+    private channelAsController(h: Channel, 
+        additionalPropsBefore: props.Property<any>[] = [],
+        additionalPropsAfter: props.Property<any>[] = []): props.Controller {
         const that = this;
         return new (class Channels implements props.Controller {
             public readonly name = "";
             public readonly online = true; // Always online
             public get properties(): props.Property<any>[] {
-                return Array.prototype.concat([
-                    props.newWritableProperty<number>("", (h.channel || -1),
-                        new props.SelectHTMLRenderer<number>(Array.from({ length: 50 }, (e, i) => i), _n => "" + _n),
-                        (num) => {
-                            that.channelsHistoryConf2.change(hist => {
-                                h.channel = num;
-                            })
-                        }),
-                    props.newWritableProperty<string>("", h.name, new props.SpanHTMLRenderer()),
-                    Button.create("Play [ kindle ]", () => that.playURL(that.kindle, h.url)),
-                    Button.create("Play [ nexus ]", () => that.playURL(that.nexus7, h.url))
-                ], additionalProps);
+                return Array.prototype.concat(
+                    additionalPropsBefore,
+                    [
+                        props.newWritableProperty<string>("", h.name, new props.SpanHTMLRenderer()),
+                        Button.create("Play [ kindle ]", () => that.playURL(that.kindle, h.url)),
+                        Button.create("Play [ nexus ]", () => that.playURL(that.nexus7, h.url))
+                    ], 
+                    additionalPropsAfter);
             }
         })();
     }
 
     private renderChannels() {
-        return this.channelsHistoryConf2.last().channels.map((h, index) => this.channelAsController(h, [
-            Button.create("Remove", () => {
-                this.channelsHistoryConf2.change(hist => {
-                    if (!hist.channels[index].channel) {
-                        hist.channels.splice(index, 1);
-                    }
-                }).then(() => {
-                    this.reloadAllWebClients();
-                });
-            })
-        ]));
+        return this.channelsHistoryConf.last().channels.map((h, index) => this.channelAsController(h, 
+            [
+                props.newWritableProperty<number>("", (h.channel || -1),
+                    new props.SelectHTMLRenderer<number>(Array.from({ length: 50 }, (e, i) => i), _n => "" + _n),
+                        (num) => {
+                            this.channelsHistoryConf.change(hist => {
+                                h.channel = num;
+                            })
+                        })
+            ],
+            [
+                Button.create("Remove", () => {
+                    this.channelsHistoryConf.change(hist => {
+                        if (!hist.channels[index].channel) {
+                            hist.channels.splice(index, 1);
+                        }
+                    }).then(() => {
+                        this.reloadAllWebClients();
+                    });
+                })
+            ]));
     }
 
     private reloadAllWebClients() {
@@ -1186,7 +1194,7 @@ class App {
         ],
             dynPropsArray,
             this.renderChannels(),
-            (this.showAllChannels ? this.loadedChannels.map((h, index) => this.channelAsController(h, [])) : [])
+            (this.showAllChannels ? this.loadedChannels.map((h, index) => this.channelAsController(h)) : [])
         );
     }
 
@@ -1244,7 +1252,7 @@ class App {
         this.createPowerOnOffTimerKeys('ent', Array.from(this.tablets.values()).map(t => {
             return {
                 showName: t.shortName, action: (dd: number) => {
-                    const chan = this.channelsHistoryConf2.last().channels.find(c => c.channel == dd);
+                    const chan = this.channelsHistoryConf.last().channels.find(c => c.channel == dd);
                     if (chan) {
                         if (!t.screenIsOn.get()) {
                             t.screenIsOn.set(true);
@@ -1315,7 +1323,7 @@ class App {
     }
 
     constructor() {
-        this.channelsHistoryConf2.read();
+        this.channelsHistoryConf.read();
 
         this.parseM3Us([
             "http://iptviptv.do.am/_ld/0/1_IPTV.m3u",
@@ -1650,7 +1658,7 @@ class App {
     }
 
     public nameFromUrl(url: string): Promise<string> {
-        return this.channelsHistoryConf2.read()
+        return this.channelsHistoryConf.read()
             .then(c => {
                 const f = c.channels.find(x => x.url === url && x.name != x.url);
                 if (f) {
@@ -1673,7 +1681,7 @@ class App {
         ]).then((name: string) => {
             this.allInformers.runningLine("Включаем " + name);
             // update history
-            this.channelsHistoryConf2.change(hist => {
+            this.channelsHistoryConf.change(hist => {
                 const index = hist.channels.findIndex(c => c.url === url);
                 if (index == -1) {
                     hist.channels.splice(0, 0, {
