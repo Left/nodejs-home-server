@@ -82,9 +82,21 @@ export function arraysAreEqual(a1: string[], a2: string[]) {
     return a1.length == a2.length && a1.every((el, ind) => el === a2[ind]);
 }
 
+export function isNumKey(n: string): boolean {
+    return n.length === 2 && n[0] === 'n'
+}
+
+export function getFirstNonPrefixIndex(arr: string[], prefix: string) {
+    var firstNonPref = arr.findIndex(x => x !== prefix);
+    if (firstNonPref === -1) {
+        firstNonPref = arr.length;
+    }
+    return firstNonPref;
+}
+
 export function isKeyAndNum(prefix: string[], arr: string[]): boolean {
     return arraysAreEqual(arr.slice(0, prefix.length), prefix) && 
-        arr.slice(prefix.length).every(n => n.length == 2 && n[0] === 'n');
+        arr.slice(prefix.length).every(n => isNumKey(n));
 }
 
 export function thisOrNextDayFromHMS(hh: number, mm: number, ss: number): Date {

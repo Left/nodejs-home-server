@@ -82,11 +82,15 @@ export class SelectHTMLRenderer<T> implements HTMLRederer<T> {
 
 export class SpanHTMLRenderer implements HTMLRederer<string> {
     body(prop: Property<string>): string {
-        return `<span id="${prop.id}">${prop.name} : ${prop.get()}</span>`;
+        return `<span id="${prop.id}">${this.propName(prop)}${prop.get()}</span>`;
     }
 
     updateCode(prop: Property<string>): string {
-        return `document.getElementById('${prop.id}').innerHTML = '${prop.name + ' :'}' + val;`;
+        return `document.getElementById('${prop.id}').innerHTML = '${this.propName(prop)}' + val;`;
+    }
+
+    propName(prop: Property<string>): string {
+        return prop.name ? (prop.name + ': ') : ""
     }
 }
 

@@ -8,6 +8,7 @@ import * as dgram from "dgram";
 import * as crypto from'crypto';
 
 import * as util from "./Util";
+import * as youtube from "./Youtube";
 import * as props from "./Props";
 
 var adbkit = require('adbkit')
@@ -268,7 +269,7 @@ class Tablet implements props.Controller {
     private _timer?: NodeJS.Timer;
     public get online() { return this._online; }
 
-    constructor(public readonly id: string, private readonly tryToConnect: boolean) {
+    constructor(public readonly id: string, public readonly shortName: string, private readonly tryToConnect: boolean) {
         this._name = id;
         this._androidVersion = "<Unknown>";
 
@@ -776,7 +777,6 @@ interface Channel {
     "channel"?: number;
 }
 
-
 class App {
     public expressApi: express.Express;
     public server: http.Server;
@@ -849,10 +849,12 @@ class App {
 
     private readonly miLight = new MiLightBulb(this.miLightState);
 
-    private readonly kindle: Tablet = new Tablet('192.168.121.166:5556', true);
-    private readonly nexus7: Tablet = new Tablet('00eaadb6', false);
+    private readonly kindle: Tablet = new Tablet('192.168.121.166:5556', 'Kindle', true);
+    private readonly nexus7: Tablet = new Tablet('00eaadb6', 'Nexus', false);
 
-    private readonly tablets: Map<string, Tablet> = new Map();
+    private readonly tablets: Map<string, Tablet> = new Map(
+        [this.kindle, this.nexus7].map(t => [t.id, t] as [string, Tablet])
+    );
 
     private timeProp(name: string, upto: number, onChange: (v:number)=>void) : props.WritablePropertyImpl<number> {
         return props.newWritableProperty<number>(
@@ -1105,31 +1107,41 @@ class App {
         return this.controllers.filter(c => c.online);
     }
 
-    private history: Channel[] = [];
-    private channelsHistory = this.makeChannelsHistory();   
+    private channels: Channel[] = [];
     private channelsHistoryConf = util.newConfig([], "channels");
 
-    private makeChannelsHistory() {
+    private renderChannels() {
         const that = this;
-        
-        return {
-            renderChannels() {
-                const channels = [];
-                for (const h of that.history) {
-                    channels.push(new (class Channels implements props.Controller {
-                        public readonly name = "";
-                        public readonly online = true; // Always online
-                        public get properties(): props.Property<any>[] {
-                            return [
-                                props.newWritableProperty<string>("Канал", h.name, new props.SpanHTMLRenderer()),
-                                Button.create("Play", () => that.kindle.playURL(h.url)),
-                            ];
-                        } 
-                    }));
-                }
-                return channels;
-            }
-        }
+        return that.channels.map((h, index) => {
+            return new (class Channels implements props.Controller {
+                public readonly name = "";
+                public readonly online = true; // Always online
+                public get properties(): props.Property<any>[] {
+                    return [
+                        props.newWritableProperty<number>("", (h.channel || -1), 
+                            new props.SelectHTMLRenderer<number>(Array.from({length: 50}, (e, i) => i), _n => "" + _n),
+                            (num) => {
+                                that.channelsHistoryConf.change(hist => {
+                                    h.channel = num;
+                                })
+                            }),
+                        props.newWritableProperty<string>("", h.name, new props.SpanHTMLRenderer()),
+                        Button.create("Play [ kindle ]", () => that.kindle.playURL(h.url)),
+                        Button.create("Play [ nexus ]", () => that.nexus7.playURL(h.url)),
+                        Button.create("Remove", () => { 
+                            that.channels.splice(index, 1);
+                            
+                            that.channelsHistoryConf.change(hist => {
+                                hist.splice(index, 1);
+                            }).then(() => {
+                                that.broadcastToWebClients({ type: "reloadProps" });
+                            });
+                            console.log('Remove!! ' + index);
+                        }),
+                    ];
+                } 
+            })();
+        });
     }
 
     private get controllers(): props.Controller[] {
@@ -1147,7 +1159,7 @@ class App {
             this.nexus7 
         ], 
         dynPropsArray,
-        this.channelsHistory.renderChannels()
+        this.renderChannels()
         );
     }
 
@@ -1170,64 +1182,74 @@ class App {
         };
     }
 
-    private createPowerOnOffTimerKeys(prefix: string[], showName: string, valueName: string, action: (dd: number) => void): IRKeysHandler {
+    private createPowerOnOffTimerKeys(prefix: string, actions: { showName: string, valueName?: string, action: (dd: number) => void }[]): IRKeysHandler {
         return {
             partial: arr => {
-                const ret = util.isKeyAndNum(prefix, arr);
-                if (ret) {
-                    if (arr.length == prefix.length) {
-                        this.allInformers.staticLine(showName);
-                    } else {
-                        this.allInformers.staticLine(util.numArrToVal(arr.slice(prefix.length)) + valueName);
-                    }
-                    return 1500;
-                } else {
-                    return null; // We didn't recognize the command
+                const firstNonPref = util.getFirstNonPrefixIndex(arr, prefix) 
+                if (firstNonPref == 0 || arr.slice(firstNonPref).some(x => !util.isNumKey(x))) {
+                    return null; // Not our beast
                 }
-                
+
+                const a = actions[firstNonPref % actions.length];
+                if (firstNonPref == arr.length) {
+                    // No numbers yet
+                    this.allInformers.staticLine(a.showName);
+                } else {
+                    this.allInformers.staticLine(util.numArrToVal(arr.slice(firstNonPref)) + (a.valueName || ""));
+                }
+                return 1500;                
             },
             complete: arr => {
-                const dd = util.numArrToVal(arr.slice(prefix.length));
-                action(dd);
+                const firstNonPref = util.getFirstNonPrefixIndex(arr, prefix) 
+                const dd = util.numArrToVal(arr.slice(firstNonPref));
+                actions[firstNonPref % actions.length].action(dd);
             } 
         };
     }
 
     private irKeyHandlers: IRKeysHandler[] = [
-        this.createPowerOnOffTimerKeys(['power'], "Выкл", "мин", (dd) => {
-            this.sleepAt.fireInSeconds(dd * 60);
-        }),
-        this.createPowerOnOffTimerKeys(['power', 'power'], "Вкл", "мин", (dd) => {
-            this.wakeAt.fireInSeconds(dd * 60);
-        }),
-        this.createPowerOnOffTimerKeys(['power', 'power', 'power'], "Таймер", "мин", (dd) => {
-            this.timer.fireInSeconds(dd * 60);
-        }),
-        this.createPowerOnOffTimerKeys(['power', 'power', 'power', 'power'], "Микро", "сек", (dd) => {
-            this.timer.fireInSeconds(dd);
-        }),
-        this.createPowerOnOffTimerKeys(['ent'], "Канал", "", (dd) => {
-            this.allInformers.runningLine("Включаем " + dd);
-        }),
+        this.createPowerOnOffTimerKeys('power', [
+            { showName: "Выкл", valueName: "мин", action: (dd) => { this.sleepAt.fireInSeconds(dd * 60); } },
+            { showName: "Вкл", valueName:  "мин", action: (dd) => { this.wakeAt.fireInSeconds(dd * 60); } },
+            { showName: "Таймер", valueName: "мин", action: (dd) => { this.timer.fireInSeconds(dd * 60); } },
+            { showName: "Микро", valueName: "сек", action: (dd) => { this.timer.fireInSeconds(dd); } }
+        ]),
+        this.createPowerOnOffTimerKeys('ent', Array.from(this.tablets.values()).map(t =>
+            { return { showName: t.shortName, action: (dd: number) => { 
+                const chan = this.channels.find(c => c.channel == dd);
+                if (chan) {
+                    if (!t.screenIsOn.get()) {
+                        t.screenIsOn.set(true);
+                    }
+                    this.allInformers.runningLine("Включаем " + chan.name); 
+                    t.stopPlaying()
+                        .then(() => {
+                            t.playURL(chan.url);
+                        });
+                } else {
+                    this.allInformers.runningLine("Канал " + dd + " не найден"); 
+                }
+            } }; }
+        )),
         this.simpleCmd([['fullscreen']], "MiLight", () => {
             this.miLight.switchOn.switch(!this.miLight.switchOn.get());
         }),
-        this.simpleCmd([['n0', 'n1'], ["record"]], "Лампа на шкафу", () => {
+        this.simpleCmd([["record"]], "Лампа на шкафу", () => {
             this.r1.switch(!this.r1.get());
         }),
         this.simpleCmd([['n0', 'n2']], "Колонки", () => {
             this.r2.switch(!this.r2.get());
         }),
-        this.simpleCmd([['n0', 'n3'], ['stop']], "Коридор", () => {
+        this.simpleCmd([['stop']], "Коридор", () => {
             this.r3.switch(!this.r3.get());
         }),
-        this.simpleCmd([['n0', 'n4'], ['time_shift']], "Потолок", () => {
+        this.simpleCmd([['time_shift']], "Потолок", () => {
             this.r4.switch(!this.r4.get());
         }),
-        this.simpleCmd([['n0', 'n5'], ['av_source'], ['mts']], "Потолок на кухне", () => {
+        this.simpleCmd([['av_source'], ['mts']], "Потолок на кухне", () => {
             this.toggleRelay('KitchenRelay', 0);
         }),
-        this.simpleCmd([['n0', 'n6'], ['clear'], ['min']], "Лента на кухне", () => {
+        this.simpleCmd([['clear'], ['min']], "Лента на кухне", () => {
             this.toggleRelay('KitchenRelay', 1);
         }),
         // Sound controls
@@ -1263,42 +1285,17 @@ class App {
         }       
     }
 
-    public static confFileName() {
-        return os.homedir() + '/nodeserver.stored.conf.json';
-    }
-/*
-    private _lastSavedConfHash = "";
-    private saveConf() {
-        util.delay(1).then(() => {
-            const hasho = crypto.createHash('md5');
-
-            const toSerialize = Object.keys(this)
-                .filter(prop => typeof((this as any)[prop]) == "object" && "toJsonType" in (this as any)[prop]);
-            
-            const resJson: any = {};
-            toSerialize.forEach(prop => {
-                resJson[prop] = (this as any)[prop].toJsonType();
-                hasho.update(resJson[prop].toString());
-            });
-
-            const thisSavedHash = hasho.digest("hex");
-            if (thisSavedHash != this._lastSavedConfHash) {
-                fs.writeFileSync(App.confFileName(), JSON.stringify(resJson));
-                this._lastSavedConfHash = thisSavedHash;
-            }
-        });
-    }
-*/
     constructor() {
         this.channelsHistoryConf.read().then(h => {
-            this.history = h;
+            this.channels = h;
         });
         this.channelsHistoryConf.change(h => h);
 
-        this.expressApi = express();
+        // youtube.getYoutubeInfo("https://www.youtube.com/watch?v=mmO_C9IpeRc").then(info => {
+        //     console.log(info.title, info.thumbnailUrl);
+        // });
 
-        this.tablets.set(this.kindle.id, this.kindle);
-        this.tablets.set(this.nexus7.id, this.nexus7);
+        this.expressApi = express();
 
         this.server = http.createServer(this.expressApi);
 
@@ -1415,7 +1412,7 @@ class App {
                             console.error('Shall never be here', data);
                         }
                     } catch (e) {
-                        console.error('Can not process message:', data);
+                        console.error('Can not process message:', data, e);
                     }
                 });
             } else if (url === '/web') {
@@ -1585,7 +1582,7 @@ class App {
         return util.wrapToHTML(["html", { lang: "en"}], 
             util.wrapToHTML("head", hdr.join("\n")) + "\n" +
             util.wrapToHTML("body", this.onlineControllers.map((ctrl) => {
-                return ctrl.name + "<br/>" + ctrl.properties.map((prop: props.Property<any>): string => {
+                return ctrl.name + "&nbsp;" + ctrl.properties.map((prop: props.Property<any>): string => {
                         let res = "";
 
                         res = prop.htmlRenderer.body(prop);
@@ -1619,7 +1616,6 @@ class App {
             }
         });
     }
-
 }
 
 process.on('uncaughtException', (err: Error) => {
