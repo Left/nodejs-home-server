@@ -9,11 +9,11 @@ export function get(_url: string): Promise<string> {
         let options = {
             protocol: u.protocol,
             port: +u.port,
-            path: u.pathname,
+            path: u.pathname + u.search,
             host: u.host
         };
-    
-        (u.protocol.indexOf('https') != -1 ? https : http).get(options, (resp) => {
+
+        const process = (resp: http.IncomingMessage) => {
             if (resp.statusCode == 302 || resp.statusCode == 301) {
                 get(resp.headers.location)
                     .then(data => accept(data))
@@ -31,8 +31,16 @@ export function get(_url: string): Promise<string> {
                     accept(data);
                 });
             }
-        }).on("error", (err) => {
-            decline(err);
-        });    
+        };
+   
+        if (u.protocol.indexOf('https') != -1) {
+            https.get(options, process).on("error", (err: Error) => {
+                decline(err);
+            });
+        } else {
+            http.get(options, process).on("error", (err: Error) => {
+                decline(err);
+            });
+        }
     });
 }

@@ -529,7 +529,18 @@ class Tablet implements props.Controller {
             .catch(e => console.log(e));
         this.playingUrlNow()
             .then(url => {
-                this.playingUrl.setInternal(url || "<nothing>");
+                if (url) {
+                this.app.nameFromUrl(url)
+                    .then(name => {
+                        this.playingUrl.setInternal(name);
+                    })
+                    .catch(err => {
+                        this.playingUrl.setInternal("Err");
+                    });
+                
+                } else {
+                    this.playingUrl.setInternal("<nothing>");
+                }
             })
             .catch(e => console.log(e));
     }
@@ -1100,7 +1111,7 @@ class App {
             props.newWritableProperty<boolean>("Show all channels", this.showAllChannels, new props.CheckboxHTMLRenderer(), (val: boolean) => {
                 this.showAllChannels = val;
                 this.reloadAllWebClients();
-            })
+            }),
             props.newWritableProperty("Switch devices to server", "192.168.121.38", new props.StringAndGoRendrer("Go"), (val: string) => {
                 for (const ctrl of this.dynamicControllers.values()) {
                     ctrl.send({ type: 'setProp', prop: 'websocket.server', value: val });
@@ -1638,14 +1649,14 @@ class App {
         });
     }
 
-    private nameFromUrl(url: string): Promise<string> {
+    public nameFromUrl(url: string): Promise<string> {
         return this.channelsHistoryConf2.read()
             .then(c => {
-                const f = c.channels.find(x => x.url === url);
+                const f = c.channels.find(x => x.url === url && x.name != x.url);
                 if (f) {
                     return Promise.resolve(f.name);
                 }
-                const f2 = this.loadedChannels.find(x => x.url === url);
+                const f2 = this.loadedChannels.find(x => x.url === url && x.name != x.url);
                 if (f2) {
                     return Promise.resolve(f2.name);
                 }
@@ -1714,12 +1725,10 @@ class App {
                         return prev;
                     }, {} as Channel);
 
-                    return res;
+                    return res as Channel[];
                 } else {
-                    return Promise.reject(new Error('Invalid format'));
+                    throw new Error('Invalid format');
                 }
-
-                return [] as Channel[];
             });
         })).then(arr => {
             const res = Array.prototype.concat(...arr);
