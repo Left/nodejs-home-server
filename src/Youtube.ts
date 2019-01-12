@@ -18,7 +18,6 @@ export function getYoutubeInfo(_url: string): Promise<YoutubeTrack> {
 
         if (ytbId) {
             const k = Buffer.from("aHVNQUl6YVN5QlRCbnVqNktWMVRnUWhnMk1ZcVpyQjFFUWRtUzl5aHVN", 'base64').toString().substr(3);
-            console.log(k);
 
             let options = {
                 path:  "/youtube/v3/videos?part=id%2C+snippet&key=" + k + "&id=" + ytbId,

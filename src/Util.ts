@@ -112,6 +112,7 @@ export function thisOrNextDayFromHMS(hh: number, mm: number, ss: number): Date {
 export interface Config<T> {
     read(): Promise<T>;
     change(changer: (t: T) => void): Promise<void>;
+    last(): T
 }
 
 export function newConfig<T extends Object>(initial: T, fileName: string): Config<T> {
@@ -121,6 +122,10 @@ export function newConfig<T extends Object>(initial: T, fileName: string): Confi
 
         private fullConfFilePath(): string {
             return os.homedir() + `/${fileName}.conf.json`;
+        }
+
+        last(): T {
+            return this._data || initial;
         }
 
         read(): Promise<T> {

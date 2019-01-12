@@ -3,7 +3,7 @@ import * as http from 'http';
 import * as WebSocket from 'ws';
 // import * as stream from "stream";
 import * as fs from "fs";
-import * as os from "os";
+// import * as os from "os";
 import * as dgram from "dgram";
 import * as crypto from'crypto';
 
@@ -269,7 +269,11 @@ class Tablet implements props.Controller {
     private _timer?: NodeJS.Timer;
     public get online() { return this._online; }
 
-    constructor(public readonly id: string, public readonly shortName: string, private readonly tryToConnect: boolean) {
+    constructor(
+        public readonly id: string, 
+        public readonly shortName: string, 
+        private readonly app: App, 
+        private readonly tryToConnect: boolean) {
         this._name = id;
         this._androidVersion = "<Unknown>";
 
@@ -280,11 +284,9 @@ class Tablet implements props.Controller {
             this.volume,
             this.battery,
             this.playingUrl,
-            new (class PlayLine extends props.WritablePropertyImpl<string> {
-                set(val: string): void {
-                    tbl.playURL(val);
-                }
-            })("Go play", new props.StringAndGoRendrer("Play"), ""),
+            props.newWritableProperty("Go play", "", new props.StringAndGoRendrer("Play"), (val) => {
+                this.app.playURL(tbl, val);
+            }),
             Button.create("Pause", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Pause")),
             Button.create("Play", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Play")),
             Button.create("Stop playing", () => this.stopPlaying()),
@@ -849,8 +851,8 @@ class App {
 
     private readonly miLight = new MiLightBulb(this.miLightState);
 
-    private readonly kindle: Tablet = new Tablet('192.168.121.166:5556', 'Kindle', true);
-    private readonly nexus7: Tablet = new Tablet('00eaadb6', 'Nexus', false);
+    private readonly kindle: Tablet = new Tablet('192.168.121.166:5556', 'Kindle', this, true);
+    private readonly nexus7: Tablet = new Tablet('00eaadb6', 'Nexus', this, false);
 
     private readonly tablets: Map<string, Tablet> = new Map(
         [this.kindle, this.nexus7].map(t => [t.id, t] as [string, Tablet])
@@ -1107,12 +1109,11 @@ class App {
         return this.controllers.filter(c => c.online);
     }
 
-    private channels: Channel[] = [];
-    private channelsHistoryConf = util.newConfig([], "channels");
+    private channelsHistoryConf2 = util.newConfig({ "channels": [] as Channel[] }, "tv_channels");
 
     private renderChannels() {
         const that = this;
-        return that.channels.map((h, index) => {
+        return that.channelsHistoryConf2.last().channels.map((h, index) => {
             return new (class Channels implements props.Controller {
                 public readonly name = "";
                 public readonly online = true; // Always online
@@ -1121,27 +1122,30 @@ class App {
                         props.newWritableProperty<number>("", (h.channel || -1), 
                             new props.SelectHTMLRenderer<number>(Array.from({length: 50}, (e, i) => i), _n => "" + _n),
                             (num) => {
-                                that.channelsHistoryConf.change(hist => {
+                                that.channelsHistoryConf2.change(hist => {
                                     h.channel = num;
                                 })
                             }),
                         props.newWritableProperty<string>("", h.name, new props.SpanHTMLRenderer()),
-                        Button.create("Play [ kindle ]", () => that.kindle.playURL(h.url)),
-                        Button.create("Play [ nexus ]", () => that.nexus7.playURL(h.url)),
-                        Button.create("Remove", () => { 
-                            that.channels.splice(index, 1);
-                            
-                            that.channelsHistoryConf.change(hist => {
-                                hist.splice(index, 1);
+                        Button.create("Play [ kindle ]", () => that.playURL(that.kindle, h.url)),
+                        Button.create("Play [ nexus ]", () => that.playURL(that.nexus7, h.url)),
+                        Button.create("Remove", () => {                            
+                            that.channelsHistoryConf2.change(hist => {
+                                if (!hist.channels[index].channel) {
+                                    hist.channels.splice(index, 1);
+                                }
                             }).then(() => {
-                                that.broadcastToWebClients({ type: "reloadProps" });
+                                that.reloadAllWebClients();
                             });
-                            console.log('Remove!! ' + index);
                         }),
                     ];
                 } 
             })();
         });
+    }
+
+    private reloadAllWebClients() {
+        this.broadcastToWebClients({ type: "reloadProps" });
     }
 
     private get controllers(): props.Controller[] {
@@ -1216,15 +1220,14 @@ class App {
         ]),
         this.createPowerOnOffTimerKeys('ent', Array.from(this.tablets.values()).map(t =>
             { return { showName: t.shortName, action: (dd: number) => { 
-                const chan = this.channels.find(c => c.channel == dd);
+                const chan = this.channelsHistoryConf2.last().channels.find(c => c.channel == dd);
                 if (chan) {
                     if (!t.screenIsOn.get()) {
                         t.screenIsOn.set(true);
                     }
-                    this.allInformers.runningLine("Включаем " + chan.name); 
                     t.stopPlaying()
                         .then(() => {
-                            t.playURL(chan.url);
+                            this.playURL(t, chan.url);
                         });
                 } else {
                     this.allInformers.runningLine("Канал " + dd + " не найден"); 
@@ -1286,14 +1289,7 @@ class App {
     }
 
     constructor() {
-        this.channelsHistoryConf.read().then(h => {
-            this.channels = h;
-        });
-        this.channelsHistoryConf.change(h => h);
-
-        // youtube.getYoutubeInfo("https://www.youtube.com/watch?v=mmO_C9IpeRc").then(info => {
-        //     console.log(info.title, info.thumbnailUrl);
-        // });
+        this.channelsHistoryConf2.read();
 
         this.expressApi = express();
 
@@ -1330,7 +1326,7 @@ class App {
                                     if (clockController.lcdInformer) {
                                         this.dynamicInformers.delete(ip);
                                     }
-                                    this.broadcastToWebClients({ type: "reloadProps" });
+                                    this.reloadAllWebClients();
                                     this.allInformers.runningLine('Отключено ' + clockController.name);
                                 },
                                 onTemperatureChanged: (temp: number) => {
@@ -1402,7 +1398,7 @@ class App {
                             this.allInformers.runningLine('Подключено ' + clockController.name);
 
                             // Reload
-                            this.broadcastToWebClients({ type: "reloadProps" });
+                            this.reloadAllWebClients();
 
                             ws.on('error', () => { clockController.dropConnection(); });
                             ws.on('close', () => { clockController.dropConnection(); });                        
@@ -1615,6 +1611,51 @@ class App {
                 // Ignore it
             }
         });
+    }
+
+    private nameFromUrl(url: string): Promise<string> {
+        return this.channelsHistoryConf2.read()
+            .then(c => {
+                const f = c.channels.find(x => x.url === url);
+                if (f) {
+                    return Promise.resolve(f.name);
+                }
+                return youtube.getYoutubeInfo(url)
+                    .then(u => u.title);        
+            });
+    }
+
+    public playURL(t: Tablet, _url: string): Promise<void> {
+        const url = _url.trim();
+        Promise.race([
+            this.nameFromUrl(url).catch(() => url),
+            util.delay(2000).then(() => url)
+        ]).then((name: string) => {
+            this.allInformers.runningLine("Включаем " + name);
+            // update history
+            this.channelsHistoryConf2.change(hist => {
+                const index = hist.channels.findIndex(c => c.url === url);
+                if (index == -1) {
+                    hist.channels.splice(0, 0, {
+                        "name": name,
+                        "cat": "added",
+                        "url": url
+                    });
+                } else {
+                    // Move channel to the first place
+                    const c = hist.channels[index];
+                    hist.channels.splice(index, 1);
+                    hist.channels.splice(0, 0, c);
+                }
+            }).then(() => {
+                this.reloadAllWebClients();
+            });;
+        });
+
+        this.r2.switch(true);
+
+        return t.stopPlaying()
+            .then(() => t.playURL(url));
     }
 }
 
