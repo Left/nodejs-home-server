@@ -1,4 +1,4 @@
-import * as https from 'https';
+import * as curl from "./Curl";
 import * as url from "url";
 
 interface YoutubeTrack {
@@ -19,31 +19,18 @@ export function getYoutubeInfo(_url: string): Promise<YoutubeTrack> {
         if (ytbId) {
             const k = Buffer.from("aHVNQUl6YVN5QlRCbnVqNktWMVRnUWhnMk1ZcVpyQjFFUWRtUzl5aHVN", 'base64').toString().substr(3);
 
-            let options = {
-                path:  "/youtube/v3/videos?part=id%2C+snippet&key=" + k + "&id=" + ytbId,
-                host: "www.googleapis.com",
-            };
-            https.get(options, 
-                (resp) => {
-                let data = '';
-
-                // A chunk of data has been recieved.
-                resp.on('data', (chunk) => {
-                    data += chunk;
-                });
-
-                // The whole response has been received. Print out the result.
-                resp.on('end', () => {
-                    const dd = JSON.parse(data);
-                    const snippet = dd.items[0]["snippet"];
-                    accept({ 
-                        title: snippet.title,
-                        thumbnailUrl: snippet.thumbnails.default.url
-                    });
-                });
-            }).on("error", (err) => {
-                decline(err);
-            });
+            curl.get("https://www.googleapis.com/youtube/v3/videos?part=id%2C+snippet&key=" + k + "&id=" + ytbId)
+                .then(
+                    text => {
+                        const dd = JSON.parse(text);
+                        const snippet = dd.items[0]["snippet"];
+                        accept({ 
+                            title: snippet.title,
+                            thumbnailUrl: snippet.thumbnails.default.url
+                        });
+                    }
+                )
+                .catch((err) => decline(err));
         } else {
             decline(new Error("Invalid URL: " + _url));
         }
