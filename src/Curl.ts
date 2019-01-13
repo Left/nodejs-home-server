@@ -10,7 +10,7 @@ export function get(_url: string): Promise<string> {
             protocol: u.protocol,
             port: +u.port,
             path: u.pathname + u.search,
-            host: u.host
+            host: u.hostname
         };
 
         const process = (resp: http.IncomingMessage) => {
