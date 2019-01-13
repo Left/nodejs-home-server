@@ -286,7 +286,7 @@ class Tablet implements props.Controller {
             this.battery,
             this.playingUrl,
             props.newWritableProperty("Go play", "", new props.StringAndGoRendrer("Play"), (val) => {
-                this.app.playURL(tbl, val);
+                this.app.playURL(tbl, val, "");
             }),
             Button.create("Pause", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Pause")),
             Button.create("Play", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Play")),
@@ -785,10 +785,16 @@ interface IRKeysHandler {
 }
 
 interface Channel {
-    "name": string;
-    "cat": string;
-    "url": string;
-    "channel"?: number;
+    name: string;
+    cat: string;
+    url: string;
+    channel?: number;
+}
+
+interface AceChannel {
+    name: string;
+    cat: string;
+    url: string;
 }
 
 class App {
@@ -805,6 +811,7 @@ class App {
     private r4 = new GPIORelay("Потолок", 32, this.gpioRelays, 3);
 
     private showAllChannels = false;
+    private showTorrentTVChannels = false;
 
     private ctrlGPIO = {
         name: "Комната",
@@ -1108,8 +1115,12 @@ class App {
         online: true, // Always online
         properties: [
             Button.create("Reboot server", () => util.runShell("reboot", [])),
-            props.newWritableProperty<boolean>("Show all channels", this.showAllChannels, new props.CheckboxHTMLRenderer(), (val: boolean) => {
+            props.newWritableProperty<boolean>("Show all TV channels", this.showAllChannels, new props.CheckboxHTMLRenderer(), (val: boolean) => {
                 this.showAllChannels = val;
+                this.reloadAllWebClients();
+            }),
+            props.newWritableProperty<boolean>("Show Torrent TV channels", this.showTorrentTVChannels, new props.CheckboxHTMLRenderer(), (val: boolean) => {
+                this.showTorrentTVChannels = val;
                 this.reloadAllWebClients();
             }),
             props.newWritableProperty("Switch devices to server", "192.168.121.38", new props.StringAndGoRendrer("Go"), (val: string) => {
@@ -1127,7 +1138,8 @@ class App {
         return this.controllers.filter(c => c.online);
     }
 
-    private channelsHistoryConf = util.newConfig({ "channels": [] as Channel[] }, "tv_channels");
+    private acestreamHistoryConf = util.newConfig({ channels: [] as Channel[], lastUpdate: 0 }, "acestream_tv_channels");
+    private channelsHistoryConf = util.newConfig({ channels: [] as Channel[] }, "tv_channels");
     private loadedChannels: Channel[] = [];
 
     private channelAsController(h: Channel, 
@@ -1140,11 +1152,8 @@ class App {
             public get properties(): props.Property<any>[] {
                 return Array.prototype.concat(
                     additionalPropsBefore,
-                    [
-                        props.newWritableProperty<string>("", h.name, new props.SpanHTMLRenderer()),
-                        Button.create("Play [ kindle ]", () => that.playURL(that.kindle, h.url)),
-                        Button.create("Play [ nexus ]", () => that.playURL(that.nexus7, h.url))
-                    ], 
+                    props.newWritableProperty<string>("", h.name, new props.SpanHTMLRenderer()),
+                    Array.from(that.tablets.values()).map(t => Button.create("Play [ " + t.shortName + " ]", () => that.playURL(t, h.url, h.name))), 
                     additionalPropsAfter);
             }
         })();
@@ -1194,7 +1203,14 @@ class App {
         ],
             dynPropsArray,
             this.renderChannels(),
-            (this.showAllChannels ? this.loadedChannels.map((h, index) => this.channelAsController(h)) : [])
+            (this.showAllChannels ? this.loadedChannels.map((h, index) => this.channelAsController(h)) : []),
+            (this.showTorrentTVChannels ? this.acestreamHistoryConf.last().channels.map((h, index) => {
+                return this.channelAsController({
+                    name: h.name,
+                    cat: h.cat,
+                    url: "http://192.168.121.38:6878/ace/getstream?id=" + h.url +"&hlc=1&spv=0&transcode_audio=0&transcode_mp3=0&transcode_ac3=0&preferred_audio_language=eng"
+                } as Channel);
+            }) : []),
         );
     }
 
@@ -1237,7 +1253,9 @@ class App {
             complete: arr => {
                 const firstNonPref = util.getFirstNonPrefixIndex(arr, prefix)
                 const dd = util.numArrToVal(arr.slice(firstNonPref));
-                actions[firstNonPref % actions.length].action(dd);
+                if (dd) {
+                    actions[firstNonPref % actions.length].action(dd);
+                }
             }
         };
     }
@@ -1259,7 +1277,7 @@ class App {
                         }
                         t.stopPlaying()
                             .then(() => {
-                                this.playURL(t, chan.url);
+                                this.playURL(t, chan.url, chan.name);
                             });
                     } else {
                         this.allInformers.runningLine("Канал " + dd + " не найден");
@@ -1324,6 +1342,21 @@ class App {
 
     constructor() {
         this.channelsHistoryConf.read();
+
+        this.acestreamHistoryConf.read().then(conf => {
+            if ((new Date().getTime() - conf.lastUpdate) / 1000 > 60*60) {
+                curl.get("http://pomoyka.win/trash/ttv-list/as.json")
+                    .then(text => {
+                        const aceChannels = JSON.parse(text).channels as AceChannel[];
+                        console.log("Downloaded " + aceChannels.length + " channels");
+                        this.acestreamHistoryConf.change(conf => {
+                            conf.channels = aceChannels;
+                            conf.lastUpdate = new Date().getTime();
+                        });
+                    });
+            }
+            console.log("Read " + conf.channels.length + " channels");
+        });
 
         this.parseM3Us([
             "http://iptviptv.do.am/_ld/0/1_IPTV.m3u",
@@ -1673,12 +1706,9 @@ class App {
             });
     }
 
-    public playURL(t: Tablet, _url: string): Promise<void> {
+    public playURL(t: Tablet, _url: string, _name: string): Promise<void> {
         const url = _url.trim();
-        Promise.race([
-            this.nameFromUrl(url).catch(() => url),
-            util.delay(5000).then(() => url)
-        ]).then((name: string) => {
+        const gotName = (name: string) => {
             this.allInformers.runningLine("Включаем " + name);
             // update history
             this.channelsHistoryConf.change(hist => {
@@ -1698,7 +1728,15 @@ class App {
             }).then(() => {
                 this.reloadAllWebClients();
             });;
-        });
+        };
+        if (!_name) {
+            Promise.race([
+                this.nameFromUrl(url).catch(() => url),
+                util.delay(5000).then(() => url)
+            ]).then(gotName);
+        } else {
+            gotName(_name);
+        }
 
         this.r2.switch(true);
 
