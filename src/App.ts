@@ -998,15 +998,7 @@ class App {
                 // Acestream responds OK
             })
             .catch(e => {
-                // Error means docker file is not started
-                console.log("Acestream is not started, let's try to start it");
-                util.runShell("docker", ["run", "--privileged", "-it", "--rm", "-p8621:8621", "-p6878:6878", "left76/ace:vadim-acestream"], true)
-                    .then(x => {
-                        console.log(x);
-                    })
-                    .catch(e => {
-                        console.log(e);
-                    });
+                console.log("Acestream is not started!");
             });
 
         this.channelsHistoryConf.read();
