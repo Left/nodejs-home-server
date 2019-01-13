@@ -196,3 +196,35 @@ export function newWritableProperty<T>(
         }
     })(name, htmlRenderer, initial);
 }
+
+export class Button extends WritablePropertyImpl<void> {
+    constructor(name: string, private action: () => void) {
+        super(name, new ButtonRendrer(), void 0);
+    }
+
+    set(val: void): void {
+        this.action();
+    }
+
+    static create(name: string, action: () => void): Button {
+        return new Button(name, action);
+    }
+}
+
+export abstract class Relay extends WritablePropertyImpl<boolean> {
+    constructor(readonly name: string) {
+        super(name, new CheckboxHTMLRenderer(), false);
+    }
+
+    public abstract switch(on: boolean): Promise<void>;
+
+    set(val: boolean): void {
+        this.switch(val).then(() => {
+            this.setInternal(val);
+        })
+            .catch(() => {
+                // Nothing has changed, but we fire an eent anyway
+                this.fireOnChange();
+            });
+    }
+}
