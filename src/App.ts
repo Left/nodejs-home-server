@@ -968,10 +968,11 @@ class App {
                         const reportValue = (v: number) => this.allInformers.staticLine(
                             String.fromCharCode(0xe000) + Math.floor(v) + "%");
 
-                        reportValue(this.kindle.volume.get());
                         const last = arr[arr.length - 1];
-                        this.kindle.changeVolume(last == 'volume_up').then(
-                            () => this.kindle.getVolume().then(reportValue));
+
+                        this.kindle.volume.set(this.kindle.volume.get() + (last == 'volume_up' ? 1 : -1) * 100 / 15);
+                        reportValue(this.kindle.volume.get());
+
                         return 2500;
                     } else {
                         return null; // We didn't recognize the command

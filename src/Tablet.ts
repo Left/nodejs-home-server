@@ -19,6 +19,97 @@ export interface TabletHost {
     nameFromUrl(url: string): Promise<string>;
 }
 
+class VolumeControl extends props.WritablePropertyImpl<number> {
+    private inHardNow?: number; // [0:15]
+    private chagingValue = false;
+
+    constructor(private readonly tbl: Tablet) {
+        super("Volume", new props.SliderHTMLRenderer(), 0);
+    }
+
+    set(_val: number): void {
+        const val = Math.max(0, Math.min(100, _val));
+        this.setInternal(val);
+
+        if (!this.chagingValue) {
+            this.setVolume(val);
+        }
+    }
+
+    public async setVolume(vol: number): Promise<number> {
+        this.chagingValue = true;
+        if (!this.inHardNow) {
+            this.inHardNow = await this.getVolume();
+        }
+        
+        while (Math.abs(this.inHardNow - this.get()*15/100) >= 1) {
+            // console.log(this.inHardNow, "->", this.get()*15/100);
+            let updown = "DOWN";
+            if (this.inHardNow < this.get()*15/100) {
+                updown = "UP";
+            }
+            await this.tbl.shellCmd("input keyevent KEYCODE_VOLUME_" + updown);
+            if (updown === "DOWN") {
+                this.inHardNow--;
+            } else {
+                this.inHardNow++;
+            }
+        }
+        this.chagingValue = false;
+        return this.inHardNow;
+    }
+
+    public async timerTask() {
+        if (!this.chagingValue) {
+            this.inHardNow = await this.getVolume()
+            // console.log('inHardNow: ', this.inHardNow);
+            this.setInternal(Math.min(100, Math.max(0, this.inHardNow*100/15)));
+        }
+    }
+
+    private getVolume(): Promise<number> {
+        return new Promise<number>((accept, reject) => {
+            this.tbl.shellCmd('dumpsys audio | grep -E \'STREAM|Current|Mute\'')
+                .then((str: string) => {
+                    const allTheLines = str.split('- STREAM_');
+                    const musicLines = allTheLines.filter(ll => ll.startsWith('MUSIC:'))[0];
+                    if (!musicLines || musicLines.length < 0) {
+                        reject(new Error("Empty resopnce of dumpsys audio"));
+                        return;
+                    }
+                    const musicLinesArray = util.splitLines(musicLines);
+                    const muteCountLine = musicLinesArray.filter(ll => ll.startsWith("   Mute count:"))[0];
+                    const mutedLine = musicLinesArray.filter(ll => ll.startsWith("   Muted:"))[0];
+
+                    if (!!mutedLine && mutedLine !== '   Muted: false') {
+                        accept(0);
+                    } else if (!!muteCountLine && muteCountLine !== '   Mute count: 0') {
+                        accept(0);
+                    } else {
+                        const currentLineStart = "   Current:";
+                        const currVolLine = musicLinesArray.filter(ll => ll.startsWith(currentLineStart))[0];
+                        const allValues = currVolLine.substring(currentLineStart.length + 1).split(', ');
+                        const currVol = allValues.filter(ll => ll.startsWith("2:"))[0];
+                        if (!!currVol) {
+                            //const maxVol = allValues.filter(ll => ll.startsWith("1000:"))[0];
+                            const retVol = (+(currVol.split(': ')[1]));
+                            // console.log('++>>', retVol);
+                            accept(retVol);
+                        } else {
+                            const currVol = allValues.filter(ll => ll.startsWith("2 (speaker):"))[0];
+                            const retVol = +(currVol.split(': ')[1]);
+                            // console.log('-->>', retVol);
+                            accept(retVol);
+                        }
+
+                    }
+                })
+                .catch(err => reject(err));
+        });
+    }
+
+}
+
 export class Tablet implements props.Controller {
     private _name: string;
     private _androidVersion: string;
@@ -53,15 +144,7 @@ export class Tablet implements props.Controller {
         ];
     }
 
-    public volume = new (class VolumeControl extends props.WritablePropertyImpl<number> {
-        constructor(private readonly tbl: Tablet) {
-            super("Volume", new props.SliderHTMLRenderer(), 0);
-        }
-
-        set(val: number): void {
-            this.tbl.setVolume(val);
-        }
-    })(this);
+    public volume = new VolumeControl(this);
 
     private battery = new props.PropertyImpl<string>("Battery", new props.SpanHTMLRenderer(), "");
 
@@ -121,7 +204,8 @@ export class Tablet implements props.Controller {
         return Promise.resolve(void 0);
     }
 
-    private shellCmd(cmd: string): Promise<string> {
+    public shellCmd(cmd: string): Promise<string> {
+        // console.log(this.shortName, cmd);
         return this.connectIfNeeded().then(
             () => new Promise<string>((accept, reject) => {
                 adbClient.shell(this.id, cmd)
@@ -132,8 +216,6 @@ export class Tablet implements props.Controller {
                     .catch((err: Error) => reject(err));
             }));
     };
-
-    private settingVolume = Promise.resolve(void 0);
 
     public stopPlaying(): Promise<void> {
         return this.shellCmd("am force-stop org.videolan.vlc").then(() => void 0);
@@ -146,76 +228,6 @@ export class Tablet implements props.Controller {
             .then(() => {
                 return Promise.resolve(void 0);
             }));
-    }
-
-    public changeVolume(up: boolean): Promise<void> {
-        return this.getVolume().then((volNow: number) => {
-            if ((volNow < 5 && !up) || (volNow > 95 && up)) {
-                return Promise.resolve(void 0);
-            }
-
-            return this.shellCmd("input keyevent KEYCODE_VOLUME_" + (up ? "UP" : "DOWN")).then(() => void 0)
-        });
-    }
-
-    public setVolume(vol: number): Promise<void> {
-        return this.settingVolume.then(() =>
-            this.settingVolume = this.getVolume().then(volNow => {
-                var times = (volNow - vol) / 15;
-                var updown = "DOWN";
-                if (times < 0) {
-                    updown = "UP";
-                    times = -times;
-                }
-                const shellCmd = ("input keyevent KEYCODE_VOLUME_" + updown + ";").repeat(times);
-                if (!!shellCmd) {
-                    return this.shellCmd(shellCmd)
-                        .then(() => {
-                            return this.settingVolume = Promise.resolve(void 0);
-                        });
-                } else {
-                    return this.settingVolume = Promise.resolve(void 0);
-                }
-            }));
-    }
-
-    public getVolume(): Promise<number> {
-        return new Promise<number>((accept, reject) => {
-            this.shellCmd('dumpsys audio | grep -E \'STREAM|Current|Mute\'')
-                .then((str: string) => {
-                    const allTheLines = str.split('- STREAM_');
-                    const musicLines = allTheLines.filter(ll => ll.startsWith('MUSIC:'))[0];
-                    if (!musicLines || musicLines.length < 0) {
-                        reject(new Error("Empty resopnce of dumpsys audio"));
-                        return;
-                    }
-                    const musicLinesArray = util.splitLines(musicLines);
-                    const muteCountLine = musicLinesArray.filter(ll => ll.startsWith("   Mute count:"))[0];
-                    const mutedLine = musicLinesArray.filter(ll => ll.startsWith("   Muted:"))[0];
-
-                    if (!!mutedLine && mutedLine !== '   Muted: false') {
-                        accept(0);
-                    } else if (!!muteCountLine && muteCountLine !== '   Mute count: 0') {
-                        accept(0);
-                    } else {
-                        const currentLineStart = "   Current:";
-                        const currVolLine = musicLinesArray.filter(ll => ll.startsWith(currentLineStart))[0];
-                        const allValues = currVolLine.substring(currentLineStart.length + 1).split(', ');
-                        const currVol = allValues.filter(ll => ll.startsWith("2:"))[0];
-                        if (!!currVol) {
-                            const maxVol = allValues.filter(ll => ll.startsWith("1000:"))[0];
-                            const retVol = (+(currVol.split(': ')[1]) / +(maxVol.split(': ')[1]) * 100)
-                            accept(retVol);
-                        } else {
-                            const currVol = allValues.filter(ll => ll.startsWith("2 (speaker):"))[0];
-                            const retVol = (+(currVol.split(': ')[1]) / 15.) * 100.;
-                            accept(retVol);
-                        }
-
-                    }
-                })
-                .catch(err => reject(err));
-        });
     }
 
     public getBatteryLevel(): Promise<number> {
@@ -259,11 +271,13 @@ export class Tablet implements props.Controller {
             this._name = props['ro.product.model'];
             this._androidVersion = props['ro.build.version.release'];
 
-            this._timer = setInterval(() => {
-                this.timerTask();
-            }, 10000);
+            if (!this._timer) {
+                this._timer = setInterval(() => {
+                    this.timerTask();
+                }, 10000);
 
-            this.timerTask();
+                this.timerTask();
+            }
 
             this._online = true;
 
@@ -271,36 +285,22 @@ export class Tablet implements props.Controller {
         });
     }
 
-    public timerTask() {
-        this.screenIsSwitchedOn().then(on => {
-            this.screenIsOn.setInternal(on);
-        });
-        this.getVolume()
-            .then(vol => {
-                this.volume.setInternal(vol);
-            })
-            .catch(e => console.log(e));
-        this.getBatteryLevel()
-            .then(vol => {
-                this.battery.setInternal(vol + "%");
-            })
-            .catch(e => console.log(e));
-        this.playingUrlNow()
-            .then(url => {
-                if (url) {
-                this.app.nameFromUrl(url)
-                    .then(name => {
-                        this.playingUrl.setInternal(name);
-                    })
-                    .catch(err => {
-                        this.playingUrl.setInternal("Err");
-                    });
-                
-                } else {
-                    this.playingUrl.setInternal("<nothing>");
-                }
-            })
-            .catch(e => console.log(e));
+    public async timerTask() {
+        this.screenIsOn.setInternal(await this.screenIsSwitchedOn());        
+        await this.volume.timerTask();
+        this.battery.setInternal(await this.getBatteryLevel() + "%");
+        const url = await this.playingUrlNow();
+        if (url) {
+            this.app.nameFromUrl(url)
+                .then(name => {
+                    this.playingUrl.setInternal(name);
+                })
+                .catch(err => {
+                    this.playingUrl.setInternal("Err");
+                });        
+        } else {
+            this.playingUrl.setInternal("<nothing>");
+        }
     }
 
     public playingUrlNow(): Promise<string | undefined> {
