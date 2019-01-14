@@ -729,8 +729,7 @@ class App {
 
         const kr = this.findDynController('KitchenRelay');
         if (kr) {
-            const stripeRelay = kr.relays[1];
-            async function blinkKitchenStripe() {
+            async function blinkKitchenStripe(stripeRelay: props.Relay) {
                 const wasOn = stripeRelay.get();
                 for (var i = 0; i < 3; ++i) {
                     stripeRelay.set(false);
@@ -740,7 +739,8 @@ class App {
                 }
                 stripeRelay.set(wasOn);
             }
-            blinkKitchenStripe();
+            blinkKitchenStripe(kr.relays[1]);
+            blinkKitchenStripe(this.r3);
         }
 
         blinkMiLight();
@@ -896,10 +896,11 @@ class App {
                 if (firstNonPref == arr.length) {
                     // No numbers yet
                     this.allInformers.staticLine(a.showName);
+                    return 3000;
                 } else {
                     this.allInformers.staticLine(util.numArrToVal(arr.slice(firstNonPref)) + (a.valueName || ""));
+                    return 1500;
                 }
-                return 1500;
             },
             complete: arr => {
                 const firstNonPref = util.getFirstNonPrefixIndex(arr, prefix)
@@ -1357,15 +1358,15 @@ class App {
                 }
                 const f2 = this.loadedChannels.find(x => x.url === url && x.name != x.url);
                 if (f2) {
-                    return Promise.resolve(f2.name);
+                    return Promise.resolve(f2.name + " (TV)");
                 }
                 const f3 = this.acestreamHistoryConf.last().channels.find(x => url === this.toAceUrl(x.url));
                 if (f3) {
-                    return Promise.resolve(f3.name);
+                    return Promise.resolve(f3.name + " (Torrent)");
                 }
                 
                 return youtube.getYoutubeInfo(url)
-                    .then(u => u.title);
+                    .then(u => u.title + " (Youtube)");
             });
     }
 
