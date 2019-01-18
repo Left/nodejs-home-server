@@ -422,7 +422,7 @@ interface IRKeysHandler {
     /**
      * This method should check array and return milliseconds before accepting
      */
-    partial(arr: string[]): number | null;
+    partial(arr: string[], final: boolean): number | null;
     /**
      * Accept the command
      */
@@ -962,16 +962,16 @@ class App {
         // Sound controls
         (() => {
             return {
-                partial: arr => {
+                partial: (arr, final) => {
                     const allAreKeyControls = arr.length > 0 && arr.every(k => k === 'volume_up' || k === 'volume_down');
                     if (allAreKeyControls) {
-                        const reportValue = (v: number) => this.allInformers.staticLine(
-                            String.fromCharCode(0xe000) + Math.floor(v) + "%");
+                        if (!final) {
+                            const last = arr[arr.length - 1];
 
-                        const last = arr[arr.length - 1];
-
-                        this.kindle.volume.set(this.kindle.volume.get() + (last == 'volume_up' ? 1 : -1) * 100 / 15);
-                        reportValue(this.kindle.volume.get());
+                            this.kindle.volume.set(this.kindle.volume.get() + (last == 'volume_up' ? 1 : -1) * 100 / 15);
+                            this.allInformers.staticLine(
+                                String.fromCharCode(0xe000) + Math.floor(this.kindle.volume.get()) + "%")
+                        }
 
                         return 2500;
                     } else {
@@ -1091,7 +1091,7 @@ class App {
                                         irState.seq.push(keyId);
                                         var toHandle;
                                         for (const handler of this.irKeyHandlers) {
-                                            const toWait = handler.partial(irState.seq);
+                                            const toWait = handler.partial(irState.seq, false);
                                             if (toWait != null) {
                                                 toHandle = handler;
                                                 irState.wait = toWait;
@@ -1108,7 +1108,7 @@ class App {
                                             const now = new Date().getTime();
                                             if ((now - irState.lastRemote) >= irState.wait) {
                                                 // Go!
-                                                if (irState.handler && irState.handler.partial(irState.seq) !== null) {
+                                                if (irState.handler && irState.handler.partial(irState.seq, true) !== null) {
                                                     irState.handler.complete(irState.seq);
                                                 }
 
