@@ -1,6 +1,8 @@
 import * as props from "./Props";
 import * as util from "./Util";
 
+import * as stream from 'stream';
+
 export var adbkit = require('adbkit')
 export var adbClient = adbkit.createClient()
 
@@ -17,6 +19,13 @@ export interface Tracker {
 export interface TabletHost {
     playURL(t: Tablet, url: string, name: string): Promise<void>
     nameFromUrl(url: string): Promise<string>;
+}
+
+export enum SurfaceOrientation {
+    PORTRAIT = 0,
+    LANDSCAPE = 1,
+    PORTRAIT180 = 2,
+    LANDSCAPE180 = 3,
 }
 
 class VolumeControl extends props.WritablePropertyImpl<number> {
@@ -70,7 +79,8 @@ class VolumeControl extends props.WritablePropertyImpl<number> {
     private getVolume(): Promise<number> {
         return new Promise<number>((accept, reject) => {
             this.tbl.shellCmd('dumpsys audio | grep -E \'STREAM|Current|Mute\'')
-                .then((str: string) => {
+                .then((val: string) => {
+                    let str = val.toString();
                     const allTheLines = str.split('- STREAM_');
                     const musicLines = allTheLines.filter(ll => ll.startsWith('MUSIC:'))[0];
                     if (!musicLines || musicLines.length < 0) {
@@ -133,6 +143,7 @@ export class Tablet implements props.Controller {
             this.screenIsOn,
             this.volume,
             this.battery,
+            this.orientation,
             this.playingUrl,
             props.newWritableProperty("Go play", "", new props.StringAndGoRendrer("Play"), (val) => {
                 this.app.playURL(tbl, val, "");
@@ -147,6 +158,10 @@ export class Tablet implements props.Controller {
     public volume = new VolumeControl(this);
 
     private battery = new props.PropertyImpl<string>("Battery", new props.SpanHTMLRenderer(), "");
+    private orientation = new props.PropertyImpl<SurfaceOrientation>(
+        "Orientation", 
+        new props.SpanHTMLRenderer<SurfaceOrientation>(or => SurfaceOrientation[or]), 
+        SurfaceOrientation.PORTRAIT);
 
     private playingUrl = new props.PropertyImpl<string>("Now playing", new props.SpanHTMLRenderer(), "");
 
@@ -205,16 +220,18 @@ export class Tablet implements props.Controller {
     }
 
     public shellCmd(cmd: string): Promise<string> {
-        // console.log(this.shortName, cmd);
+        return this.shellCmdBuf(cmd)
+            .then(buf => buf.toString());
+    }
+
+    public shellCmdStream(cmd: string): Promise<stream.Stream> {
         return this.connectIfNeeded().then(
-            () => new Promise<string>((accept, reject) => {
-                adbClient.shell(this.id, cmd)
-                    .then(adbkit.util.readAll)
-                    .then((output: string) => {
-                        accept(output.toString());
-                    })
-                    .catch((err: Error) => reject(err));
-            }));
+            () => adbClient.shell(this.id, cmd));
+    };
+
+    public shellCmdBuf(cmd: string): Promise<Buffer> {
+        return this.shellCmdStream(cmd)
+            .then(adbkit.util.readAll as () => Buffer) as Promise<Buffer>;
     };
 
     public stopPlaying(): Promise<void> {
@@ -245,8 +262,7 @@ export class Tablet implements props.Controller {
             ]);
 
             this.shellCmd('dumpsys power | grep -E \'' + Array.from(data.keys()).join('|') + '\'')
-                .then((output: string) => {
-                    const str = output.toString();
+                .then((str: string) => {
                     const lines: string[] = str.split(/\r\n|\r|\n/);
                     for (const line of lines) {
                         const trimmed = line.trim();
@@ -286,7 +302,7 @@ export class Tablet implements props.Controller {
     }
 
     public async timerTask() {
-        this.screenIsOn.setInternal(await this.screenIsSwitchedOn());        
+        this.screenIsOn.setInternal(await this.screenIsSwitchedOn());
         await this.volume.timerTask();
         this.battery.setInternal(await this.getBatteryLevel() + "%");
         const url = await this.playingUrlNow();
@@ -301,6 +317,7 @@ export class Tablet implements props.Controller {
         } else {
             this.playingUrl.setInternal("<nothing>");
         }
+        this.orientation.setInternal(await this.orientationNow());
     }
 
     public playingUrlNow(): Promise<string | undefined> {
@@ -316,6 +333,18 @@ export class Tablet implements props.Controller {
                 return undefined;
             }
         )
+    }
+
+    public orientationNow(): Promise<SurfaceOrientation> {
+        return this.shellCmd("dumpsys input | grep 'SurfaceOrientation'")
+            .then(res => {
+                let val = +res.toString().split(':')[1];
+                return val;
+            });
+    }
+
+    public screenshot(): Promise<stream.Stream> {
+        return adbClient.screencap(this.id);
     }
 
     public stop() {

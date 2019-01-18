@@ -1210,6 +1210,14 @@ class App {
                 }
             }));
         });
+        router.get('/tablet_screen', (req, res) => {
+            this.kindle
+                .screenshot()
+                .then(buf => {
+                    res.contentType('image/png');
+                    buf.pipe(res);
+                });
+        });
         router.get('/index.html', (req, res) => {
             res.contentType('html');
             res.send(this.renderToHTML());
