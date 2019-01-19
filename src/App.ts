@@ -461,10 +461,37 @@ class App implements TabletHost {
     public wakeAt = this.createTimer("Вкл", "on", d => {
         console.log("WAKE", d);
         //this.nexus7.screenIsOn.set(true);
-        for (const wo of this.relaysState.wasOnIds) {
-            (ClassWithId.byId(wo) as Relay).set(true);
+        // for (const wo of this.relaysState.wasOnIds) {
+        //     (ClassWithId.byId(wo) as Relay).set(true);
+        // }
+        const wake = async () => {
+            this.allInformers.runningLine("Просыпаемся...");
+
+            await util.delay(2000);
+            this.miLight.brightness.set(50);
+            await util.delay(100);
+            this.miLight.allWhite.set(true);
+            await util.delay(100);
+            this.miLight.switchOn.set(true);
+
+            this.r1.switch(true);
+
+            this.kindle.screenIsOn.set(true);
+            await util.delay(100)
+            this.kindle.volume.set(20);
+            await util.delay(100)
+            const chan = (await this.channelsHistoryConf.read()).channels.find(c => c.channel === 1);
+            if (chan) {
+                await this.kindle.stopPlaying();
+                await this.playChannel(this.kindle, chan);
+            }
+
+            const kr = this.findDynController('KitchenRelay');
+            if (kr) {
+                kr.relays[1].switch(true);
+            }
         }
-        // this.miLight.brightness.set(50);
+        wake();
     });
 
     private ctrlControlOther = {

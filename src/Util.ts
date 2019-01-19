@@ -147,8 +147,10 @@ export function newConfig<T extends Object>(initial: T, fileName: string): Confi
                 fs.exists(fname, (exists) => {
                     if (exists) {
                         fs.readFile(fname, (err, data) => {
-                            if (err) {
-                                reject(err);
+                            if (err) {      
+                                this._data = initial;
+                                this._read = true;
+                                accept(this._data);
                             } else {
                                 try {
                                     const parsed = JSON.parse(data.toString()) as T;
@@ -156,9 +158,11 @@ export function newConfig<T extends Object>(initial: T, fileName: string): Confi
                                     this._read = true;
                                     accept(this._data);
                                 } catch (e) {
-                                    console.log('Bad file ', this.fullConfFilePath(), data.toString()); 
-                                    // 
-                                    reject(e);
+                                    console.log('Bad file ', this.fullConfFilePath(), data.toString(), e); 
+                                    this._data = initial;
+                                    this._read = true;
+                                    accept(this._data);
+                                    this.writeFileAsync();
                                 }
                             }
                         });
@@ -172,8 +176,14 @@ export function newConfig<T extends Object>(initial: T, fileName: string): Confi
         }
 
         change(changer: (t: T) => void): Promise<void> {
-            return this.read().then(data => new Promise<void>((accept, reject) => {
+            return this.read().then(data => {
                 changer(data);
+                return this.writeFileAsync();
+            });
+        }
+
+        writeFileAsync() : Promise<void> {
+            return new Promise<void>((accept, reject) => fs.unlink(this.fullConfFilePath(), (err) => {
                 fs.writeFile(this.fullConfFilePath(), JSON.stringify(this._data), (err) => {
                     if (err) {
                         console.log('Bad file ', this.fullConfFilePath(), this._data);
@@ -184,6 +194,7 @@ export function newConfig<T extends Object>(initial: T, fileName: string): Confi
                 })
             }));
         }
+
 
     })();
 }
