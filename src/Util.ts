@@ -33,7 +33,14 @@ export function wrapToHTML(tag: string| [string, {[k: string]: string}], body?: 
 } 
 
 export function toHMS(d: Date): string {
-    return d.getHours() + ":" + d.getMinutes() + "." + d.getSeconds();
+    function toDoubleZero(x: number): string {
+        if (x > 9) {
+            return '' + x;
+        } else {
+            return '0' + x;
+        }
+    }
+    return toDoubleZero(d.getHours()) + ":" + toDoubleZero(d.getMinutes()) + "." + toDoubleZero(Math.floor(d.getSeconds()));
 }
 
 export function toHourMinSec(seconds: number): string {

@@ -1,4 +1,4 @@
-import * as props from "./Props";
+import { Relay, WritablePropertyImpl, SliderHTMLRenderer, Controller, newWritableProperty, StringAndGoRendrer, Button, SpanHTMLRenderer, PropertyImpl, Property } from "./Props";
 import * as util from "./Util";
 import { LcdInformer } from './Informer';
 
@@ -30,12 +30,12 @@ export enum SurfaceOrientation {
     LANDSCAPE180 = 3,
 }
 
-class VolumeControl extends props.WritablePropertyImpl<number> {
+class VolumeControl extends WritablePropertyImpl<number> {
     private inHardNow?: number; // [0:15]
     private chagingValue = false;
 
     constructor(private readonly tbl: Tablet) {
-        super("Volume", new props.SliderHTMLRenderer(), 0);
+        super("Volume", new SliderHTMLRenderer(), 0);
     }
 
     set(_val: number): void {
@@ -122,7 +122,7 @@ class VolumeControl extends props.WritablePropertyImpl<number> {
 
 }
 
-export class Tablet implements props.Controller {
+export class Tablet implements Controller {
     private _name: string;
     private _androidVersion: string;
     public get name() { return this._online ? `${this._name}, android ${this._androidVersion}` : "Offline"; }
@@ -147,27 +147,27 @@ export class Tablet implements props.Controller {
             this.battery,
             this.orientation,
             this.playingUrl,
-            props.newWritableProperty("Go play", "", new props.StringAndGoRendrer("Play"), (val) => {
+            newWritableProperty("Go play", "", new StringAndGoRendrer("Play"), (val) => {
                 this.app.playURL(tbl, val, "");
             }),
-            props.Button.create("Pause", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Pause")),
-            props.Button.create("Play", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Play")),
-            props.Button.create("Stop playing", () => this.stopPlaying()),
-            props.Button.create("Reset", () => this.shellCmd("reboot")),
+            Button.create("Pause", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Pause")),
+            Button.create("Play", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Play")),
+            Button.create("Stop playing", () => this.stopPlaying()),
+            Button.create("Reset", () => this.shellCmd("reboot")),
         ];
     }
 
     public volume = new VolumeControl(this);
 
-    private battery = new props.PropertyImpl<string>("Battery", new props.SpanHTMLRenderer(), "");
-    private orientation = new props.PropertyImpl<SurfaceOrientation>(
+    private battery = new PropertyImpl<string>("Battery", new SpanHTMLRenderer(), "");
+    private orientation = new PropertyImpl<SurfaceOrientation>(
         "Orientation", 
-        new props.SpanHTMLRenderer<SurfaceOrientation>(or => SurfaceOrientation[or]), 
+        new SpanHTMLRenderer<SurfaceOrientation>(or => SurfaceOrientation[or]), 
         SurfaceOrientation.PORTRAIT);
 
-    private playingUrl = new props.PropertyImpl<string>("Now playing", new props.SpanHTMLRenderer(), "");
+    private playingUrl = new PropertyImpl<string>("Now playing", new SpanHTMLRenderer(), "");
 
-    public screenIsOn = new (class TabletOnOffRelay extends props.Relay {
+    public screenIsOn = new (class TabletOnOffRelay extends Relay {
         constructor(private readonly tbl: Tablet) {
             super("Screen on");
         }
@@ -188,7 +188,7 @@ export class Tablet implements props.Controller {
         }
    })(this);
 
-    public readonly properties: props.Property<any>[];
+    public readonly properties: Property<any>[];
 
     public serializable(): any {
         return {

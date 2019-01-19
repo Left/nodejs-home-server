@@ -605,32 +605,41 @@ class App implements TabletHost {
                     return null; // Not our beast
                 }
 
-                const a = actions[firstNonPref % actions.length];
+                const a = actions[(firstNonPref - 1) % actions.length];
                 if (firstNonPref == arr.length) {
                     // No numbers yet
                     this.allInformers.staticLine(a.showName);
                     return 3000;
                 } else {
+                    // Numbers are here
                     this.allInformers.staticLine(util.numArrToVal(arr.slice(firstNonPref)) + (a.valueName || ""));
-                    return 1500;
+                    return 2000;
                 }
             },
             complete: arr => {
                 const firstNonPref = util.getFirstNonPrefixIndex(arr, prefix)
                 const dd = util.numArrToVal(arr.slice(firstNonPref));
                 if (dd) {
-                    actions[firstNonPref % actions.length].action(dd);
+                    actions[(firstNonPref - 1) % actions.length].action(dd);
                 }
             }
         };
     }
 
+    private timerIn(
+            val: number,
+            name: string,
+            timer: { val: Date | null, fireInSeconds: (sec: number) => void}): void {
+        timer.fireInSeconds(val);
+        util.delay(3000).then(() => 
+            this.allInformers.runningLine(name + " в " + util.toHMS(timer.val!)) );
+    }
+
     private irKeyHandlers: IRKeysHandler[] = [
         this.createPowerOnOffTimerKeys('power', [
-            { showName: "Выкл", valueName: "мин", action: (dd) => { this.sleepAt.fireInSeconds(dd * 60); } },
-            { showName: "Вкл", valueName: "мин", action: (dd) => { this.wakeAt.fireInSeconds(dd * 60); } },
-            { showName: "Таймер", valueName: "мин", action: (dd) => { this.timer.fireInSeconds(dd * 60); } },
-            { showName: "Микро", valueName: "сек", action: (dd) => { this.timer.fireInSeconds(dd); } }
+            { showName: "Выкл", valueName: "мин", action: (dd) => this.timerIn(dd * 60, "Выключение", this.sleepAt) },
+            { showName: "Вкл", valueName: "мин", action: (dd) => this.timerIn(dd * 60, "Включение", this.wakeAt) },
+            { showName: "Таймер", valueName: "мин", action: (dd) => this.timerIn(dd * 60, "Таймер", this.timer) }
         ]),
         this.createPowerOnOffTimerKeys('ent', Array.from(this.tablets.values()).map(t => {
             return {
