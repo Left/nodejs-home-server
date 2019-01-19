@@ -9,9 +9,10 @@ import * as crypto from 'crypto';
 
 import * as curl from "./Curl";
 import * as util from "./Util";
-import * as youtube from "./Youtube";
-import * as props from "./Props";
-import * as tablet from "./Tablet";
+import { getYoutubeInfo } from "./Youtube";
+import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, PropertyImpl, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty } from "./Props";
+import { TabletHost, Tablet, adbClient, Tracker, Device } from "./Tablet";
+import { LcdInformer, CompositeLcdInformer } from './Informer';
 
 interface PingResult {
     type: 'pingresult';
@@ -34,7 +35,7 @@ interface Weight extends Msg {
     value: number;
 }
 
-interface Button extends Msg {
+interface ButtonPressed extends Msg {
     type: 'button';
     value: boolean;
 }
@@ -83,10 +84,10 @@ interface IRKey extends Msg {
     key: string;
 }
 
-type AnyMessage = Log | Temp | Hello | IRKey | Weight | Button | PingResult | RelayState;
+type AnyMessage = Log | Temp | Hello | IRKey | Weight | ButtonPressed | PingResult | RelayState;
 
 
-class GPIORelay extends props.Relay {
+class GPIORelay extends Relay {
     private _init: Promise<void>;
     private _modeWasSet: boolean = false;
     static readonly gpioCmd = "/root/WiringOP/gpio/gpio";
@@ -139,7 +140,7 @@ interface MiLightBulbState {
     hue: number;
 }
 
-class MiLightBulb implements props.Controller {
+class MiLightBulb implements Controller {
     readonly name = "MiLight";
     readonly online = true;
     readonly ip = "192.168.121.35";
@@ -154,7 +155,7 @@ class MiLightBulb implements props.Controller {
         })
     }
 
-    public readonly switchOn = new (class MiLightBulbRelay extends props.Relay {
+    public readonly switchOn = new (class MiLightBulbRelay extends Relay {
         constructor(
             readonly pThis: MiLightBulb) {
             super("On/off");
@@ -167,7 +168,7 @@ class MiLightBulb implements props.Controller {
         }
     })(this);
 
-    public readonly allWhite = props.newWritableProperty<boolean>("All white", false, new props.CheckboxHTMLRenderer(),
+    public readonly allWhite = newWritableProperty<boolean>("All white", false, new CheckboxHTMLRenderer(),
         (val: boolean) => {
             this.config.change(conf => conf.allWhite = val).then(() => {
                 if (val) {
@@ -178,21 +179,21 @@ class MiLightBulb implements props.Controller {
             });
         });
 
-    public readonly brightness = props.newWritableProperty<number>("Brightness", 50, new props.SliderHTMLRenderer(),
+    public readonly brightness = newWritableProperty<number>("Brightness", 50, new SliderHTMLRenderer(),
         (val: number) => {
             this.config.change(conf => conf.brightness = val).then(() => {
                 this.send([0x4E, 0x2 + (0x15 * val / 100), 0x55]);
             });
         });
 
-    public readonly hue = props.newWritableProperty<number>("Hue", 50, new props.SliderHTMLRenderer(),
+    public readonly hue = newWritableProperty<number>("Hue", 50, new SliderHTMLRenderer(),
         (val: number) => {
             this.config.change(conf => { conf.hue = val; conf.allWhite = false; }).then(() => {
                 this.allWhite.set(false);
             });
         });
 
-    readonly properties: props.Property<any>[] = [
+    readonly properties: Property<any>[] = [
         this.switchOn,
         this.allWhite,
         this.brightness,
@@ -215,7 +216,7 @@ class MiLightBulb implements props.Controller {
     }
 }
 
-class ControllerRelay extends props.Relay {
+class ControllerRelay extends Relay {
     constructor(
         private readonly controller: ClockController,
         private readonly index: number,
@@ -236,12 +237,6 @@ class ControllerRelay extends props.Relay {
     }
 }
 
-interface LcdInformer {
-    runningLine(str: string): void;
-    staticLine(str: string): void;
-    additionalInfo(str: string): void;
-}
-
 interface ClockControllerEvents {
     onDisconnect: () => void;
     onTemperatureChanged: (temp: number) => void;
@@ -250,20 +245,20 @@ interface ClockControllerEvents {
     onIRKey: (remoteId: string, keyId: string) => void;
 }
 
-type TimerProp = { val: Date | null, controller: props.Controller, fireInSeconds: (sec: number) => void };
+type TimerProp = { val: Date | null, controller: Controller, fireInSeconds: (sec: number) => void };
 
-class ClockController extends props.ClassWithId implements props.Controller {
+class ClockController extends ClassWithId implements Controller {
     protected pingId = 0;
     protected intervalId?: NodeJS.Timer;
     protected lastResponse = Date.now();
     private readonly _name: string;
-    public readonly properties: props.Property<any>[];
+    public readonly properties: Property<any>[];
     public get name() { return this._name + " (" + this.ip + ")"; }
     public readonly lcdInformer?: LcdInformer;
     public readonly internalName: string;
 
-    private tempProperty = new props.PropertyImpl<string>("Температура", new props.SpanHTMLRenderer(), "Нет данных");
-    private weightProperty = new props.PropertyImpl<string>("Вес", new props.SpanHTMLRenderer(), "Нет данных");
+    private tempProperty = new PropertyImpl<string>("Температура", new SpanHTMLRenderer(), "Нет данных");
+    private weightProperty = new PropertyImpl<string>("Вес", new SpanHTMLRenderer(), "Нет данных");
     private baseWeight?: number;
     private lastWeight?: number;
     public readonly relays: ControllerRelay[] = [];
@@ -282,7 +277,7 @@ class ClockController extends props.ClassWithId implements props.Controller {
         this.properties = [];
         if (hello.devParams['hasHX711'] === 'true') {
             this.properties.push(this.weightProperty);
-            this.properties.push(props.Button.create("Weight reset", () => this.tare()));
+            this.properties.push(Button.create("Weight reset", () => this.tare()));
         }
         if (hello.devParams['hasDS18B20'] === 'true') {
             this.properties.push(this.tempProperty);
@@ -310,7 +305,7 @@ class ClockController extends props.ClassWithId implements props.Controller {
                 });
         }
 
-        this.properties.push(props.Button.create("Restart", () => this.reboot()));
+        this.properties.push(Button.create("Restart", () => this.reboot()));
 
         this.intervalId = setInterval(() => {
             // console.log(this.name, "wasRecentlyContacted", this.wasRecentlyContacted());
@@ -442,7 +437,7 @@ interface AceChannel {
     url: string;
 }
 
-class App {
+class App implements TabletHost {
     public expressApi: express.Express;
     public server: http.Server;
     public readonly wss: WebSocket.Server;
@@ -476,25 +471,8 @@ class App {
     }
 
 
-    private dynamicInformers: Map<string, LcdInformer> = new Map();
     // Show the message on all informers
-    private allInformers: LcdInformer = {
-        runningLine: (str) => {
-            for (const inf of this.dynamicInformers.values()) {
-                inf.runningLine(str);
-            }
-        },
-        staticLine: (str) => {
-            for (const inf of this.dynamicInformers.values()) {
-                inf.staticLine(str);
-            }
-        },
-        additionalInfo: (str) => {
-            for (const inf of this.dynamicInformers.values()) {
-                inf.additionalInfo(str);
-            }
-        }
-    };
+    public allInformers: CompositeLcdInformer = new CompositeLcdInformer();
 
     private serverHashIdPromise: Promise<string> = new Promise((accept, reject) => {
         const hasho = crypto.createHash('md5');
@@ -517,18 +495,18 @@ class App {
 
     private readonly miLight = new MiLightBulb(this.miLightState);
 
-    private readonly kindle: tablet.Tablet = new tablet.Tablet('192.168.121.166:5556', 'Kindle', this, true);
-    private readonly nexus7: tablet.Tablet = new tablet.Tablet('00eaadb6', 'Nexus', this, false);
+    private readonly kindle: Tablet = new Tablet('192.168.121.166:5556', 'Kindle', this, true);
+    private readonly nexus7: Tablet = new Tablet('00eaadb6', 'Nexus', this, false);
 
-    private readonly tablets: Map<string, tablet.Tablet> = new Map(
-        [this.kindle, this.nexus7].map(t => [t.id, t] as [string, tablet.Tablet])
+    private readonly tablets: Map<string, Tablet> = new Map(
+        [this.kindle, this.nexus7].map(t => [t.id, t] as [string, Tablet])
     );
 
-    private timeProp(name: string, upto: number, onChange: (v: number) => void): props.WritablePropertyImpl<number> {
-        return props.newWritableProperty<number>(
+    private timeProp(name: string, upto: number, onChange: (v: number) => void): WritablePropertyImpl<number> {
+        return newWritableProperty<number>(
             name,
             0,
-            new props.SelectHTMLRenderer<number>(Array.from({ length: upto }, ((v, k) => k)), i => "" + i),
+            new SelectHTMLRenderer<number>(Array.from({ length: upto }, ((v, k) => k)), i => "" + i),
             (v: number) => { onChange(v); });
     }
 
@@ -565,10 +543,10 @@ class App {
                 [1, 5, 10, 15, 20, 30, 45, min, 2 * min, 3 * min, 5 * min, 10 * min, 15 * min, 20 * min, 30 * min, 45 * min,
                     hour, 2 * hour, 3 * hour, 4 * hour, 5 * hour, 8 * hour, 12 * hour, 23 * hour].map(n => "val" + n));
 
-        const orBeforeProp: props.WritablePropertyImpl<number> = props.newWritableProperty<number>(
+        const orBeforeProp: WritablePropertyImpl<number> = newWritableProperty<number>(
             "через",
             0,
-            new props.SelectHTMLRenderer<number>(Array.from({ length: timerIn.length }, (e, i) => i), _n => {
+            new SelectHTMLRenderer<number>(Array.from({ length: timerIn.length }, (e, i) => i), _n => {
                 // console.log(_n);
                 const n = timerIn[_n];
                 if (n.startsWith("val")) {
@@ -649,7 +627,7 @@ class App {
         return that;
     }
 
-    private initController(ct: props.Controller): void {
+    private initController(ct: Controller): void {
         ct.properties.forEach(prop => {
             prop.onChange(() => {
                 this.broadcastToWebClients({
@@ -679,7 +657,7 @@ class App {
         for (const ctrl of this.controllers) {
             if (ctrl.online) {
                 for (const prop of ctrl.properties) {
-                    if (prop instanceof props.Relay) {
+                    if (prop instanceof Relay) {
                         if (prop.get()) {
                             wasOnIds.push(prop.id);
                         }
@@ -729,7 +707,7 @@ class App {
 
         const kr = this.findDynController('KitchenRelay');
         if (kr) {
-            async function blinkKitchenStripe(stripeRelay: props.Relay) {
+            async function blinkKitchenStripe(stripeRelay: Relay) {
                 const wasOn = stripeRelay.get();
                 for (var i = 0; i < 3; ++i) {
                     stripeRelay.set(false);
@@ -750,7 +728,7 @@ class App {
         console.log("WAKE", d);
         //this.nexus7.screenIsOn.set(true);
         for (const wo of this.relaysState.wasOnIds) {
-            (props.ClassWithId.byId(wo) as props.Relay).set(true);
+            (ClassWithId.byId(wo) as Relay).set(true);
         }
         // this.miLight.brightness.set(50);
     });
@@ -759,16 +737,17 @@ class App {
         name: "Другое",
         online: true, // Always online
         properties: [
-            props.Button.create("Reboot server", () => util.runShell("reboot", [])),
-            props.newWritableProperty<boolean>("Show all TV channels", this.showAllChannels, new props.CheckboxHTMLRenderer(), (val: boolean) => {
+            Button.create("Reboot server", () => util.runShell("/bin/systemctl restart nodeserver", [])),
+            Button.create("Reboot Orange Pi", () => util.runShell("reboot", [])),
+            newWritableProperty<boolean>("Show all TV channels", this.showAllChannels, new CheckboxHTMLRenderer(), (val: boolean) => {
                 this.showAllChannels = val;
                 this.reloadAllWebClients();
             }),
-            props.newWritableProperty<boolean>("Show Torrent TV channels", this.showTorrentTVChannels, new props.CheckboxHTMLRenderer(), (val: boolean) => {
+            newWritableProperty<boolean>("Show Torrent TV channels", this.showTorrentTVChannels, new CheckboxHTMLRenderer(), (val: boolean) => {
                 this.showTorrentTVChannels = val;
                 this.reloadAllWebClients();
             })
-            // props.newWritableProperty("Switch devices to server", "192.168.121.38", new props.StringAndGoRendrer("Go"), (val: string) => {
+            // newWritableProperty("Switch devices to server", "192.168.121.38", new StringAndGoRendrer("Go"), (val: string) => {
             //     for (const ctrl of this.dynamicControllers.values()) {
             //         ctrl.send({ type: 'setProp', prop: 'websocket.server', value: val });
             //         ctrl.send({ type: 'setProp', prop: 'websocket.port', value: '8080' });
@@ -779,7 +758,7 @@ class App {
         ]
     }
 
-    private get onlineControllers(): props.Controller[] {
+    private get onlineControllers(): Controller[] {
         return this.controllers.filter(c => c.online);
     }
 
@@ -788,17 +767,17 @@ class App {
     private loadedChannels: Channel[] = [];
 
     private channelAsController(h: Channel, 
-        additionalPropsBefore: props.Property<any>[] = [],
-        additionalPropsAfter: props.Property<any>[] = []): props.Controller {
+        additionalPropsBefore: Property<any>[] = [],
+        additionalPropsAfter: Property<any>[] = []): Controller {
         const that = this;
-        return new (class Channels implements props.Controller {
+        return new (class Channels implements Controller {
             public readonly name = "";
             public readonly online = true; // Always online
-            public get properties(): props.Property<any>[] {
+            public get properties(): Property<any>[] {
                 return Array.prototype.concat(
                     additionalPropsBefore,
-                    props.newWritableProperty<string>("", h.name, new props.SpanHTMLRenderer()),
-                    Array.from(that.tablets.values()).map(t => props.Button.create("Play [ " + t.shortName + " ]", () => that.playURL(t, h.url, h.name))), 
+                    newWritableProperty<string>("", h.name, new SpanHTMLRenderer()),
+                    Array.from(that.tablets.values()).map(t => Button.create("Play [ " + t.shortName + " ]", () => that.playURL(t, h.url, h.name))), 
                     additionalPropsAfter);
             }
         })();
@@ -807,8 +786,8 @@ class App {
     private renderChannels() {
         return this.channelsHistoryConf.last().channels.map((h, index) => this.channelAsController(h, 
             [
-                props.newWritableProperty<number>("", (h.channel || -1),
-                    new props.SelectHTMLRenderer<number>(Array.from({ length: 50 }, (e, i) => i), _n => "" + _n),
+                newWritableProperty<number>("", (h.channel || -1),
+                    new SelectHTMLRenderer<number>(Array.from({ length: 50 }, (e, i) => i), _n => "" + _n),
                         (num) => {
                             this.channelsHistoryConf.change(hist => {
                                 h.channel = num;
@@ -816,7 +795,7 @@ class App {
                         })
             ],
             [
-                props.Button.create("Remove", () => {
+                Button.create("Remove", () => {
                     this.channelsHistoryConf.change(hist => {
                         if (!hist.channels[index].channel) {
                             hist.channels.splice(index, 1);
@@ -836,7 +815,7 @@ class App {
         return "http://192.168.121.38:6878/ace/getstream?id=" + aceCode +"&hlc=1&spv=0&transcode_audio=0&transcode_mp3=0&transcode_ac3=0&preferred_audio_language=eng";
     }
 
-    private get controllers(): props.Controller[] {
+    private get controllers(): Controller[] {
         const dynPropsArray = Array.from(this.dynamicControllers.values());
         dynPropsArray.sort((a, b) => a.id == b.id ? 0 : (a.id < b.id ? -1 : 1));
 
@@ -969,8 +948,6 @@ class App {
                             const last = arr[arr.length - 1];
 
                             this.kindle.volume.set(this.kindle.volume.get() + (last == 'volume_up' ? 1 : -1) * 100 / 15);
-                            this.allInformers.staticLine(
-                                String.fromCharCode(0xe000) + Math.floor(this.kindle.volume.get()) + "%")
                         }
 
                         return 2500;
@@ -1061,7 +1038,7 @@ class App {
                                 onDisconnect: () => {
                                     this.dynamicControllers.delete(ip);
                                     if (clockController.lcdInformer) {
-                                        this.dynamicInformers.delete(ip);
+                                        this.allInformers.delete(ip);
                                     }
                                     this.reloadAllWebClients();
                                     this.allInformers.runningLine('Отключено ' + clockController.name);
@@ -1128,7 +1105,7 @@ class App {
                             }
                             this.dynamicControllers.set(ip, clockController);
                             if (clockController.lcdInformer) {
-                                this.dynamicInformers.set(ip, clockController.lcdInformer);
+                                this.allInformers.set(ip, clockController.lcdInformer);
                             }
                             this.initController(clockController);
 
@@ -1157,9 +1134,9 @@ class App {
                 ws.on('message', (message: string) => {
                     const msg = JSON.parse(message);
                     if (msg.type === "setProp") {
-                        const prop = props.ClassWithId.byId<props.Property<any>>(msg.id);
+                        const prop = ClassWithId.byId<Property<any>>(msg.id);
                         if (prop) {
-                            if (props.isWriteableProperty(prop)) {
+                            if (isWriteableProperty(prop)) {
                                 prop.set(msg.val);
                             } else {
                                 console.error(`Property ${prop.name} is not writable`);
@@ -1224,12 +1201,12 @@ class App {
         });
         this.expressApi.use('/', router);
 
-        tablet.adbClient.trackDevices()
-            .then((tracker: tablet.Tracker) => {
-                tracker.on('add', (dev: tablet.Device) => {
+        adbClient.trackDevices()
+            .then((tracker: Tracker) => {
+                tracker.on('add', (dev: Device) => {
                     this.processDevice(dev);
                 });
-                tracker.on('remove', (dev: tablet.Device) => {
+                tracker.on('remove', (dev: Device) => {
                     const foundDev = this.tablets.get(dev.id);
                     if (foundDev) {
                         foundDev.stop();
@@ -1237,8 +1214,8 @@ class App {
                 });
             });
 
-        tablet.adbClient.listDevices()
-            .then((devices: tablet.Device[]) => {
+        adbClient.listDevices()
+            .then((devices: Device[]) => {
                 Array.from(this.tablets.values())
                     .filter(t => !devices.some(dev => dev.id === t.id))
                     .forEach(t => t.stop());
@@ -1258,7 +1235,7 @@ class App {
 
     private renderToHTML(): string {
         const propChangedMap = this.onlineControllers.map((ctrl, ctrlIndex) => {
-            return ctrl.properties.map((prop: props.Property<any>, prIndex: number): string => {
+            return ctrl.properties.map((prop: Property<any>, prIndex: number): string => {
                 return `'${prop.id}' : (val) => { ${prop.htmlRenderer.updateCode(prop)} }`
             }).join(',\n');
         }).join(',\n');
@@ -1323,7 +1300,7 @@ class App {
         return util.wrapToHTML(["html", { lang: "en" }],
             util.wrapToHTML("head", hdr.join("\n")) + "\n" +
             util.wrapToHTML("body", this.onlineControllers.map((ctrl) => {
-                return ctrl.name + "&nbsp;" + ctrl.properties.map((prop: props.Property<any>): string => {
+                return ctrl.name + "&nbsp;" + ctrl.properties.map((prop: Property<any>): string => {
                     let res = "";
 
                     res = prop.htmlRenderer.body(prop);
@@ -1334,7 +1311,7 @@ class App {
         );
     }
 
-    private processDevice(device: tablet.Device): void {
+    private processDevice(device: Device): void {
         // Wait some time for device to auth...
         util.delay(1000).then(() => {
             const found = this.tablets.get(device.id);
@@ -1374,15 +1351,14 @@ class App {
                     return Promise.resolve(f3.name + " (Torrent)");
                 }
                 
-                return youtube.getYoutubeInfo(url)
+                return getYoutubeInfo(url)
                     .then(u => u.title + " (Youtube)");
             });
     }
 
-    public playURL(t: tablet.Tablet, _url: string, _name: string): Promise<void> {
+    public playURL(t: Tablet, _url: string, _name: string): Promise<void> {
         const url = _url.trim();
         const gotName = (name: string) => {
-            this.allInformers.runningLine("Включаем " + name);
             // update history
             this.channelsHistoryConf.change(hist => {
                 const index = hist.channels.findIndex(c => c.url === url);

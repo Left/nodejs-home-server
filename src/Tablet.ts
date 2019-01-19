@@ -1,5 +1,6 @@
 import * as props from "./Props";
 import * as util from "./Util";
+import { LcdInformer } from './Informer';
 
 import * as stream from 'stream';
 
@@ -19,6 +20,7 @@ export interface Tracker {
 export interface TabletHost {
     playURL(t: Tablet, url: string, name: string): Promise<void>
     nameFromUrl(url: string): Promise<string>;
+    allInformers: LcdInformer;
 }
 
 export enum SurfaceOrientation {
@@ -239,12 +241,20 @@ export class Tablet implements props.Controller {
     }
 
     public playURL(url: string): Promise<void> {
-        return this.stopPlaying().then(() => this.shellCmd(
-            "am start -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity -a android.intent.action.VIEW -d \"" +
-            url.replace("&", "\&") + "\" --ez force_fullscreen true")
+        return this.stopPlaying().then(() => {
+            Promise.race([
+                this.app.nameFromUrl(url).catch(() => url),
+                util.delay(3000).then(() => url)
+            ]).then(name => {
+                this.app.allInformers.runningLine("Включаем " + name + " на " + this._name);
+            });
+
+            return this.shellCmd("am start -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity -a android.intent.action.VIEW -d \"" +
+                url.replace("&", "\&") + "\" --ez force_fullscreen true")
             .then(() => {
                 return Promise.resolve(void 0);
-            }));
+            });
+        });
     }
 
     public getBatteryLevel(): Promise<number> {
@@ -296,6 +306,11 @@ export class Tablet implements props.Controller {
             }
 
             this._online = true;
+
+            this.volume.onChange(() => {
+                this.app.allInformers.staticLine(
+                    String.fromCharCode(0xe000) + Math.floor(this.volume.get()) + "%");
+            });
 
             return void 0;
         });
