@@ -11,7 +11,7 @@ import * as querystring from 'querystring';
 import * as curl from "./Curl";
 import * as util from "./Util";
 import { getYoutubeInfo } from "./Youtube";
-import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, PropertyImpl, StringAndGoRendrer } from "./Props";
+import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer } from "./Props";
 import { TabletHost, Tablet, adbClient, Tracker, Device } from "./Tablet";
 import { CompositeLcdInformer } from './Informer';
 import { ClockController, Hello, ClockControllerEvents } from './Esp8266';
@@ -159,7 +159,7 @@ interface IRKeysHandler {
 
 interface Channel {
     name: string;
-    cat: string;
+    cat?: string;
     url: string;
     channel?: number;
 }
@@ -653,13 +653,8 @@ class App implements TabletHost {
             this.allInformers.runningLine(name + " в " + util.toHMS(timer.val!)) );
     }
 
-    private irKeyHandlers: IRKeysHandler[] = [
-        this.createPowerOnOffTimerKeys('power', [
-            { showName: "Выкл", valueName: "мин", action: (dd) => this.timerIn(dd * 60, "Выключение", this.sleepAt) },
-            { showName: "Вкл", valueName: "мин", action: (dd) => this.timerIn(dd * 60, "Включение", this.wakeAt) },
-            { showName: "Таймер", valueName: "мин", action: (dd) => this.timerIn(dd * 60, "Таймер", this.timer) }
-        ]),
-        this.createPowerOnOffTimerKeys('ent', Array.from(this.tablets.values()).map(t => {
+    private makeSpecifyChannel(irk: string) {
+        return this.createPowerOnOffTimerKeys(irk, Array.from(this.tablets.values()).map(t => {
             return {
                 showName: t.shortName, action: (dd: number) => {
                     const chan = this.channelsHistoryConf.last().channels.find(c => c.channel == dd);
@@ -676,15 +671,49 @@ class App implements TabletHost {
                     }
                 }
             };
-        }
-        )),
+        }));
+    }
+
+    private makeUpDownKeys(keys: {key: string, action: () => void}[]): IRKeysHandler {
+        return {
+            partial: (arr, final) => {
+                const allAreVolControls = arr.length > 0 && arr.every(k => keys.some(kk => kk.key === k));
+                if (allAreVolControls) {
+                    if (!final) {
+                        const last = arr[arr.length - 1];
+                        const kk = keys.find(kk => last === kk.key);
+                        if (kk) {
+                            kk.action()
+                        }
+                    }
+
+                    return 2500;
+                } else {
+                    return null; // We didn't recognize the command
+                }
+
+            },
+            complete: arr => {
+                // console.log("Nothing to do");
+            }
+        } as IRKeysHandler;
+    }
+
+    private irKeyHandlers: IRKeysHandler[] = [
+        this.createPowerOnOffTimerKeys('power', [
+            { showName: "Выкл", valueName: "мин", action: (dd) => this.timerIn(dd * 60, "Выключение", this.sleepAt) },
+            { showName: "Вкл", valueName: "мин", action: (dd) => this.timerIn(dd * 60, "Включение", this.wakeAt) },
+            { showName: "Таймер", valueName: "мин", action: (dd) => this.timerIn(dd * 60, "Таймер", this.timer) }
+        ]),
+        this.makeSpecifyChannel('ent'),
+        this.makeSpecifyChannel('reset'),
         this.simpleCmd([['fullscreen']], "MiLight", () => {
             this.miLight.switchOn.switch(!this.miLight.switchOn.get());
         }),
         this.simpleCmd([["record"]], "Лампа на шкафу", () => {
             this.r1.switch(!this.r1.get());
         }),
-        this.simpleCmd([['n0', 'n2']], "Колонки", () => {
+        this.simpleCmd([[]], "Колонки", () => {
             this.r2.switch(!this.r2.get());
         }),
         this.simpleCmd([['stop']], "Коридор", () => {
@@ -700,29 +729,38 @@ class App implements TabletHost {
             this.toggleRelay('KitchenRelay', 1);
         }),
         // Sound controls
-        (() => {
-            return {
-                partial: (arr, final) => {
-                    const allAreKeyControls = arr.length > 0 && arr.every(k => k === 'volume_up' || k === 'volume_down');
-                    if (allAreKeyControls) {
-                        if (!final) {
-                            const last = arr[arr.length - 1];
-
-                            this.kindle.volume.set(this.kindle.volume.get() + (last == 'volume_up' ? 1 : -1) * 100 / 15);
-                        }
-
-                        return 2500;
-                    } else {
-                        return null; // We didn't recognize the command
-                    }
-
-                },
-                complete: arr => {
-                    console.log("Nothing to do");
-                }
-            } as IRKeysHandler;
-        })(),
+        this.makeUpDownKeys([
+            { key: 'volume_up', action: () => this.kindle.volume.set(this.kindle.volume.get() + 100 / 15)},
+            { key: 'volume_down', action: () => this.kindle.volume.set(this.kindle.volume.get() - 100 / 15)}
+        ]),
+        // Channel controls
+        this.makeUpDownKeys([
+            { key: 'channel_up', action: () => this.playChannel(this.kindle, this.nextChannel(this.kindle, 1))},
+            { key: 'channel_down', action: () => this.playChannel(this.kindle, this.nextChannel(this.kindle, -1))}
+        ])
     ];
+
+    private nextChannel(tbl: Tablet, add: number): Channel {
+        const inArr = this.channelsHistoryConf.last().channels.filter(c => !!c.channel).slice();
+
+        if (inArr.length == 0) {
+            // Means there is not set channels yet
+            return { name: "", url: ""} as Channel;
+        }
+
+        const lastChannel = inArr[0];
+
+        inArr.sort((a1, a2) => a1.channel === a2.channel ? 0 : 
+            (((a1.channel || -1) < (a2.channel || -1) ? -1 : 1)));
+        
+        
+        const prevIndex = inArr.findIndex(c => c === lastChannel);
+        const newIndex = prevIndex + add;
+
+        // console.log(prevIndex, newIndex, inArr[(newIndex + inArr.length) % inArr.length].channel);
+
+        return inArr[(newIndex + inArr.length) % inArr.length];
+    }
 
     public toggleRelay(internalName: string, index: number): void {
         const kitchenRelay = this.findDynController(internalName);
@@ -1183,6 +1221,10 @@ class App implements TabletHost {
                 return getYoutubeInfo(url)
                     .then(u => u.title + " (Youtube)");
             });
+    }
+
+    public playChannel(t: Tablet, c: Channel): Promise<void> {
+        return this.playURL(t, c.url, c.name);
     }
 
     public playURL(t: Tablet, _url: string, _name: string): Promise<void> {

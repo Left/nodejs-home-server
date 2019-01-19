@@ -146,7 +146,7 @@ export class Tablet implements Controller {
             this.screenIsOn,
             this.volume,
             this.battery,
-            this.orientation,
+            // this.orientation,
             this.playingUrl,
             newWritableProperty("Go play", "", new StringAndGoRendrer("Play"), (val) => {
                 this.app.playURL(tbl, val, "");
@@ -248,7 +248,7 @@ export class Tablet implements Controller {
                 this.app.nameFromUrl(url).catch(() => url),
                 util.delay(3000).then(() => url)
             ]).then(name => {
-                this.app.allInformers.runningLine("Включаем " + name + " на " + this._name);
+                this.app.allInformers.runningLine("Включаем " + name + " на " + this.shortName);
             });
 
             return this.shellCmd("am start -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity -a android.intent.action.VIEW -d \"" +
