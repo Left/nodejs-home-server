@@ -10,7 +10,7 @@ import * as crypto from 'crypto';
 import * as curl from "./Curl";
 import * as util from "./Util";
 import { getYoutubeInfo } from "./Youtube";
-import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty } from "./Props";
+import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, PropertyImpl, StringAndGoRendrer } from "./Props";
 import { TabletHost, Tablet, adbClient, Tracker, Device } from "./Tablet";
 import { CompositeLcdInformer } from './Informer';
 import { ClockController, Hello, ClockControllerEvents } from './Esp8266';
@@ -184,8 +184,7 @@ class App implements TabletHost {
     private r3 = new GPIORelay("Коридор", 36, this.gpioRelays, 2);
     private r4 = new GPIORelay("Потолок", 32, this.gpioRelays, 3);
 
-    private showAllChannels = false;
-    private showTorrentTVChannels = false;
+    private allowRenames = false;
 
     private ctrlGPIO = {
         name: "Комната",
@@ -473,14 +472,10 @@ class App implements TabletHost {
         properties: [
             Button.create("Reboot server", () => util.runShell("/bin/systemctl restart nodeserver", [])),
             Button.create("Reboot Orange Pi", () => util.runShell("reboot", [])),
-            newWritableProperty<boolean>("Show all TV channels", this.showAllChannels, new CheckboxHTMLRenderer(), (val: boolean) => {
-                this.showAllChannels = val;
+            newWritableProperty<boolean>("Allow renames", this.allowRenames, new CheckboxHTMLRenderer(), (val: boolean) => {
+                this.allowRenames = val;
                 this.reloadAllWebClients();
             }),
-            newWritableProperty<boolean>("Show Torrent TV channels", this.showTorrentTVChannels, new CheckboxHTMLRenderer(), (val: boolean) => {
-                this.showTorrentTVChannels = val;
-                this.reloadAllWebClients();
-            })
             // newWritableProperty("Switch devices to server", "192.168.121.38", new StringAndGoRendrer("Go"), (val: string) => {
             //     for (const ctrl of this.dynamicControllers.values()) {
             //         ctrl.send({ type: 'setProp', prop: 'websocket.server', value: val });
@@ -497,8 +492,8 @@ class App implements TabletHost {
     }
 
     private acestreamHistoryConf = util.newConfig({ channels: [] as Channel[], lastUpdate: 0 }, "acestream_tv_channels");
+    private tvChannels = util.newConfig({ channels: [] as Channel[], lastUpdate: 0 }, "m3u_tv_channels");
     private channelsHistoryConf = util.newConfig({ channels: [] as Channel[] }, "tv_channels");
-    private loadedChannels: Channel[] = [];
 
     private channelAsController(h: Channel, 
         additionalPropsBefore: Property<any>[] = [],
@@ -511,10 +506,14 @@ class App implements TabletHost {
                 return Array.prototype.concat(
                     additionalPropsBefore,
                     newWritableProperty<string>("", h.name, new SpanHTMLRenderer()),
-                    Array.from(that.tablets.values()).map(t => Button.create("Play [ " + t.shortName + " ]", () => that.playURL(t, h.url, h.name))), 
+                    that.makePlayButtonsForChannel(h.url, h.name), 
                     additionalPropsAfter);
             }
         })();
+    }
+
+    private makePlayButtonsForChannel(url: string, name: string): Button[] {
+        return Array.from(this.tablets.values()).map(t => Button.create("Play [ " + t.shortName + " ]", () => this.playURL(t, url, name)));
     }
 
     private renderChannels() {
@@ -543,7 +542,7 @@ class App implements TabletHost {
                                 })
                             })
                 ],
-                [
+                Array.prototype.concat([
                     Button.create("Remove", () => {
                         this.channelsHistoryConf.change(hist => {
                             if (!hist.channels[index].channel) {
@@ -552,8 +551,15 @@ class App implements TabletHost {
                         }).then(() => {
                             this.reloadAllWebClients();
                         });
-                    })
-                ]);
+                    }),
+                ],
+                (this.allowRenames) ? [
+                    newWritableProperty("New name", h.name, new StringAndGoRendrer("Rename"), (val) => {
+                        this.channelsHistoryConf.change(hist => {
+                            h.name = val;
+                        }).then(() => this.reloadAllWebClients());
+                    }),
+                ] : []));
         });
     }
 
@@ -572,25 +578,17 @@ class App implements TabletHost {
         // console.log("Ace channels: ", this.acestreamHistoryConf.last().channels.length);
 
         return Array.prototype.concat([
-            this.sleepAt.controller,
-            this.wakeAt.controller,
-            this.timer.controller,
-            this.ctrlControlOther,
-            this.ctrlGPIO,
-            this.miLight,
-            this.kindle,
-            this.nexus7
-        ],
+                this.sleepAt.controller,
+                this.wakeAt.controller,
+                this.timer.controller,
+                this.ctrlControlOther,
+                this.ctrlGPIO,
+                this.miLight,
+                this.kindle,
+                this.nexus7
+            ],
             dynPropsArray,
-            this.renderChannels(),
-            (this.showAllChannels ? this.loadedChannels.map((h, index) => this.channelAsController(h)) : []),
-            (this.showTorrentTVChannels ? this.acestreamHistoryConf.last().channels.map((h, index) => {
-                return this.channelAsController({
-                    name: h.name,
-                    cat: h.cat,
-                    url: this.toAceUrl(h.url)
-                } as Channel);
-            }) : []),
+            this.renderChannels()
         );
     }
 
@@ -742,6 +740,7 @@ class App implements TabletHost {
 
         this.channelsHistoryConf.read();
 
+        // Load acestream channels
         this.acestreamHistoryConf.read().then(conf => {
             if ((new Date().getTime() - conf.lastUpdate) / 1000 > 60*60) {
                 curl.get("http://pomoyka.win/trash/ttv-list/as.json")
@@ -757,13 +756,24 @@ class App implements TabletHost {
             console.log("Read " + conf.channels.length + " channels");
         });
 
-        this.parseM3Us([
-            "http://iptviptv.do.am/_ld/0/1_IPTV.m3u",
-            "http://tritel.net.ru/cp/files/Tritel-IPTV.m3u",
-            "http://getsapp.ru/IPTV/Auto_IPTV.m3u",
-            "https://webarmen.com/my/iptv/auto.nogrp.m3u",
-            "https://smarttvnews.ru/apps/Channels.m3u"
-        ]);
+        // Load TV channels from different m3u lists
+        this.tvChannels.read().then(conf => {
+            if ((new Date().getTime() - conf.lastUpdate) / 1000 > 60*60) {
+                this.parseM3Us([
+                    "http://iptviptv.do.am/_ld/0/1_IPTV.m3u",
+                    "http://tritel.net.ru/cp/files/Tritel-IPTV.m3u",
+                    "http://getsapp.ru/IPTV/Auto_IPTV.m3u",
+                    "https://webarmen.com/my/iptv/auto.nogrp.m3u",
+                    "https://smarttvnews.ru/apps/Channels.m3u"
+                ]).then(channels => {
+                    this.tvChannels.change(conf => {
+                        conf.channels = channels;
+                        conf.lastUpdate = new Date().getTime();
+                    });
+                });
+            }
+        });
+
 
         this.expressApi = express();
 
@@ -957,8 +967,39 @@ class App implements TabletHost {
         });
         router.get('/index.html', (req, res) => {
             res.contentType('html');
-            res.send(this.renderToHTML());
+            res.send(this.renderToHTML(
+                this.onlineControllers.map((ctrl) => {
+                    return Array.prototype.concat(
+                        ctrl.name ? [ newWritableProperty("", ctrl.name, new SpanHTMLRenderer()) ] : [], 
+                        ctrl.properties);
+                })
+            ));
         });
+        router.get('/torrent_tv.html', (req, res) => {
+            res.contentType('html');
+            res.send(this.renderToHTML(
+                this.acestreamHistoryConf.last().channels.map((h, index) => {
+                    return Array.prototype.concat(
+                        [ newWritableProperty("", "" + index + ".", new SpanHTMLRenderer()) ], 
+                        [ newWritableProperty("", h.name, new SpanHTMLRenderer()) ],
+                        this.makePlayButtonsForChannel(this.toAceUrl(h.url), h.name)
+                    );
+                })
+            ));
+        });
+        router.get('/tv.html', (req, res) => {
+            res.contentType('html');
+            res.send(this.renderToHTML(
+                this.tvChannels.last().channels.map((h, index) => {
+                    return Array.prototype.concat(
+                        [ newWritableProperty("", "" + index + ".", new SpanHTMLRenderer()) ], 
+                        [ newWritableProperty("", h.name, new SpanHTMLRenderer()) ],
+                        this.makePlayButtonsForChannel(h.url, h.name)
+                    );
+                })
+            ));
+        });
+
         this.expressApi.use('/', router);
 
         adbClient.trackDevices()
@@ -993,9 +1034,9 @@ class App implements TabletHost {
         })
     }
 
-    private renderToHTML(): string {
-        const propChangedMap = this.onlineControllers.map((ctrl, ctrlIndex) => {
-            return ctrl.properties.map((prop: Property<any>, prIndex: number): string => {
+    private renderToHTML(allProps: Property<any>[][]): string {
+        const propChangedMap = allProps.map((props, ctrlIndex) => {
+            return props.map((prop: Property<any>, prIndex: number): string => {
                 return `'${prop.id}' : (val) => { ${prop.htmlRenderer.updateCode(prop)} }`
             }).join(',\n');
         }).join(',\n');
@@ -1059,8 +1100,8 @@ class App implements TabletHost {
         ];
         return util.wrapToHTML(["html", { lang: "en" }],
             util.wrapToHTML("head", hdr.join("\n")) + "\n" +
-            util.wrapToHTML("body", this.onlineControllers.map((ctrl) => {
-                return ctrl.name + "&nbsp;" + ctrl.properties.map((prop: Property<any>): string => {
+            util.wrapToHTML("body", allProps.map((ctrl) => {
+                return ctrl.map((prop: Property<any>): string => {
                     let res = "";
 
                     res = prop.htmlRenderer.body(prop);
@@ -1102,7 +1143,7 @@ class App implements TabletHost {
                 if (f) {
                     return Promise.resolve(f.name);
                 }
-                const f2 = this.loadedChannels.find(x => x.url === url && x.name != x.url);
+                const f2 = this.tvChannels.last().channels.find(x => x.url === url && x.name != x.url);
                 if (f2) {
                     return Promise.resolve(f2.name + " (TV)");
                 }
@@ -1153,8 +1194,8 @@ class App implements TabletHost {
             .then(() => t.playURL(url));
     }
 
-    private parseM3Us(urls: string[]) {
-        Promise.all(urls.map(_url => {
+    private parseM3Us(urls: string[]): Promise<Channel[]> {
+        return Promise.all(urls.map(_url => {
             return curl.get(_url).then(text => {
                 const lines = util.splitLines(text);
                 if (lines[0].match(/^.?#EXTM3U/)) {
@@ -1189,7 +1230,7 @@ class App implements TabletHost {
             const res = Array.prototype.concat(...arr);
             res.sort((a, b) => a.name.localeCompare(b.name));
             // console.log(res);
-            this.loadedChannels = res;
+            return res;
         });
     }
 }
