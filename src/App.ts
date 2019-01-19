@@ -6,6 +6,7 @@ import * as fs from "fs";
 // import * as os from "os";
 import * as dgram from "dgram";
 import * as crypto from 'crypto';
+import * as querystring from 'querystring';
 
 import * as curl from "./Curl";
 import * as util from "./Util";
@@ -960,12 +961,37 @@ class App implements TabletHost {
             }));
         });
         router.get('/tablet_screen', (req, res) => {
-            this.kindle
-                .screenshot()
-                .then(buf => {
-                    res.contentType('image/png');
-                    buf.pipe(res);
-                });
+            const tabletId = req.query['id'];
+            const tbl = this.tablets.get(tabletId);
+
+            if (tbl) {
+                tbl.screenshot()
+                    .then(buf => {
+                        res.contentType('image/png');
+                        buf.pipe(res);
+                    });
+            }
+        });
+        router.get('/tablet.html', (req, res) => {
+            const tabletId = req.query['id'];
+            const tbl = this.tablets.get(tabletId);
+
+            if (tbl) {
+                res.contentType('html');
+                res.send(util.wrapToHTML(["html", { lang: "en" }],
+                    [
+                        util.wrapToHTML("head", [
+                            util.wrapToHTML(["meta", { 'http-equiv': "content-type", content: "text/html; charset=UTF-8" }]),
+                            util.wrapToHTML(["meta", { name: "viewport", content: "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" }], undefined),        
+                        ].join("\n")) + "\n" +
+                        util.wrapToHTML("body", [
+                            util.wrapToHTML(["img", {
+                                style: 'transform: rotate(' + [270, 0, 90, 180][tbl.orientation.get()] + 'deg);',
+                                src: '/tablet_screen?id=' + querystring.escape(req.query['id'])
+                            }])
+                        ].join('\n'))
+                    ].join('\n')));
+            }
         });
         router.get('/index.html', (req, res) => {
             res.contentType('html');

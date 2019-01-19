@@ -3,6 +3,7 @@ import * as util from "./Util";
 import { LcdInformer } from './Informer';
 
 import * as stream from 'stream';
+import * as querystring from 'querystring';
 
 export var adbkit = require('adbkit')
 export var adbClient = adbkit.createClient()
@@ -153,6 +154,7 @@ export class Tablet implements Controller {
             Button.create("Pause", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Pause")),
             Button.create("Play", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Play")),
             Button.create("Stop playing", () => this.stopPlaying()),
+            Button.createClientRedirect("Screen", "/tablet.html?id=" + querystring.escape(this.id)),
             Button.create("Reset", () => this.shellCmd("reboot")),
         ];
     }
@@ -160,7 +162,7 @@ export class Tablet implements Controller {
     public volume = new VolumeControl(this);
 
     private battery = new PropertyImpl<string>("Battery", new SpanHTMLRenderer(), "");
-    private orientation = new PropertyImpl<SurfaceOrientation>(
+    public orientation = new PropertyImpl<SurfaceOrientation>(
         "Orientation", 
         new SpanHTMLRenderer<SurfaceOrientation>(or => SurfaceOrientation[or]), 
         SurfaceOrientation.PORTRAIT);
