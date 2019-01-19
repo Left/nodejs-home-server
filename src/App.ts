@@ -518,27 +518,43 @@ class App implements TabletHost {
     }
 
     private renderChannels() {
-        return this.channelsHistoryConf.last().channels.map((h, index) => this.channelAsController(h, 
-            [
-                newWritableProperty<number>("", (h.channel || -1),
-                    new SelectHTMLRenderer<number>(Array.from({ length: 50 }, (e, i) => i), _n => "" + _n),
-                        (num) => {
-                            this.channelsHistoryConf.change(hist => {
-                                h.channel = num;
+        const chToHist = new Map();
+        this.channelsHistoryConf.last().channels.forEach(element => {
+            if (!!element.channel) {
+                chToHist.set(element.channel, element);
+            }
+        });
+
+        // channelsProto contains all channels that are not used yet
+        const channelsProto = Array.from({ length: 99 }, (e, i) => i).filter(ch => !chToHist.has(ch));
+        return this.channelsHistoryConf.last().channels.map((h, index) => {
+            // If needed, add own channel
+            const channels = Array.prototype.concat(h.channel ? [h.channel] : [], channelsProto) as number[];
+            // Sort!
+            // channels.sort((i1, i2) => i1 == i2 ? 0 : (i1 < i2 ? -1 : 1));
+            
+            return this.channelAsController(h, 
+                [
+                    newWritableProperty<number>("", (h.channel || -1),
+                        new SelectHTMLRenderer<number>(channels, _n => "" + _n),
+                            (num) => {
+                                this.channelsHistoryConf.change(hist => {
+                                    h.channel = num;
+                                })
                             })
-                        })
-            ],
-            [
-                Button.create("Remove", () => {
-                    this.channelsHistoryConf.change(hist => {
-                        if (!hist.channels[index].channel) {
-                            hist.channels.splice(index, 1);
-                        }
-                    }).then(() => {
-                        this.reloadAllWebClients();
-                    });
-                })
-            ]));
+                ],
+                [
+                    Button.create("Remove", () => {
+                        this.channelsHistoryConf.change(hist => {
+                            if (!hist.channels[index].channel) {
+                                hist.channels.splice(index, 1);
+                            }
+                        }).then(() => {
+                            this.reloadAllWebClients();
+                        });
+                    })
+                ]);
+        });
     }
 
     private reloadAllWebClients() {
@@ -604,6 +620,7 @@ class App implements TabletHost {
                 if (firstNonPref == 0 || arr.slice(firstNonPref).some(x => !util.isNumKey(x))) {
                     return null; // Not our beast
                 }
+
 
                 const a = actions[(firstNonPref - 1) % actions.length];
                 if (firstNonPref == arr.length) {
