@@ -472,6 +472,8 @@ class App implements TabletHost {
         properties: [
             Button.create("Reboot server", () => util.runShell("/bin/systemctl restart nodeserver", [])),
             Button.create("Reboot Orange Pi", () => util.runShell("reboot", [])),
+            Button.createClientRedirect("TV Channels", "/tv.html"),
+            Button.createClientRedirect("AceStream Channels", "/torrent_tv.html"),
             newWritableProperty<boolean>("Allow renames", this.allowRenames, new CheckboxHTMLRenderer(), (val: boolean) => {
                 this.allowRenames = val;
                 this.reloadAllWebClients();

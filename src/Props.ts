@@ -36,9 +36,12 @@ export class CheckboxHTMLRenderer implements HTMLRederer<boolean> {
 }
 
 export class ButtonRendrer implements HTMLRederer<void> {
+    constructor(private onclickAction = (prop: Property<void>) => `sendVal('${prop.id}', '${prop.name}', '')`) {
+    }
+
     body(prop: Property<void>): string {
         return `<input ${prop.available ? "" : "disabled"}  type="button" id="${prop.id}" value="${prop.name}" 
-            onclick="sendVal('${prop.id}', '${prop.name}', '')"></input>`;
+            onclick="${this.onclickAction(prop)}"></input>`;
     }
 
     updateCode(prop: Property<void>): string {
@@ -201,8 +204,10 @@ export function newWritableProperty<T>(
 }
 
 export class Button extends WritablePropertyImpl<void> {
-    constructor(name: string, private action: () => void) {
-        super(name, new ButtonRendrer(), void 0);
+    constructor(name: string, 
+        private action: () => void,
+        renderer: HTMLRederer<void> = new ButtonRendrer()) {
+        super(name, renderer, void 0);
     }
 
     set(val: void): void {
@@ -211,6 +216,10 @@ export class Button extends WritablePropertyImpl<void> {
 
     static create(name: string, action: () => void): Button {
         return new Button(name, action);
+    }
+
+    static createClientRedirect(name: string, url: string): Button {
+        return new Button(name, () => {}, new ButtonRendrer(() => "location = ('" + url + "')"));
     }
 }
 
