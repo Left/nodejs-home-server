@@ -123,6 +123,9 @@ class VolumeControl extends WritablePropertyImpl<number> {
 
 }
 
+/**
+ * Tablet
+ */
 export class Tablet implements Controller {
     private _name: string;
     private _androidVersion: string;
@@ -142,7 +145,7 @@ export class Tablet implements Controller {
 
         const tbl = this;
 
-        this.properties = [
+        this.properties = Array.prototype.concat([
             this.screenIsOn,
             this.volume,
             this.battery,
@@ -156,7 +159,41 @@ export class Tablet implements Controller {
             Button.create("Stop playing", () => this.stopPlaying()),
             Button.createClientRedirect("Screen", "/tablet.html?id=" + querystring.escape(this.id)),
             Button.create("Reset", () => this.shellCmd("reboot")),
-        ];
+        ], 
+        this.tryToConnect ? [] : [
+            Button.create("TCPIP", () => {
+                console.log(this.id);
+                adbClient.getDHCPIpAddress(this.id).then((ip: string) => {
+                    adbClient.tcpip(this.id).then((port: number) => {
+                        console.log(">", port, this.id);
+                        return adbClient.connect(ip, port);
+                    });
+                });
+/*
+                adbClient.tcpip(this.id)
+                    // .then((port: number) => {
+                    //     console.log(">", port, this.id);
+                    //     // Switching to TCP mode causes ADB to lose the device for a
+                    //     // moment, so let's just wait till we get it back.
+                    //     return adbClient.waitForDevice(this.id).return(port)
+                    // })
+                    .then((port: number) => {
+                        console.log(">", port, this.id);
+                        return adbClient.getDHCPIpAddress(this.id)
+                            .then((ip: string) => {
+                                return adbClient.connect(ip, port);
+                            })
+                            .then((id: string) => {
+                                // It can take a moment for the connection to happen.
+                                return adbClient.waitForDevice(id);
+                            })
+                            .then((id: string) => {
+                                console.log('>>>>', id);
+                            });
+                    });
+*/
+            }),
+        ]);
     }
 
     public volume = new VolumeControl(this);

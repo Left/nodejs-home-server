@@ -231,9 +231,10 @@ class App implements TabletHost {
 
     private readonly kindle: Tablet = new Tablet('192.168.121.166:5556', 'Kindle', this, true);
     private readonly nexus7: Tablet = new Tablet('00eaadb6', 'Nexus', this, false);
+    private readonly nexus7TCP: Tablet = new Tablet('192.168.121.172:5555', 'Nexus TCP', this, true);
 
     private readonly tablets: Map<string, Tablet> = new Map(
-        [this.kindle, this.nexus7].map(t => [t.id, t] as [string, Tablet])
+        [this.kindle, this.nexus7, this.nexus7TCP].map(t => [t.id, t] as [string, Tablet])
     );
 
     private timeProp(name: string, upto: number, onChange: (v: number) => void): WritablePropertyImpl<number> {
@@ -544,8 +545,14 @@ class App implements TabletHost {
         })();
     }
 
+    private allOnlineTablets(): Tablet[] {
+        return Array.from(this.tablets.values()).filter(t => t.online);
+    }
+
     private makePlayButtonsForChannel(url: string, name: string): Button[] {
-        return Array.from(this.tablets.values()).map(t => Button.create("Play [ " + t.shortName + " ]", () => this.playURL(t, url, name)));
+        return this.allOnlineTablets().map(t => 
+            Button.create("Play [ " + t.shortName + " ]", () => this.playURL(t, url, name))
+        );
     }
 
     private renderChannels() {
@@ -574,7 +581,7 @@ class App implements TabletHost {
                                 })
                             })
                 ],
-                Array.prototype.concat([
+                Array.prototype.concat(h.channel ? [] : [
                     Button.create("Remove", () => {
                         this.channelsHistoryConf.change(hist => {
                             if (!hist.channels[index].channel) {
@@ -616,9 +623,8 @@ class App implements TabletHost {
                 this.ctrlControlOther,
                 this.ctrlGPIO,
                 this.miLight,
-                this.kindle,
-                this.nexus7
             ],
+            Array.from(this.tablets.values()),
             dynPropsArray,
             this.renderChannels()
         );
