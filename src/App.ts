@@ -502,21 +502,16 @@ class App implements TabletHost {
             Button.create("Reboot server", () => {
                 util.runShell("/bin/systemctl", ["restart", "nodeserver"])
             }),
+            Button.create("Reboot AceStream", () => {
+                util.runShell("/usr/bin/docker", ["restart", "4570f4fd6b4d"])
+            }),
             Button.create("Reboot Orange Pi", () => util.runShell("reboot", [])),
             Button.createClientRedirect("TV Channels", "/tv.html"),
             Button.createClientRedirect("AceStream Channels", "/torrent_tv.html"),
             newWritableProperty<boolean>("Allow renames", this.allowRenames, new CheckboxHTMLRenderer(), (val: boolean) => {
                 this.allowRenames = val;
                 this.reloadAllWebClients();
-            }),
-            // newWritableProperty("Switch devices to server", "192.168.121.38", new StringAndGoRendrer("Go"), (val: string) => {
-            //     for (const ctrl of this.dynamicControllers.values()) {
-            //         ctrl.send({ type: 'setProp', prop: 'websocket.server', value: val });
-            //         ctrl.send({ type: 'setProp', prop: 'websocket.port', value: '8080' });
-            //         util.delay(1000).then(() => ctrl.reboot());
-            //     }
-            //     console.log('Switch all devices to other server');
-            // })
+            })
         ]
     }
 
@@ -649,7 +644,7 @@ class App implements TabletHost {
         };
     }
 
-    private createPowerOnOffTimerKeys(prefix: string, actions: { showName: string, valueName?: string, action: (dd: number) => void }[]): IRKeysHandler {
+    private createPowerOnOffTimerKeys(prefix: string, actions: () => { showName: string, valueName?: string, action: (dd: number) => void }[]): IRKeysHandler {
         return {
             partial: arr => {
                 const firstNonPref = util.getFirstNonPrefixIndex(arr, prefix)
@@ -657,8 +652,8 @@ class App implements TabletHost {
                     return null; // Not our beast
                 }
 
-
-                const a = actions[(firstNonPref - 1) % actions.length];
+                const actionsa = actions();
+                const a = actionsa[(firstNonPref - 1) % actionsa.length];
                 if (firstNonPref == arr.length) {
                     // No numbers yet
                     this.allInformers.staticLine(a.showName);
@@ -673,7 +668,8 @@ class App implements TabletHost {
                 const firstNonPref = util.getFirstNonPrefixIndex(arr, prefix)
                 const dd = util.numArrToVal(arr.slice(firstNonPref));
                 if (dd) {
-                    actions[(firstNonPref - 1) % actions.length].action(dd);
+                    const actionsa = actions();
+                    actionsa[(firstNonPref - 1) % actionsa.length].action(dd);
                 }
             }
         };
@@ -688,10 +684,11 @@ class App implements TabletHost {
             this.allInformers.runningLine(name + " в " + util.toHMS(timer.val!)) );
     }
 
-    private makeSpecifyChannel(irk: string) {
-        return this.createPowerOnOffTimerKeys(irk, Array.from(this.tablets.values()).map(t => {
-            return {
-                showName: t.shortName, action: (dd: number) => {
+    private makeSwitchChannelIrSeq(irk: string) {
+        return this.createPowerOnOffTimerKeys(irk, () => 
+            this.allOnlineTablets().map(t => ({
+                showName: t.shortName, 
+                action: (dd: number) => {
                     const chan = this.channelsHistoryConf.last().channels.find(c => c.channel == dd);
                     if (chan) {
                         if (!t.screenIsOn.get()) {
@@ -705,8 +702,7 @@ class App implements TabletHost {
                         this.allInformers.runningLine("Канал " + dd + " не найден");
                     }
                 }
-            };
-        }));
+            })).slice());
     }
 
     private makeUpDownKeys(keys: {key: string, action: () => void}[]): IRKeysHandler {
@@ -735,13 +731,13 @@ class App implements TabletHost {
     }
 
     private irKeyHandlers: IRKeysHandler[] = [
-        this.createPowerOnOffTimerKeys('power', [
+        this.createPowerOnOffTimerKeys('power', () => [
             { showName: "Выкл", valueName: "мин", action: (dd) => this.timerIn(dd * 60, "Выключение", this.sleepAt) },
             { showName: "Вкл", valueName: "мин", action: (dd) => this.timerIn(dd * 60, "Включение", this.wakeAt) },
             { showName: "Таймер", valueName: "мин", action: (dd) => this.timerIn(dd * 60, "Таймер", this.timer) }
         ]),
-        this.makeSpecifyChannel('ent'),
-        this.makeSpecifyChannel('reset'),
+        this.makeSwitchChannelIrSeq('ent'),
+        this.makeSwitchChannelIrSeq('reset'),
         this.simpleCmd([['fullscreen']], "MiLight", () => {
             this.miLight.switchOn.switch(!this.miLight.switchOn.get());
         }),
@@ -1033,6 +1029,14 @@ class App implements TabletHost {
                 }
             }));
         });
+        router.post('/tablet_tap', (req, res) => {
+            const tabletId = req.query['id'];
+            const tbl = this.tablets.get(tabletId);
+
+            if (tbl) {
+                tbl.shellCmd(`input tap ${req.query['x']} ${req.query['y']}`);
+            }
+        });
         router.get('/tablet_screen', (req, res) => {
             const tabletId = req.query['id'];
             const tbl = this.tablets.get(tabletId);
@@ -1050,17 +1054,41 @@ class App implements TabletHost {
             const tbl = this.tablets.get(tabletId);
 
             if (tbl) {
+                const tabletId = querystring.escape(req.query['id']);
                 res.contentType('html');
                 res.send(util.wrapToHTML(["html", { lang: "en" }],
                     [
                         util.wrapToHTML("head", [
                             util.wrapToHTML(["meta", { 'http-equiv': "content-type", content: "text/html; charset=UTF-8" }]),
-                            util.wrapToHTML(["meta", { name: "viewport", content: "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" }], undefined),        
+                            util.wrapToHTML(["meta", { name: "viewport", content: "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" }], undefined),
+                            util.wrapToHTML(["script", { type: "text/javascript" }],
+                            `
+                            function sendReq(url, resFn) {
+                                var xhr = new XMLHttpRequest();
+                                xhr.open("POST", url, true);
+                                xhr.onload = function() { 
+                                    if (resFn) {
+                                        resFn(xhr.responseText);
+                                    } 
+                                };
+                                xhr.send(); 
+                            }
+                    
+                            window.onload = function() {
+                                var scr = document.getElementById('mainScr');
+                                scr.onclick = (e) => {
+                                    console.log(e.clientX, e.clientY);
+                                    sendReq("/tablet_tap?id=${tabletId}&x=" + e.clientX + "&y=" + e.clientY);
+                                    setTimeout(() => scr.src = '/tablet_screen?id=${tabletId}&t=' + new Date().getTime(), 200);
+                                }
+                            }
+                            `)
                         ].join("\n")) + "\n" +
                         util.wrapToHTML("body", [
                             util.wrapToHTML(["img", {
+                                id: 'mainScr',
                                 style: 'transform: rotate(' + [270, 0, 90, 180][tbl.orientation.get()] + 'deg);',
-                                src: '/tablet_screen?id=' + querystring.escape(req.query['id'])
+                                src: '/tablet_screen?id=' + tabletId
                             }])
                         ].join('\n'))
                     ].join('\n')));
