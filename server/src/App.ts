@@ -691,9 +691,6 @@ class App implements TabletHost {
                 action: (dd: number) => {
                     const chan = this.channelsHistoryConf.last().channels.find(c => c.channel == dd);
                     if (chan) {
-                        if (!t.screenIsOn.get()) {
-                            t.screenIsOn.set(true);
-                        }
                         t.stopPlaying()
                             .then(() => {
                                 this.playURL(t, chan.url, chan.name);
@@ -1290,7 +1287,7 @@ class App implements TabletHost {
         return this.playURL(t, c.url, c.name);
     }
 
-    public playURL(t: Tablet, _url: string, _name: string): Promise<void> {
+    public async playURL(t: Tablet, _url: string, _name: string): Promise<void> {
         const url = _url.trim();
         const gotName = (name: string) => {
             // update history
@@ -1319,6 +1316,10 @@ class App implements TabletHost {
             ]).then(gotName);
         } else {
             gotName(_name);
+        }
+
+        if (!t.screenIsOn.get()) {
+            await t.screenIsOn.set(true);
         }
 
         this.r2.switch(true);
