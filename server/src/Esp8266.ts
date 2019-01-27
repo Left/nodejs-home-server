@@ -1,4 +1,4 @@
-import { Relay, Controller, Property, ClassWithId, PropertyImpl, SpanHTMLRenderer, Button, newWritableProperty, SliderHTMLRenderer } from "./Props";
+import { Relay, Controller, Property, ClassWithId, PropertyImpl, SpanHTMLRenderer, Button, newWritableProperty, SliderHTMLRenderer, StringAndGoRendrer } from "./Props";
 import { LcdInformer } from './Informer';
 import { delay } from './Util';
 import * as WebSocket from 'ws';
@@ -110,7 +110,7 @@ export class ClockController extends ClassWithId implements Controller {
     protected lastResponse = Date.now();
     private readonly _name: string;
     public readonly properties: Property<any>[];
-    public get name() { return this._name + " (" + this.ip + ")"; }
+    public get name() { return this._name; }
     public readonly lcdInformer?: LcdInformer;
     public readonly internalName: string;
 
@@ -145,7 +145,7 @@ export class ClockController extends ClassWithId implements Controller {
         if (hello.devParams['hasDS18B20'] === 'true') {
             this.properties.push(this.tempProperty);
         }
-        if (hello.devParams["hasScreen"]) {
+        if (hello.devParams["hasScreen"] === 'true') {
             this.lcdInformer = {
                 runningLine: (str) => {
                     this.send({ type: 'show', text: str });
@@ -159,6 +159,9 @@ export class ClockController extends ClassWithId implements Controller {
             };
             this.brightnessProperty.setInternal(+hello.devParams.brightness);
             this.properties.push(this.brightnessProperty);
+            this.properties.push(newWritableProperty("Go play", "", new StringAndGoRendrer("Play"), (val) => {
+                this.send({ type: 'show', text: val });
+            }));
         }
         if (!!hello.devParams['relay.names']) {
             hello.devParams['relay.names']

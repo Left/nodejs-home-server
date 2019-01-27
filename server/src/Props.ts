@@ -61,7 +61,6 @@ export class SliderHTMLRenderer implements HTMLRederer<number> {
     }
 }
 
-
 export class SelectHTMLRenderer<T> implements HTMLRederer<T> {
     constructor(
         public readonly choices: T[], 

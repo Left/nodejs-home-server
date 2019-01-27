@@ -245,7 +245,9 @@ class App implements TabletHost {
             (v: number) => { onChange(v); });
     }
 
-    private createTimer(name: string, confName: string, onFired: ((d: Date) => void)): TimerProp {
+    private createTimer(name: string, 
+        confName: string, 
+        onFired: ((d: Date) => void)): TimerProp {
         interface Conf {
             val: string | null;
         }
@@ -303,15 +305,14 @@ class App implements TabletHost {
                     onDateChanged();
                 }
             });
-        var timer: NodeJS.Timer;
+        var timers: NodeJS.Timer[] = [];
 
         const setNewValue = (d: Date | null) => {
             console.log(name + " --> " + d);
             if (d !== that.val) {
                 // that.val === undefined || that.val.getTime() != d.getTime())) {
-                if (!!timer) {
-                    clearTimeout(timer);
-                }
+                timers.forEach(t => clearTimeout(t));
+                timers = [];
 
                 that.val = d;
                 if (that.val !== null) {
@@ -324,10 +325,20 @@ class App implements TabletHost {
 
                     const tt = that.val;
                     // Let's setup timer
-                    timer = setTimeout(() => {
+                    timers.push(setTimeout(() => {
                         onFired(tt);
                         setNewValue(null);
-                    }, msBefore);
+                    }, msBefore));
+                    [45, 30, 20, 15, 10, 5, 4, 3, 2, 1].forEach(m => {
+                        const msB = msBefore - m*60*1000;
+                        if (msB > 0) {
+                            timers.push(setTimeout(() => {
+                                // 
+                                console.log(m + ' минут до ' + name);
+                                this.allInformers.runningLine(m + ' минут до ' + name.toLowerCase());
+                            }, msB));
+                        }
+                    });
                     conf.change(t => t.val = that.val!.toJSON());
                 } else {
                     // Dropped timer
