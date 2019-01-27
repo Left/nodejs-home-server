@@ -1,4 +1,4 @@
-import { Relay, Controller, Property, ClassWithId, PropertyImpl, SpanHTMLRenderer, Button } from "./Props";
+import { Relay, Controller, Property, ClassWithId, PropertyImpl, SpanHTMLRenderer, Button, newWritableProperty, SliderHTMLRenderer } from "./Props";
 import { LcdInformer } from './Informer';
 import { delay } from './Util';
 import * as WebSocket from 'ws';
@@ -114,8 +114,14 @@ export class ClockController extends ClassWithId implements Controller {
     public readonly lcdInformer?: LcdInformer;
     public readonly internalName: string;
 
-    private tempProperty = new PropertyImpl<string>("Температура", new SpanHTMLRenderer(), "Нет данных");
-    private weightProperty = new PropertyImpl<string>("Вес", new SpanHTMLRenderer(), "Нет данных");
+    public tempProperty = new PropertyImpl<string>("Температура", new SpanHTMLRenderer(), "Нет данных");
+    public weightProperty = new PropertyImpl<string>("Вес", new SpanHTMLRenderer(), "Нет данных");
+    public brightnessProperty = newWritableProperty("Яркость", 
+        0,
+        new SliderHTMLRenderer(),
+        (val: number) => {
+            this.send({ type: 'brightness', value: val });
+        });
     private baseWeight?: number;
     private lastWeight?: number;
     public readonly relays: ControllerRelay[] = [];
@@ -151,6 +157,8 @@ export class ClockController extends ClassWithId implements Controller {
                     this.send({ type: 'additional-info', text: str });
                 }
             };
+            this.brightnessProperty.setInternal(+hello.devParams.brightness);
+            this.properties.push(this.brightnessProperty);
         }
         if (!!hello.devParams['relay.names']) {
             hello.devParams['relay.names']
