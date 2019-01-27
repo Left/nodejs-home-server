@@ -8,6 +8,12 @@
             "type": "shell",
             "command": "cd server;GLOBIGNORE='node_modules:dist:.vscode:.git'; rsync -avzh * root@192.168.121.38:/root/nodeserver",
             "problemMatcher": []
+        },
+        {
+            "label": "Build web client",
+            "type": "shell",
+            "command": "cd client;ng build --watch --base-href=/static/ --output-path=../server/web/production",
+            "problemMatcher": []
         }
     ]
 }

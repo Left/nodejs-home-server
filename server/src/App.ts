@@ -3,7 +3,7 @@ import * as http from 'http';
 import * as WebSocket from 'ws';
 // import * as stream from "stream";
 import * as fs from "fs";
-// import * as os from "os";
+import * as path from "path";
 import * as dgram from "dgram";
 import * as crypto from 'crypto';
 import * as querystring from 'querystring';
@@ -602,7 +602,7 @@ class App implements TabletHost {
     }
 
     private toAceUrl(aceCode: string): string {
-        return "http://192.168.121.38:6878/ace/getstream?id=" + aceCode +"&hlc=1&spv=0&transcode_audio=0&transcode_mp3=0&transcode_ac3=0&preferred_audio_language=eng";
+        return "http://192.168.121.38:6878/ace/getstream?id=" + aceCode +"&hlc=1&spv=0&transcode_audio=0&transcode_mp3=0&transcode_ac3=0&preferred_audio_language=ru";
     }
 
     private get controllers(): Controller[] {
@@ -850,13 +850,13 @@ class App implements TabletHost {
 
         this.wss = new WebSocket.Server({ server: this.server });
         this.wss.on('connection', (ws: WebSocket, request) => {
-            const url = request.url;
+            const url = (request.url || '/').split('/').filter(p => !!p);
             // console.log("Connection from", request.connection.remoteAddress, request.url);
-            const esp: boolean = url === '/esp';
             const remoteAddress = request.connection.remoteAddress;
             const ip = util.parseOr(remoteAddress, /::ffff:(.*)/, remoteAddress);
+
             //connection is up, let's add a simple simple event
-            if (esp) {
+            if (util.arraysAreEqual(url, ['esp'])) {
                 // This is ESP controller!
                 ws.on('message', (data: string) => {
                     try {
@@ -964,7 +964,7 @@ class App implements TabletHost {
                         console.error('Can not process message:', data, e);
                     }
                 });
-            } else if (url === '/web') {
+            } else if (util.arraysAreEqual(url, ['web'])) {
                 // This is web client. Let's report server revision
                 this.serverHashIdPromise.then((hashId) => {
                     ws.send(JSON.stringify({ type: 'serverVersion', val: hashId }));
@@ -983,6 +983,11 @@ class App implements TabletHost {
                         } else {
                             console.error(`Property with id = ${msg.id} is not found`);
                         }
+                    } else if (msg.type === 'getPropList') {
+                        ws.send(JSON.stringify(this.controllers.map(ct => ({
+                            name: ct.name,
+                            props: ct.properties.map(prop => ({ name: prop.name, id: prop.id, val: prop.get() }))
+                        }))));
                     } else {
                         //log the received message and send it back to the client
                         console.log('received: %s', message);
@@ -993,7 +998,7 @@ class App implements TabletHost {
                     // console.log('closed web client');
                 });
             } else {
-                console.log("WTH???");
+                console.log("WTH???", url);
             }
 
             //send immediatly a feedback to the incoming connection    
@@ -1009,6 +1014,7 @@ class App implements TabletHost {
         router.get('/', (req, res) => {
             res.redirect('/index.html');
         });
+        router.use('/static', express.static(path.normalize(__dirname + '/../web/production')));
         router.get('/favicon.ico', (req, res) => {
             const favicon = new Buffer('AAABAAEAEBAAAAEAIABoBAAAFgAAACgAAAAQAAAAIAAAAAEAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////wAAAP///////////wAAAP//////AAAA/////////////////wAAAP////////////////////////////////8AAAD///////////8AAAD//////wAAAP////////////////8AAAD/////////////////////////////////AAAA////////////AAAA//////8AAAD/////////////////AAAA/////////////////////////////////wAAAP8AAAD/AAAA/wAAAP//////AAAA/////////////////wAAAP////////////////////////////////8AAAD///////////8AAAD//////wAAAP//////AAAA//////8AAAD/////////////////////////////////AAAA////////////AAAA//////8AAAD/AAAA//////8AAAD/AAAA/////////////////////////////////wAAAP///////////wAAAP//////AAAA/////////////////wAAAP//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==', 'base64');
             res.statusCode = 200;
@@ -1157,7 +1163,14 @@ class App implements TabletHost {
         // Subscribe to all the props changes
         this.controllers.forEach(ct => {
             this.initController(ct);
-        })
+        });
+
+        Array.from(this.tablets.values()).forEach(tablet => {
+            if (tablet.isTcp) {
+                // console.log('Tablet', tablet.id);
+                tablet.connectIfNeeded();
+            }
+        });
     }
 
     private renderToHTML(allProps: Property<any>[][]): string {

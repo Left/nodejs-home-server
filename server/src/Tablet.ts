@@ -139,7 +139,7 @@ export class Tablet implements Controller {
         public readonly id: string,
         public readonly shortName: string,
         private readonly app: TabletHost,
-        private readonly tryToConnect: boolean) {
+        public readonly isTcp: boolean) {
         this._name = id;
         this._androidVersion = "<Unknown>";
 
@@ -160,7 +160,7 @@ export class Tablet implements Controller {
             Button.createClientRedirect("Screen", "/tablet.html?id=" + querystring.escape(this.id)),
             Button.create("Reset", () => this.shellCmd("reboot")),
         ], 
-        this.tryToConnect ? [] : [
+        this.isTcp ? [] : [
             Button.create("TCPIP", () => {
                 console.log(this.id);
                 adbClient.getDHCPIpAddress(this.id).then((ip: string) => {
@@ -238,15 +238,17 @@ export class Tablet implements Controller {
 
     private _connectingNow = false;
 
-    private connectIfNeeded(): Promise<void> {
-        if (!this._online && this.tryToConnect && !this._connectingNow) {
+    public connectIfNeeded(): Promise<void> {
+        if (!this._online && this.isTcp && !this._connectingNow) {
             // We should try to connect first
             const parse = this.id.match(/([^:]*):?(\d*)/);
             if (parse) {
                 this._connectingNow = true;
                 return new Promise<void>((accept, reject) => {
+                    // console.log('Connecting', this.id);
                     adbClient.connect(parse[1], +(parse[2])).then(() => {
                         this._connectingNow = false;
+                        console.log('Connected', this.id);
                         this.init()
                             .then(() => accept())
                             .catch(() => reject());
