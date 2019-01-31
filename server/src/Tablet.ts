@@ -157,7 +157,7 @@ export class Tablet implements Controller {
             Button.create("Pause", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Pause")),
             Button.create("Play", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Play")),
             Button.create("Stop playing", () => this.stopPlaying()),
-            Button.createClientRedirect("Screen", "/tablet.html?id=" + querystring.escape(this.id)),
+            Button.createClientRedirect("Screen", "/tablet/tablet.html?id=" + querystring.escape(this.id)),
             Button.create("Reset", () => this.shellCmd("reboot")),
         ], 
         this.isTcp ? [] : [
