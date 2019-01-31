@@ -2,45 +2,14 @@ const el = (row, col) => {
     return document.getElementById('tbl' + row + "_" + col);
 };
 const setVal = (row, col, val) => {
-    const ell = el(row, col);
-    if (ell) {
-        const now = (new Date().getTime());
-        const lc = +(ell.dataset['lastChange'] || '0');
-        if (now - lc > 100) {
-            ell.style.backgroundColor = (val ? 'black' : 'white');
-            ell.dataset['lastChange'] = "" + now;
-        }
-    }
+    el(row, col).style.backgroundColor = (val ? 'black' : 'white');
 };
 const getVal = (row, col) => {
-    const ell = el(row, col);
-    return ell ? el(row, col).style.backgroundColor === 'black' : false;
+    return el(row, col).style.backgroundColor === 'black';
 };
-const iterate = (processor) => {
-    for (let c = 0; c < 7; ++c) {
-        for (let r = 7; r >= 0; --r) {
-            setVal(r, c, processor(r, c, getVal(r, c)));
-        }
-    }
-};
-const clearFld = () => {
-    // console.log("CCCLEAR");'
-    iterate(() => false);
-    toText();
-};
-const invertFld = () => {
-    iterate((r, c, v) => !v);
-    toText();
-};
-const moveLeft = () => {
-    iterate((r, c, v) => getVal(r, c + 1));
-    toText();
-};
-let color = true; // black
-const setColor = (clr) => {
-    color = clr;
-};
-const toText = () => {
+const onClick = (row, col) => {
+    // console.log(getVal(row, col));
+    setVal(row, col, !getVal(row, col));
     const res = [0];
     for (let c = 0; c < 7; ++c) {
         let x = 0;
@@ -55,20 +24,6 @@ const toText = () => {
     }
     const resv = res.map(x => '0x' + ((f) => f.length == 2 ? f : '0' + f)(x.toString(16))).join(', ');
     document.getElementById('txt').value = resv;
-};
-const onClick = (row, col) => {
-    // console.log(getVal(row, col));
-    setVal(row, col, !getVal(row, col));
-    toText();
-    // console.log(resv);
-};
-const onMove = (row, col, event) => {
-    // console.log(row, col, event);
-    // console.log(getVal(row, col));
-    if (event.buttons == 1) {
-        setVal(row, col, color);
-    }
-    toText();
     // console.log(resv);
 };
 const textChange = (val) => {
@@ -91,8 +46,7 @@ window.onload = () => {
                     width=40 
                     id=${'tbl' + rowIndex + '_' + colIndex} 
                     style='background-color: white'
-                    onclick='onClick(${rowIndex}, ${colIndex})'
-                    onmousemove='onMove(${rowIndex}, ${colIndex}, event)'></td>`;
+                    onclick='onClick(${rowIndex}, ${colIndex})'></td>`;
             }).join(" ") + "</tr>";
     }).join('\n') + "</table>";
     textChange(document.getElementById('txt').value);

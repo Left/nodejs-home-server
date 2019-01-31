@@ -8,5 +8,10 @@
     <body>
         <input id='txt' size='80' type="text" oninput="textChange(this.value)" value="0x06, 0x7c, 0x40, 0x78, 0x40, 0x7c, 0xc0, 0x00"/> <br/>
         <div id='field'></div>
+        <br/>
+        <button onclick="clearFld()">Clear</button>
+        <button onclick="invertFld()">Invert</button>
+        <button onclick="moveLeft()">&lt;=</button>
+        <label>Black color<input type="checkbox" onchange="setColor(this.checked)" checked='true'></input></label>
     </body>
 </html>
