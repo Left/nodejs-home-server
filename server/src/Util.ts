@@ -1,6 +1,7 @@
 import * as child_process from "child_process";
 import * as fs from "fs";
 import * as os from "os";
+import { clearInterval } from "timers";
 
 export function splitLines(s: string): string[] {
     return s.split(/\r\n|\r|\n/);
@@ -60,11 +61,56 @@ export function toHourMinSec(seconds: number): string {
     return res.join(' ');
 }
 
+export interface Disposable {
+    dispose(): void;
+}
+
+export const emptyDisposable: Disposable = {
+    dispose() {}
+}
+
+export function doAt(hour: number, min: number, sec: number, runnable: () => void): Disposable {
+    let cancelled = false;
+    let interval1: NodeJS.Timer;
+    const timer1 = setTimeout(() => {
+        if (!cancelled) {
+            runnable();
+            interval1 = setInterval(() => {
+                if (!cancelled) {
+                    runnable();
+                }
+            }, 24*60*60*1000);
+        }
+    }, (nextTimeAt(hour, min, sec).getTime()) - (new Date().getTime()));
+
+    return {
+        dispose: () => {
+            cancelled = true;
+            if (timer1)
+                clearTimeout(timer1);
+            if (interval1)
+                clearInterval(interval1);
+        }
+    };
+}
+
+export function nextTimeAt(hour: number, min: number, sec: number): Date {
+    const now = new Date();
+    const then = new Date();
+    then.setHours(hour);
+    then.setMinutes(min);
+    then.setSeconds(sec);
+    if (then.getTime() < now.getTime()) {
+        then.setDate(then.getDate() + 1);
+    }
+    return then;
+}
+
 export function delay(time: number): Promise<void> {
     return new Promise<void>(function(resolve) { 
         setTimeout(resolve, time);
     });
- }
+}
 
 export function trace<T>(x: T): T {
     console.log(x);

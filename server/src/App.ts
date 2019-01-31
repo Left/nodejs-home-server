@@ -145,6 +145,30 @@ class MiLightBulb implements Controller {
     }
 }
 
+interface SunrizeRes {
+    status: string;
+}
+
+interface SunrizeError extends SunrizeRes {
+    status: 'Error';
+}
+
+interface SunrizeDate extends SunrizeRes { 
+    status: 'OK';
+    results: { 
+        sunrise: string; // '2019-01-31T05:04:02+00:00',
+        sunset: string; // '2019-01-31T14:49:54+00:00',
+        solar_noon: string; // '2019-01-31T09:56:58+00:00',
+        day_length: number; // 35152, in seconds
+        civil_twilight_begin: string; // '2019-01-31T04:32:49+00:00',
+        civil_twilight_end: string; // '2019-01-31T15:21:07+00:00',
+        nautical_twilight_begin: string; // '2019-01-31T03:57:36+00:00',
+        nautical_twilight_end: string; // '2019-01-31T15:56:20+00:00',
+        astronomical_twilight_begin: string; // '2019-01-31T03:23:11+00:00',
+        astronomical_twilight_end: string; // '2019-01-31T16:30:45+00:00' 
+    };
+}
+
 interface IRKeysHandler {
     remote?: string;
     /**
@@ -751,6 +775,31 @@ class App implements TabletHost {
         } as IRKeysHandler;
     }
 
+    private dayBeginsTimer: util.Disposable = util.emptyDisposable;
+    private dayEndsTimer: util.Disposable = util.emptyDisposable;
+
+    private dayBegins() {
+        const clock = this.findDynController('ClockNRemote');
+        if (clock) {
+            clock.brightnessProperty.set(40);
+            if (clock.lcdInformer) {
+                clock.lcdInformer.runningLine("Рассвет");
+            }
+        }
+        this.miLight.brightness.set(50);
+    }
+
+    private dayEnds() {
+        const clock = this.findDynController('ClockNRemote');
+        if (clock) {
+            clock.brightnessProperty.set(40);
+            if (clock.lcdInformer) {
+                clock.lcdInformer.runningLine("Закат");
+            }
+        }
+        this.miLight.brightness.set(100);
+    }
+
     private irKeyHandlers: IRKeysHandler[] = [
         this.createPowerOnOffTimerKeys('power', () => [
             { showName: "Выкл", valueName: "мин", action: (dd) => this.timerIn(dd * 60, "Выключение", this.sleepAt) },
@@ -849,15 +898,35 @@ class App implements TabletHost {
             console.log("Read " + conf.channels.length + " M3U channels");
         });
 
+        const getSunrizeSunset = () => {
+            const now = new Date();
+            const lat = 44.9704778;
+            const lng = 34.1187681;
+            curl.get(`https://api.sunrise-sunset.org/json?formatted=0&lat=${lat}&lng=${lng}&date=${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`)
+                .then(resStr => {
+                    const res = JSON.parse(resStr) as SunrizeError | SunrizeDate;
+                    if (res.status === 'OK') {
+                        const twilightBegin = new Date(res.results.civil_twilight_begin);
+                        const twilightEnd = new Date(res.results.civil_twilight_end)
+                 
+                        this.dayBeginsTimer.dispose();
+                        this.dayBeginsTimer = util.doAt(twilightBegin.getHours(), twilightBegin.getMinutes(), twilightBegin.getSeconds(), () => { this.dayBegins() });
+
+                        this.dayEndsTimer.dispose();
+                        this.dayEndsTimer = util.doAt(twilightEnd.getHours(), twilightEnd.getMinutes(), twilightEnd.getSeconds(), () => { this.dayEnds() });
+                    }
+                })
+        };
+
+        util.doAt(0, 5, 0, getSunrizeSunset);
+        getSunrizeSunset();
+
         // Each hour reload our playlists
         setInterval(() => {
             this.reloadAceStream();
             this.reloadM3uPlaylists();
         }, 1000*60*60);
         
-        setInterval(() => {
-            // Each minute 
-        }, 1000*60);
 
         this.expressApi = express();
 
