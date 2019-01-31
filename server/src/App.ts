@@ -412,6 +412,11 @@ class App implements TabletHost {
                 }
             }
         }
+        const clock = this.findDynController('ClockNRemote');
+        if (clock) {
+            clock.brightnessProperty.set(5);
+        }
+
         this.relaysState.wasOnIds = wasOnIds;
     });
 
@@ -480,13 +485,11 @@ class App implements TabletHost {
             this.allInformers.runningLine("Просыпаемся...");
 
             await util.delay(2000);
-            this.miLight.brightness.set(50);
+            this.miLight.brightness.set(10);
             await util.delay(100);
             this.miLight.allWhite.set(true);
             await util.delay(100);
             this.miLight.switchOn.set(true);
-
-            this.r1.switch(true);
 
             this.kindle.screenIsOn.set(true);
             await util.delay(100)
@@ -502,6 +505,16 @@ class App implements TabletHost {
             if (kr) {
                 kr.relays[1].switch(true);
             }
+
+            const clock = this.findDynController('ClockNRemote');
+            if (clock) {
+                clock.brightnessProperty.set(20);
+            } 
+
+            await util.delay(3000);
+            this.r1.switch(true);
+
+            this.miLight.brightness.set(80);
         }
         wake();
     });
@@ -822,38 +835,29 @@ class App implements TabletHost {
 
         // Load acestream channels
         this.acestreamHistoryConf.read().then(conf => {
-            if ((new Date().getTime() - conf.lastUpdate) / 1000 > 60*60) {
-                curl.get("http://pomoyka.win/trash/ttv-list/as.json")
-                    .then(text => {
-                        const aceChannels = JSON.parse(text).channels as AceChannel[];
-                        console.log("Downloaded " + aceChannels.length + " channels");
-                        this.acestreamHistoryConf.change(conf => {
-                            conf.channels = aceChannels;
-                            conf.lastUpdate = new Date().getTime();
-                        });
-                    });
+            if ((new Date().getTime() - conf.lastUpdate) > 60*60*1000) {
+                this.reloadAceStream();
             }
-            console.log("Read " + conf.channels.length + " channels");
+            console.log("Read " + conf.channels.length + " ACE channels");
         });
 
         // Load TV channels from different m3u lists
         this.tvChannels.read().then(conf => {
             if ((new Date().getTime() - conf.lastUpdate) / 1000 > 60*60) {
-                this.parseM3Us([
-                    "http://iptviptv.do.am/_ld/0/1_IPTV.m3u",
-                    "http://tritel.net.ru/cp/files/Tritel-IPTV.m3u",
-                    "http://getsapp.ru/IPTV/Auto_IPTV.m3u",
-                    "https://webarmen.com/my/iptv/auto.nogrp.m3u",
-                    "https://smarttvnews.ru/apps/Channels.m3u"
-                ]).then(channels => {
-                    this.tvChannels.change(conf => {
-                        conf.channels = channels;
-                        conf.lastUpdate = new Date().getTime();
-                    });
-                });
+                this.reloadM3uPlaylists();
             }
+            console.log("Read " + conf.channels.length + " M3U channels");
         });
 
+        // Each hour reload our playlists
+        setInterval(() => {
+            this.reloadAceStream();
+            this.reloadM3uPlaylists();
+        }, 1000*60*60);
+        
+        setInterval(() => {
+            // Each minute 
+        }, 1000*60);
 
         this.expressApi = express();
 
@@ -1183,6 +1187,33 @@ class App implements TabletHost {
                 tablet.connectIfNeeded();
             }
         });
+    }
+
+    private reloadM3uPlaylists() {
+        this.parseM3Us([
+            "http://iptviptv.do.am/_ld/0/1_IPTV.m3u",
+            "http://tritel.net.ru/cp/files/Tritel-IPTV.m3u",
+            "http://getsapp.ru/IPTV/Auto_IPTV.m3u",
+            "https://webarmen.com/my/iptv/auto.nogrp.m3u",
+            "https://smarttvnews.ru/apps/Channels.m3u"
+        ]).then(channels => {
+            this.tvChannels.change(conf => {
+                conf.channels = channels;
+                conf.lastUpdate = new Date().getTime();
+            });
+        });
+    }
+
+    private reloadAceStream() {
+        curl.get("http://pomoyka.win/trash/ttv-list/as.json")
+            .then(text => {
+                const aceChannels = JSON.parse(text).channels as AceChannel[];
+                console.log("Downloaded " + aceChannels.length + " channels");
+                this.acestreamHistoryConf.change(conf => {
+                    conf.channels = aceChannels;
+                    conf.lastUpdate = new Date().getTime();
+                });
+            });
     }
 
     private renderToHTML(allProps: Property<any>[][]): string {
