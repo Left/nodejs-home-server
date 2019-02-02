@@ -580,6 +580,7 @@ class App implements TabletHost {
         return this.controllers.filter(c => c.online);
     }
 
+    // We're using dockerized acestream from https://github.com/lucabelluccini/acestream-engine-armv7-docker
     private acestreamHistoryConf = util.newConfig({ channels: [] as Channel[], lastUpdate: 0 }, "acestream_tv_channels");
     private tvChannels = util.newConfig({ channels: [] as Channel[], lastUpdate: 0 }, "m3u_tv_channels");
     private channelsHistoryConf = util.newConfig({ channels: [] as Channel[] }, "tv_channels");
