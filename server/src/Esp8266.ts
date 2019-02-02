@@ -122,6 +122,7 @@ export class ClockController extends ClassWithId implements Controller {
         (val: number) => {
             this.send({ type: 'brightness', value: val });
         });
+    private static baseW: Map<string, number> = new Map();
     private baseWeight?: number;
     private lastWeight?: number;
     public readonly relays: ControllerRelay[] = [];
@@ -135,6 +136,7 @@ export class ClockController extends ClassWithId implements Controller {
         this.internalName = hello.devParams['device.name'];
 
         this._name = hello.devParams['device.name.russian'] || this.internalName;
+        this.baseWeight = ClockController.baseW.get(this._name);
         this.lastResponse = Date.now();
 
         this.properties = [];
@@ -231,6 +233,9 @@ export class ClockController extends ClassWithId implements Controller {
         this.handler.onWeightReset();
         delay(500).then(() => {
             this.baseWeight = this.lastWeight;
+            if (this.baseWeight) {
+                ClockController.baseW.set(this._name, this.baseWeight);
+            }
         });
     }
 
@@ -260,6 +265,7 @@ export class ClockController extends ClassWithId implements Controller {
             case 'weight':
                 if (!this.baseWeight) {
                     this.baseWeight = objData.value;
+                    ClockController.baseW.set(this._name, this.baseWeight);
                 }
                 this.lastWeight = objData.value;
                 this.reportWeight();

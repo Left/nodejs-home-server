@@ -902,16 +902,19 @@ class App implements TabletHost {
             const now = new Date();
             const lat = 44.9704778;
             const lng = 34.1187681;
+            console.log('sunrise query');
             curl.get(`https://api.sunrise-sunset.org/json?formatted=0&lat=${lat}&lng=${lng}&date=${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`)
                 .then(resStr => {
                     const res = JSON.parse(resStr) as SunrizeError | SunrizeDate;
                     if (res.status === 'OK') {
                         const twilightBegin = new Date(res.results.civil_twilight_begin);
                         const twilightEnd = new Date(res.results.civil_twilight_end)
-                 
+
+                        console.log('sunrise is at ' + twilightBegin.toLocaleString());
                         this.dayBeginsTimer.dispose();
                         this.dayBeginsTimer = util.doAt(twilightBegin.getHours(), twilightBegin.getMinutes(), twilightBegin.getSeconds(), () => { this.dayBegins() });
 
+                        console.log('sunset is at ' + twilightEnd.toLocaleString());
                         this.dayEndsTimer.dispose();
                         this.dayEndsTimer = util.doAt(twilightEnd.getHours(), twilightEnd.getMinutes(), twilightEnd.getSeconds(), () => { this.dayEnds() });
                     }
@@ -1031,6 +1034,7 @@ class App implements TabletHost {
                                 this.allInformers.set(ip, clockController.lcdInformer);
                             }
                             this.initController(clockController);
+                            clockController.send({ type: "unixtime", value: Math.floor((new Date()).getTime() / 1000) });
 
                             this.allInformers.runningLine('Подключено ' + clockController.name);
 
