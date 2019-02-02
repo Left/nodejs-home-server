@@ -551,7 +551,20 @@ class App implements TabletHost {
                 util.runShell("/bin/systemctl", ["restart", "nodeserver"])
             }),
             Button.create("Reboot AceStream", () => {
-                util.runShell("/usr/bin/docker", ["restart", "4570f4fd6b4d"])
+                const go = async () => {
+                    console.log('Before reboot');
+                    util.runShell("/usr/bin/docker", ["restart", "9533adf91cce"]);
+                    console.log('After reboot');
+                    await util.delay(1000);
+                    try {
+                        const ret = await curl.get('http://127.0.0.1:8621');
+                        console.log('Ret:', ret);
+                    } catch (e) {
+                        console.log(e);
+                    }
+                };
+                
+                go();
             }),
             Button.create("Reboot Orange Pi", () => util.runShell("reboot", [])),
             Button.createClientRedirect("TV Channels", "/tv.html"),
@@ -593,9 +606,11 @@ class App implements TabletHost {
     }
 
     private makePlayButtonsForChannel(url: string, name: string): Button[] {
-        return this.allOnlineTablets().map(t => 
+        return Array.prototype.concat(this.allOnlineTablets().map(t => 
             Button.create("Play [ " + t.shortName + " ]", () => this.playURL(t, url, name))
-        );
+        ), [
+            Button.createCopyToClipboard("Copy URL", url)
+        ]);
     }
 
     private renderChannels() {
@@ -871,15 +886,6 @@ class App implements TabletHost {
     }
 
     constructor() {
-        curl.get('http://127.0.0.1:8621')
-            .then(v => {
-                // console.log(v);
-                // Acestream responds OK
-            })
-            .catch(e => {
-                console.log("Acestream is not started!");
-            });
-
         this.channelsHistoryConf.read();
 
         // Load acestream channels
@@ -1343,6 +1349,15 @@ class App implements TabletHost {
             const propChangeMap = {
                 ${propChangedMap}
             };
+
+            function copyToClipboard(text) {
+                var textField = document.createElement('textarea');
+                textField.innerText = text;
+                document.body.appendChild(textField);
+                textField.select();
+                document.execCommand('copy');
+                textField.remove();
+            }
 
             function sendVal(id, name, val) {
                 sock.send(JSON.stringify({ 

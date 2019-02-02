@@ -220,6 +220,10 @@ export class Button extends WritablePropertyImpl<void> {
     static createClientRedirect(name: string, url: string): Button {
         return new Button(name, () => {}, new ButtonRendrer(() => "location = ('" + url + "')"));
     }
+
+    static createCopyToClipboard(name: string, value: string): Button {
+        return new Button(name, () => {}, new ButtonRendrer(() => "copyToClipboard('" + value + "')"));
+    }
 }
 
 export abstract class Relay extends WritablePropertyImpl<boolean> {
