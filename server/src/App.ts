@@ -1063,7 +1063,7 @@ class App implements TabletHost {
                             this.initController(clockController);
                             clockController.send({ type: "unixtime", value: Math.floor((new Date()).getTime() / 1000) });
 
-                            this.allInformers.runningLine('Подключено ' + clockController.name);
+                            // this.allInformers.runningLine('Подключено ' + clockController.name);
 
                             // Reload
                             this.reloadAllWebClients();
@@ -1548,11 +1548,17 @@ class App implements TabletHost {
     public async playAce(t: Tablet, url: string, name: string): Promise<void> {
         this.allInformers.runningLine("Загружаем " + name + "...");
         const res = await curl.get("http://" + App.acestreamHost + 
-            "/ace/manifest.m3u8?" +
+            "/hls/manifest.m3u8?" +
                 [
                     "id=" + url, 
                     "format=json", 
                     "use_api_events=1",
+                    "use_stop_notifications=1",
+                    "hlc=1",
+                    "spv=0",
+                    "transcode_audio=0",
+                    "transcode_mp3=0",
+                    "transcode_ac3=0",
                     "preferred_audio_language=ru"
                 ].join("&"));
         const reso = JSON.parse(res);
@@ -1568,7 +1574,7 @@ class App implements TabletHost {
             const eventsPoll = async () => {
                 const ev = await curl.get(reso.response.event_url);
                 const evo = JSON.parse(ev);
-                console.log(evo);
+                console.log(name, evo);
                 if (evo.error === 'unknown playback session id') {
                     sessionStopped = true;
                 }
@@ -1584,7 +1590,7 @@ class App implements TabletHost {
                     const evo = JSON.parse(ev);
                     const resp = evo.response;
                     if (!resp.error) {
-                        console.log(resp.status + " -> " + resp.downloaded);
+                        // console.log(resp.status + " -> " + resp.downloaded);
 
                         if (!playing) {
                             if (resp.status === 'prebuf') {

@@ -7,6 +7,7 @@ interface PingResult {
     type: 'pingresult';
     result: string;
     pingid: string;
+    vcc?: number;
 }
 
 interface Msg {
@@ -251,6 +252,9 @@ export class ClockController extends ClassWithId implements Controller {
         this.lastResponse = Date.now();
         switch (objData.type) {
             case 'pingresult':
+                if (objData.vcc && objData.vcc != -1 && objData.vcc != 0xffff) {
+                    console.log("VCC:", objData.vcc);
+                }
                 break;
             case 'temp':
                 this.tempProperty.setInternal(objData.value + "&#8451;");
