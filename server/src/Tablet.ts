@@ -281,21 +281,13 @@ export class Tablet implements Controller {
         return this.shellCmd("am force-stop org.videolan.vlc").then(() => void 0);
     }
 
-    public playURL(url: string): Promise<void> {
-        return this.stopPlaying().then(() => {
-            Promise.race([
-                this.app.nameFromUrl(url).catch(() => url),
-                util.delay(3000).then(() => url)
-            ]).then(name => {
-                this.app.allInformers.runningLine("Включаем " + name + " на " + this.shortName);
-            });
-
-            return this.shellCmd("am start -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity -a android.intent.action.VIEW -d \"" +
+    public async playURL(url: string): Promise<void> {
+        await this.stopPlaying();
+        
+        await this.shellCmd("am start -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity -a android.intent.action.VIEW -d \"" +
                 url.replace("&", "\&") + "\" --ez force_fullscreen true")
-            .then(() => {
-                return Promise.resolve(void 0);
-            });
-        });
+
+        return Promise.resolve(void 0);
     }
 
     public getBatteryLevel(): Promise<number> {

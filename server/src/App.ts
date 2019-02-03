@@ -15,6 +15,7 @@ import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTM
 import { TabletHost, Tablet, adbClient, Tracker, Device } from "./Tablet";
 import { CompositeLcdInformer } from './Informer';
 import { ClockController, Hello, ClockControllerEvents } from './Esp8266';
+// import { parse } from 'url';
 
 class GPIORelay extends Relay {
     private _init: Promise<void>;
@@ -181,7 +182,10 @@ interface IRKeysHandler {
     complete(arr: string[]): void;
 }
 
+type ChannelType = "Url" | "Ace";
+
 interface Channel {
+    type?: ChannelType;
     name: string;
     cat?: string;
     url: string;
@@ -201,6 +205,8 @@ class App implements TabletHost {
     public server: http.Server;
     public readonly wss: WebSocket.Server;
     public currentTemp?: number;
+
+    public static readonly acestreamHost = "192.168.121.38:6878";
 
     private gpioRelays = util.newConfig({ relays: [false, false, false, false] }, "relays");
 
@@ -521,7 +527,6 @@ class App implements TabletHost {
             await util.delay(100)
             const chan = (await this.channelsHistoryConf.read()).channels.find(c => c.channel === 1);
             if (chan) {
-                await this.kindle.stopPlaying();
                 await this.playChannel(this.kindle, chan);
             }
 
@@ -596,7 +601,7 @@ class App implements TabletHost {
                 return Array.prototype.concat(
                     additionalPropsBefore,
                     newWritableProperty<string>("", h.name, new SpanHTMLRenderer()),
-                    that.makePlayButtonsForChannel(h.url, h.name), 
+                    that.makePlayButtonsForChannel(h.url, t => that.playChannel(t, h)), 
                     additionalPropsAfter);
             }
         })();
@@ -606,9 +611,9 @@ class App implements TabletHost {
         return Array.from(this.tablets.values()).filter(t => t.online);
     }
 
-    private makePlayButtonsForChannel(url: string, name: string): Button[] {
+    private makePlayButtonsForChannel(url: string, play: (t: Tablet) => void): Button[] {
         return Array.prototype.concat(this.allOnlineTablets().map(t => 
-            Button.create("Play [ " + t.shortName + " ]", () => this.playURL(t, url, name))
+            Button.create("Play [ " + t.shortName + " ]", () => play(t))
         ), [
             Button.createCopyToClipboard("Copy URL", url)
         ]);
@@ -936,7 +941,22 @@ class App implements TabletHost {
             this.reloadAceStream();
             this.reloadM3uPlaylists();
         }, 1000*60*60);
-        
+
+        const checkAceHost = async () => {
+            try {
+                const str = await curl.get("http://" + App.acestreamHost + "/webui/api/service?method=get_version&format=json");
+                const parsed = JSON.parse(str);
+                if (parsed.error == null) {
+                    // console.log("ACE:" + parsed.result.version);
+                    // Ace is online
+                }
+            } catch (e) {
+                console.log(e);
+            }
+            await util.delay(500);
+            checkAceHost();
+        }
+        checkAceHost();
 
         this.expressApi = express();
 
@@ -1206,11 +1226,20 @@ class App implements TabletHost {
         router.get('/torrent_tv.html', (req, res) => {
             res.contentType('html');
             res.send(this.renderToHTML(
-                this.acestreamHistoryConf.last().channels.map((h, index) => {
+                this.acestreamHistoryConf.last().channels
+                    .filter(h => h.cat 
+                        && !h.cat.match(/18(_?)plus/) 
+                        && !h.name.match(/Nuart/gi)
+                        && !h.name.match(/Visit-X/gi))
+                    .map((h, index) => {
                     return Array.prototype.concat(
                         [ newWritableProperty("", "" + index + ".", new SpanHTMLRenderer()) ], 
                         [ newWritableProperty("", h.name, new SpanHTMLRenderer()) ],
-                        this.makePlayButtonsForChannel(this.toAceUrl(h.url), h.name)
+                        this.makePlayButtonsForChannel(h.url, 
+                            (t) => {
+                                this.playAce(t, h.url, h.name);
+                                // that.playURL(t, h.url, h.name)
+                            })
                     );
                 })
             ));
@@ -1222,7 +1251,7 @@ class App implements TabletHost {
                     return Array.prototype.concat(
                         [ newWritableProperty("", "" + index + ".", new SpanHTMLRenderer()) ], 
                         [ newWritableProperty("", h.name, new SpanHTMLRenderer()) ],
-                        this.makePlayButtonsForChannel(h.url, h.name)
+                        this.makePlayButtonsForChannel(h.url, t => this.playURL(t, h.url, name))
                     );
                 })
             ));
@@ -1429,30 +1458,22 @@ class App implements TabletHost {
     }
 
     public playChannel(t: Tablet, c: Channel): Promise<void> {
-        return this.playURL(t, c.url, c.name);
+        console.log("Playing " + JSON.stringify(c));
+        if (c.type == 'Ace') {
+            return this.playAce(t, c.url, c.name);
+        } else {
+            return this.playURL(t, c.url, c.name);
+        }
     }
 
     public async playURL(t: Tablet, _url: string, _name: string): Promise<void> {
         const url = _url.trim();
         const gotName = (name: string) => {
             // update history
-            this.channelsHistoryConf.change(hist => {
-                const index = hist.channels.findIndex(c => c.url === url);
-                if (index == -1) {
-                    hist.channels.splice(0, 0, {
-                        "name": name,
-                        "cat": "added",
-                        "url": url
-                    });
-                } else {
-                    // Move channel to the first place
-                    const c = hist.channels[index];
-                    hist.channels.splice(index, 1);
-                    hist.channels.splice(0, 0, c);
-                }
-            }).then(() => {
-                this.reloadAllWebClients();
-            });;
+            this.justStartedToPlayChannel({
+                url, 
+                name
+            });
         };
         if (!_name) {
             Promise.race([
@@ -1463,14 +1484,25 @@ class App implements TabletHost {
             gotName(_name);
         }
 
-        if (!t.screenIsOn.get()) {
-            await t.screenIsOn.set(true);
-        }
+        return this.playSimpleUrl(t, url, _name);
+    }
 
-        this.r2.switch(true);
-
-        return t.stopPlaying()
-            .then(() => t.playURL(url));
+    private justStartedToPlayChannel(ch: Channel) {
+        this.channelsHistoryConf.change(hist => {
+            const index = hist.channels.findIndex(c => c.type === ch.type && c.url === ch.url);
+            if (index == -1) {
+                hist.channels.splice(0, 0, ch);
+            }
+            else {
+                // Move channel to the first place
+                const c = hist.channels[index];
+                hist.channels.splice(index, 1);
+                hist.channels.splice(0, 0, c);
+            }
+        }).then(() => {
+            this.reloadAllWebClients();
+        });
+        ;
     }
 
     private parseM3Us(urls: string[]): Promise<Channel[]> {
@@ -1511,6 +1543,92 @@ class App implements TabletHost {
             // console.log(res);
             return res;
         });
+    }
+
+    public async playAce(t: Tablet, url: string, name: string): Promise<void> {
+        this.allInformers.runningLine("Загружаем " + name + "...");
+        const res = await curl.get("http://" + App.acestreamHost + 
+            "/ace/manifest.m3u8?" +
+                [
+                    "id=" + url, 
+                    "format=json", 
+                    "use_api_events=1",
+                    "preferred_audio_language=ru"
+                ].join("&"));
+        const reso = JSON.parse(res);
+        let sessionStopped = false;
+        let playing = false;
+        if (!reso.error) {
+            console.log(name, reso.response);
+            if (reso.response.is_live != 1) {
+                this.allInformers.runningLine(name + " не транслируется");
+                return;
+            }
+
+            const eventsPoll = async () => {
+                const ev = await curl.get(reso.response.event_url);
+                const evo = JSON.parse(ev);
+                console.log(evo);
+                if (evo.error === 'unknown playback session id') {
+                    sessionStopped = true;
+                }
+                if (!sessionStopped) {
+                    eventsPoll();
+                }
+            }
+            eventsPoll();
+
+            const statsPoll = async () => {
+                const ev = await curl.get(reso.response.stat_url);
+                if (!sessionStopped) {
+                    const evo = JSON.parse(ev);
+                    const resp = evo.response;
+                    if (!resp.error) {
+                        console.log(resp.status + " -> " + resp.downloaded);
+
+                        if (!playing) {
+                            if (resp.status === 'prebuf') {
+                                this.allInformers.staticLine("Буферизация");
+                            } else if (resp.status === 'dl') {
+                                this.allInformers.staticLine(Math.floor(resp.downloaded / 1000) + " Kb")
+                            }
+                            if (resp.downloaded > 1000000) {
+                                playing = true;
+                                // this.allInformers.runningLine("Включаем " + name + "...");
+                                this.playSimpleUrl(t, reso.response.playback_url, name);
+                                this.justStartedToPlayChannel({
+                                    type: 'Ace',
+                                    url, 
+                                    name
+                                });
+                            }
+                        }
+                    }
+
+                    await util.delay(1000);
+                    statsPoll();
+                }
+            }
+            statsPoll();
+        } else {
+            this.allInformers.runningLine("Ошибка загрузки " + name + ": " + reso.error);
+            throw new Error(reso.error);
+        }
+        // 
+        // console.log("wanna play ", h.url);
+
+    }
+
+    public async playSimpleUrl(t: Tablet, url: string, name: string) {
+        if (!t.screenIsOn.get()) {
+            await t.screenIsOn.set(true);
+        }
+
+        this.r2.switch(true);
+
+        this.allInformers.runningLine("Включаем " + name + " на " + t.shortName);
+        
+        t.playURL(url);
     }
 }
 
