@@ -971,6 +971,10 @@ class App implements TabletHost {
 
             //connection is up, let's add a simple simple event
             if (util.arraysAreEqual(url, ['esp'])) {
+                ws.on('close', (data: string) => {
+                    const controller = this.dynamicControllers.get(ip);
+                    console.log((controller || {name: ip}).name, "CLOSE");
+                });
                 // This is ESP controller!
                 ws.on('message', (data: string) => {
                     try {
@@ -989,6 +993,8 @@ class App implements TabletHost {
 
                             const clockController = new ClockController(ws, ip, hello, {
                                 onDisconnect: () => {
+                                    console.log('DISCONNECT!!!');
+                                    console.trace();
                                     this.dynamicControllers.delete(ip);
                                     if (clockController.lcdInformer) {
                                         this.allInformers.delete(ip);

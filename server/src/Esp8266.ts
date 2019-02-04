@@ -186,7 +186,7 @@ export class ClockController extends ClassWithId implements Controller {
             } else {
                 this.send({ type: 'ping', pingid: ("" + (this.pingId++)) } as Ping);
             }
-        }, 2000);
+        }, 500);
 
         console.log('Connected ' + this.name);
     }
@@ -227,7 +227,7 @@ export class ClockController extends ClassWithId implements Controller {
     public toString(): string { return this.name; }
 
     protected wasRecentlyContacted() {
-        return Date.now() - this.lastResponse < 4000;
+        return Date.now() - this.lastResponse < 18000;
     }
 
     private tare(): void {
@@ -255,6 +255,7 @@ export class ClockController extends ClassWithId implements Controller {
                 if (objData.vcc && objData.vcc != -1 && objData.vcc != 0xffff) {
                     console.log("VCC:", objData.vcc);
                 }
+                // console.log(this._name, objData.pingid);
                 break;
             case 'temp':
                 this.tempProperty.setInternal(objData.value + "&#8451;");
