@@ -186,7 +186,7 @@ export class ClockController extends ClassWithId implements Controller {
             } else {
                 this.send({ type: 'ping', pingid: ("" + (this.pingId++)) } as Ping);
             }
-        }, 500);
+        }, 1500);
 
         console.log('Connected ' + this.name);
     }
@@ -208,8 +208,10 @@ export class ClockController extends ClassWithId implements Controller {
         }
     }
 
-    public reboot(): void {
-        this.send({ type: "reboot" });
+    public async reboot(): Promise<void> {
+        await this.send({ type: "reboot" });
+        await delay(10);
+        this.dropConnection();
     }
 
     public send(json: Object): Promise<void> {

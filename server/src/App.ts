@@ -192,6 +192,23 @@ interface Channel {
     channel?: number;
 }
 
+function getType(c: Channel): ChannelType{
+    return c.type || "Url"
+}
+
+function compareChannels(c1: Channel, c2: Channel): number {
+    const t1 = getType(c1);
+    const t2 = getType(c2);
+    if (t1 !== t2) {
+        return t1.localeCompare(t2);
+    } else if (t1 === "Url") {
+        return c1.url.localeCompare(c2.url);
+    } else if (t1 === "Ace") {
+        return c1.name.localeCompare(c2.name);
+    }
+    return 0; // Should never happen
+}
+
 interface AceChannel {
     name: string;
     cat: string;
@@ -548,6 +565,20 @@ class App implements TabletHost {
         wake();
     });
 
+    private nowDecodedByAce = newWritableProperty<string>("", "", new SpanHTMLRenderer());
+    private nowState = newWritableProperty<string>("", "", new SpanHTMLRenderer());
+    private downloadedBytes = newWritableProperty<string>("", "", new SpanHTMLRenderer());
+
+    private ctrlAceDecoder = {
+        name: "AceStream",
+        online: true, // Always online
+        properties: [
+            this.nowDecodedByAce,
+            this.nowState,
+            this.downloadedBytes
+        ]
+    };
+
     private ctrlControlOther = {
         name: "Другое",
         online: true, // Always online
@@ -558,7 +589,7 @@ class App implements TabletHost {
             Button.create("Reboot AceStream", () => {
                 const go = async () => {
                     console.log('Before reboot');
-                    util.runShell("/usr/bin/docker", ["restart", "9533adf91cce"]);
+                    await util.runShell("/usr/bin/docker", ["restart", "9533adf91cce"]);
                     console.log('After reboot');
                     await util.delay(1000);
                     try {
@@ -685,6 +716,7 @@ class App implements TabletHost {
                 this.wakeAt.controller,
                 this.timer.controller,
                 this.ctrlControlOther,
+                this.ctrlAceDecoder,
                 this.ctrlGPIO,
                 this.miLight,
             ],
@@ -971,6 +1003,8 @@ class App implements TabletHost {
 
             //connection is up, let's add a simple simple event
             if (util.arraysAreEqual(url, ['esp'])) {
+                console.log(ip, "CONNECT");
+
                 ws.on('close', (data: string) => {
                     const controller = this.dynamicControllers.get(ip);
                     console.log((controller || {name: ip}).name, "CLOSE");
@@ -983,6 +1017,8 @@ class App implements TabletHost {
 
                         // It might be hello message
                         if ('type' in objData && objData.type == 'hello') {
+                            console.log(ip, "HELLO");
+
                             const hello = objData as Hello;
                             const mapIRs = new Map<string, {
                                 lastRemote: number,
@@ -993,8 +1029,8 @@ class App implements TabletHost {
 
                             const clockController = new ClockController(ws, ip, hello, {
                                 onDisconnect: () => {
-                                    console.log('DISCONNECT!!!');
-                                    console.trace();
+                                    console.log(ip, 'DISCONNECT!!!');
+                                    // console.trace();
                                     this.dynamicControllers.delete(ip);
                                     if (clockController.lcdInformer) {
                                         this.allInformers.delete(ip);
@@ -1079,7 +1115,7 @@ class App implements TabletHost {
                         } else if (controller) {
                             controller.processMsg(objData);
                         } else {
-                            console.error('Shall never be here', data);
+                            console.error(ip, 'Shall never be here', data);
                         }
                     } catch (e) {
                         console.error('Can not process message:', data, e);
@@ -1243,7 +1279,7 @@ class App implements TabletHost {
                         [ newWritableProperty("", h.name, new SpanHTMLRenderer()) ],
                         this.makePlayButtonsForChannel(h.url, 
                             (t) => {
-                                this.playAce(t, h.url, h.name);
+                                this.playAce(t, h);
                                 // that.playURL(t, h.url, h.name)
                             })
                     );
@@ -1466,7 +1502,7 @@ class App implements TabletHost {
     public playChannel(t: Tablet, c: Channel): Promise<void> {
         console.log("Playing " + JSON.stringify(c));
         if (c.type == 'Ace') {
-            return this.playAce(t, c.url, c.name);
+            return this.playAce(t, c);
         } else {
             return this.playURL(t, c.url, c.name);
         }
@@ -1495,13 +1531,15 @@ class App implements TabletHost {
 
     private justStartedToPlayChannel(ch: Channel) {
         this.channelsHistoryConf.change(hist => {
-            const index = hist.channels.findIndex(c => c.type === ch.type && c.url === ch.url);
-            if (index == -1) {
+            const index = hist.channels.findIndex(c => compareChannels(c, ch) === 0);
+            if (index === -1) {
                 hist.channels.splice(0, 0, ch);
-            }
-            else {
+            } else {
                 // Move channel to the first place
                 const c = hist.channels[index];
+                if (c.type === "Ace") {
+                    c.url = ch.url; // Update ACE URL
+                }
                 hist.channels.splice(index, 1);
                 hist.channels.splice(0, 0, c);
             }
@@ -1551,12 +1589,34 @@ class App implements TabletHost {
         });
     }
 
-    public async playAce(t: Tablet, url: string, name: string): Promise<void> {
-        this.allInformers.runningLine("Загружаем " + name + "...");
+    private playingAceCode?: string;
+    private controlUrl?: string;
+    private playbackUrl?: string;
+
+    public async playAce(t: Tablet, c: Channel): Promise<void> {
+        const newFromHistory = this.acestreamHistoryConf.last().channels.find(c2 => compareChannels(c, c2) === 0);
+        if (newFromHistory && newFromHistory.url != c.url) {
+            c.url = newFromHistory.url;
+            console.log("Got new AceHash", c.url, newFromHistory.name, newFromHistory.cat);
+        }
+
+        if (this.playingAceCode === c.url && this.playbackUrl) {
+            // We're already playing this url
+            this.playSimpleUrl(t, this.playbackUrl, c.name);
+            return;
+        }
+
+        if (this.controlUrl) {
+            // There is a control URL, so we're already playing. let's stop
+            curl.get(this.controlUrl + "?method=stop");
+        }
+
+        this.nowDecodedByAce.setInternal(c.name);
+        this.allInformers.runningLine("Загружаем " + c.name + "...");
         const res = await curl.get("http://" + App.acestreamHost + 
             "/hls/manifest.m3u8?" +
                 [
-                    "id=" + url, 
+                    "id=" + c.url, 
                     "format=json", 
                     "use_api_events=1",
                     "use_stop_notifications=1",
@@ -1571,16 +1631,19 @@ class App implements TabletHost {
         let sessionStopped = false;
         let playing = false;
         if (!reso.error) {
-            console.log(name, reso.response);
-            if (reso.response.is_live != 1) {
-                this.allInformers.runningLine(name + " не транслируется");
-                return;
-            }
+            console.log(c.name, reso.response);
+            this.controlUrl = reso.response.command_url;
+            this.playingAceCode = c.url;
+            this.playbackUrl = reso.response.playback_url;
+            // if (reso.response.is_live != 1) {
+            //     this.allInformers.runningLine(name + " не транслируется");
+            //     return;
+            // }
 
             const eventsPoll = async () => {
                 const ev = await curl.get(reso.response.event_url);
                 const evo = JSON.parse(ev);
-                console.log(name, evo);
+                console.log(c.name, evo);
                 if (evo.error === 'unknown playback session id') {
                     sessionStopped = true;
                 }
@@ -1598,32 +1661,31 @@ class App implements TabletHost {
                     if (!resp.error) {
                         // console.log(resp.status + " -> " + resp.downloaded);
 
+                        this.nowState.setInternal(resp.status);
+                        this.downloadedBytes.setInternal("" + resp.downloaded);
+                    
                         if (!playing) {
                             if (resp.status === 'prebuf') {
-                                this.allInformers.staticLine("Буферизация");
+                                // this.allInformers.runningLine("Буферизация");
                             } else if (resp.status === 'dl') {
-                                this.allInformers.staticLine(Math.floor(resp.downloaded / 1000) + " Kb")
+                                // this.allInformers.staticLine(Math.floor(resp.downloaded / 1000) + " Kb")
                             }
                             if (resp.downloaded > 1000000) {
                                 playing = true;
-                                // this.allInformers.runningLine("Включаем " + name + "...");
-                                this.playSimpleUrl(t, reso.response.playback_url, name);
-                                this.justStartedToPlayChannel({
-                                    type: 'Ace',
-                                    url, 
-                                    name
-                                });
+                                // this.allInformers.runningLine("Включаем " + c.name + "...");
+                                this.playSimpleUrl(t, reso.response.playback_url, c.name);
+                                this.justStartedToPlayChannel(c);
                             }
                         }
                     }
 
-                    await util.delay(1000);
+                    await util.delay(300);
                     statsPoll();
                 }
             }
             statsPoll();
         } else {
-            this.allInformers.runningLine("Ошибка загрузки " + name + ": " + reso.error);
+            this.allInformers.runningLine("Ошибка загрузки " + c.name + ": " + reso.error);
             throw new Error(reso.error);
         }
         // 
