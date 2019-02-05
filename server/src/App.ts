@@ -217,6 +217,49 @@ interface AceChannel {
 
 type TimerProp = { val: Date | null, controller: Controller, fireInSeconds: (sec: number) => void };
 
+
+interface StartPlayingResponce {
+    event_url: string,
+    stat_url: string,
+    playback_session_id: string,
+    is_live: number,
+    playback_url: string,
+    is_encrypted: number,
+    command_url: string,
+    infohash: string 
+}
+
+interface StatusResponce { 
+    status: string,
+    uploaded: number,
+    speed_down: number,
+    speed_up: number,
+    downloaded: number,
+    playback_session_id: string,
+    time: number,
+    peers: number,
+    total_progress: number,
+    is_encrypted: number,
+    disk_cache_stats: { 
+        avail: number,
+        disk_cache_limit: number,
+        inactive_inuse: number,
+        active_inuse: number 
+    },
+    is_live: number,
+    progress: number,
+    infohash: string,
+    selected_stream_index: number,
+    selected_file_index: number 
+}
+
+class AceServerInfo {
+    public resp?: StartPlayingResponce;
+
+    constructor(public aceId: string) {
+    }
+}
+
 class App implements TabletHost {
     public expressApi: express.Express;
     public server: http.Server;
@@ -566,18 +609,21 @@ class App implements TabletHost {
     });
 
     private nowDecodedByAce = newWritableProperty<string>("", "", new SpanHTMLRenderer());
-    private nowState = newWritableProperty<string>("", "", new SpanHTMLRenderer());
-    private downloadedBytes = newWritableProperty<string>("", "", new SpanHTMLRenderer());
+    private statusString = newWritableProperty<string>("", "", new SpanHTMLRenderer());
+    private aceHostAlive = newWritableProperty<boolean>("", false, new SpanHTMLRenderer(v => v ? "Сервер включен" : "Сервер выключен"));
 
     private ctrlAceDecoder = {
         name: "AceStream",
         online: true, // Always online
         properties: [
+            this.aceHostAlive,
             this.nowDecodedByAce,
-            this.nowState,
-            this.downloadedBytes
+            this.statusString
         ]
     };
+
+    
+    private aceInfo?: AceServerInfo;
 
     private ctrlControlOther = {
         name: "Другое",
@@ -589,15 +635,15 @@ class App implements TabletHost {
             Button.create("Reboot AceStream", () => {
                 const go = async () => {
                     console.log('Before reboot');
-                    await util.runShell("/usr/bin/docker", ["restart", "9533adf91cce"]);
-                    console.log('After reboot');
+                    const dockerPs = await util.runShell("/usr/bin/docker", ["ps"]);
+                    const line = util.splitLines(dockerPs).find(s => !!s.match(/left76\/ace:vadim-acestream/gi));
+                    console.log("Got line", line);
+                    if (line) {
+                        const containerId = line.split(' ')[0];
+                        console.log("Got id", containerId);
+                        await util.runShell("/usr/bin/docker", ["restart", containerId]);
+                    }   
                     await util.delay(1000);
-                    try {
-                        const ret = await curl.get('http://127.0.0.1:8621');
-                        console.log('Ret:', ret);
-                    } catch (e) {
-                        console.log(e);
-                    }
                 };
                 
                 go();
@@ -928,7 +974,7 @@ class App implements TabletHost {
 
         // Load acestream channels
         this.acestreamHistoryConf.read().then(conf => {
-            if ((new Date().getTime() - conf.lastUpdate) > 60*60*1000) {
+            if ((new Date().getTime() - conf.lastUpdate) > 15*60*1000) {
                 this.reloadAceStream();
             }
             console.log("Read " + conf.channels.length + " ACE channels");
@@ -978,14 +1024,11 @@ class App implements TabletHost {
             try {
                 const str = await curl.get("http://" + App.acestreamHost + "/webui/api/service?method=get_version&format=json");
                 const parsed = JSON.parse(str);
-                if (parsed.error == null) {
-                    // console.log("ACE:" + parsed.result.version);
-                    // Ace is online
-                }
+                this.aceHostAlive.setInternal(parsed.error == null);
             } catch (e) {
-                console.log(e);
+                this.aceHostAlive.setInternal(false);
             }
-            await util.delay(500);
+            await util.delay(2000);
             checkAceHost();
         }
         checkAceHost();
@@ -1364,7 +1407,8 @@ class App implements TabletHost {
                     conf.channels = aceChannels;
                     conf.lastUpdate = new Date().getTime();
                 });
-            });
+            })
+            .catch(e => console.log(e));
     }
 
     private renderToHTML(allProps: Property<any>[][]): string {
@@ -1588,11 +1632,7 @@ class App implements TabletHost {
             return res;
         });
     }
-
-    private playingAceCode?: string;
-    private controlUrl?: string;
-    private playbackUrl?: string;
-
+  
     public async playAce(t: Tablet, c: Channel): Promise<void> {
         const newFromHistory = this.acestreamHistoryConf.last().channels.find(c2 => compareChannels(c, c2) === 0);
         if (newFromHistory && newFromHistory.url != c.url) {
@@ -1600,17 +1640,20 @@ class App implements TabletHost {
             console.log("Got new AceHash", c.url, newFromHistory.name, newFromHistory.cat);
         }
 
-        if (this.playingAceCode === c.url && this.playbackUrl) {
-            // We're already playing this url
-            this.playSimpleUrl(t, this.playbackUrl, c.name);
-            return;
+        if (this.aceInfo) {
+            if (this.aceInfo.aceId === c.url && this.aceInfo.resp && this.aceInfo.resp.playback_url) {
+                // We're already playing this url
+                this.playSimpleUrl(t, this.aceInfo.resp.playback_url, c.name);
+                return;
+            }
+
+            if (this.aceInfo.resp && this.aceInfo.resp.command_url) {
+                // There is a control URL, so we're already playing. let's stop
+                curl.get(this.aceInfo.resp.command_url + "?method=stop");
+            }
         }
 
-        if (this.controlUrl) {
-            // There is a control URL, so we're already playing. let's stop
-            curl.get(this.controlUrl + "?method=stop");
-        }
-
+        this.aceInfo = new AceServerInfo(c.url);
         this.nowDecodedByAce.setInternal(c.name);
         this.allInformers.runningLine("Загружаем " + c.name + "...");
         const res = await curl.get("http://" + App.acestreamHost + 
@@ -1632,9 +1675,7 @@ class App implements TabletHost {
         let playing = false;
         if (!reso.error) {
             console.log(c.name, reso.response);
-            this.controlUrl = reso.response.command_url;
-            this.playingAceCode = c.url;
-            this.playbackUrl = reso.response.playback_url;
+            this.aceInfo.resp = reso.response;
             // if (reso.response.is_live != 1) {
             //     this.allInformers.runningLine(name + " не транслируется");
             //     return;
@@ -1657,20 +1698,19 @@ class App implements TabletHost {
                 const ev = await curl.get(reso.response.stat_url);
                 if (!sessionStopped) {
                     const evo = JSON.parse(ev);
-                    const resp = evo.response;
-                    if (!resp.error) {
-                        // console.log(resp.status + " -> " + resp.downloaded);
+                    if (!evo.error) {
+                        const resp = evo.response as StatusResponce;
 
-                        this.nowState.setInternal(resp.status);
-                        this.downloadedBytes.setInternal("" + resp.downloaded);
+                        this.statusString.setInternal([
+                            "Status:", resp.status,
+                            "Downloaded:", util.kbmbgb(resp.downloaded),
+                            "Download speed:", util.kbmbgb(resp.speed_down*1000) + "/sec",
+                            "Peers:", resp.peers
+                        ].join(" "));
                     
                         if (!playing) {
-                            if (resp.status === 'prebuf') {
-                                // this.allInformers.runningLine("Буферизация");
-                            } else if (resp.status === 'dl') {
-                                // this.allInformers.staticLine(Math.floor(resp.downloaded / 1000) + " Kb")
-                            }
-                            if (resp.downloaded > 1000000) {
+                            // Wait while 2Mb of data is loaded and then start playback
+                            if (resp.downloaded > 2000000) {
                                 playing = true;
                                 // this.allInformers.runningLine("Включаем " + c.name + "...");
                                 this.playSimpleUrl(t, reso.response.playback_url, c.name);

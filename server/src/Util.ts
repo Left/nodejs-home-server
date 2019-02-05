@@ -7,9 +7,9 @@ export function splitLines(s: string): string[] {
     return s.split(/\r\n|\r|\n/);
 }
 
-export function runShell(cmd: string, args: string[]): Promise<String> {
+export function runShell(cmd: string, args: string[]): Promise<string> {
     // console.log("runShell", args.join(' '));
-    return new Promise<String>((accept, reject) => {
+    return new Promise<string>((accept, reject) => {
         const out: string[] = [];
         const pr = child_process.spawn(cmd, args);
         pr.on('error', (err: Error) => {
@@ -145,6 +145,18 @@ export function getFirstNonPrefixIndex(arr: string[], prefix: string) {
         firstNonPref = arr.length;
     }
     return firstNonPref;
+}
+
+export function kbmbgb(bytes: number): string {
+    const a = ["байт", "кб", "мб", "гб", "тб"];
+    let j = 1;
+    for (let i = 0; i < a.length; ++i, j *= 1024) {
+        let s = (bytes/j).toLocaleString('ru', {minimumIntegerDigits: 1, maximumFractionDigits: 1, useGrouping: false}) + " " + a[i];
+        if (bytes < j*1024 || i === (a.length-1)) {
+            return s;
+        }
+    }
+    return "";
 }
 
 export function isKeyAndNum(prefix: string[], arr: string[]): boolean {
