@@ -1634,10 +1634,12 @@ class App implements TabletHost {
     }
   
     public async playAce(t: Tablet, c: Channel): Promise<void> {
-        const newFromHistory = this.acestreamHistoryConf.last().channels.find(c2 => compareChannels(c, c2) === 0);
+        const newFromHistory = this.acestreamHistoryConf.last().channels.find(c2 => c.name.localeCompare(c2.name) === 0);
         if (newFromHistory && newFromHistory.url != c.url) {
             c.url = newFromHistory.url;
             console.log("Got new AceHash", c.url, newFromHistory.name, newFromHistory.cat);
+        } else {
+            console.log("Not found in history");
         }
 
         if (this.aceInfo) {
@@ -1674,7 +1676,7 @@ class App implements TabletHost {
         let sessionStopped = false;
         let playing = false;
         if (!reso.error) {
-            console.log(c.name, reso.response);
+            console.log(c.url, c.name, reso.response);
             this.aceInfo.resp = reso.response;
             // if (reso.response.is_live != 1) {
             //     this.allInformers.runningLine(name + " не транслируется");
