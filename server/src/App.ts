@@ -11,7 +11,7 @@ import * as querystring from 'querystring';
 import * as curl from "./Curl";
 import * as util from "./Util";
 import { getYoutubeInfo } from "./Youtube";
-import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer } from "./Props";
+import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer, ImgHTMLRenderer } from "./Props";
 import { TabletHost, Tablet, adbClient, Tracker, Device } from "./Tablet";
 import { CompositeLcdInformer } from './Informer';
 import { ClockController, Hello, ClockControllerEvents } from './Esp8266';
@@ -677,6 +677,7 @@ class App implements TabletHost {
             public get properties(): Property<any>[] {
                 return Array.prototype.concat(
                     additionalPropsBefore,
+                    newWritableProperty<string>("", "get_tv_logo?name=" + encodeURIComponent(h.name), new ImgHTMLRenderer(30, 30)),
                     newWritableProperty<string>("", h.name, new SpanHTMLRenderer()),
                     that.makePlayButtonsForChannel(h.url, t => that.playChannel(t, h)), 
                     additionalPropsAfter);
@@ -1241,6 +1242,38 @@ class App implements TabletHost {
                 tbl.shellCmd(`input tap ${req.query['x']} ${req.query['y']}`);
             }
         });
+
+        let defChannel: Buffer;
+
+        router.get('/get_tv_logo', (req, res) => {
+            const n = req.query['name'];
+            fs.readFile(path.normalize(__dirname + '/../web/logos/' + n + '.png'),
+                (err, buf) => {
+                    if (!!err) {
+                        if (err.code === 'ENOENT') {
+                            const acceptDef = (err?: Error, buf?: Buffer) => {
+                                if (!!buf) {
+                                    if (defChannel !== buf) {
+                                        defChannel = buf;
+                                    }
+                                    res.contentType('image/png');
+                                    res.end(buf)
+                                }
+                            }
+                            if (defChannel) {
+                                acceptDef(undefined, defChannel);
+                            } else {
+                                fs.readFile(path.normalize(__dirname + '/../web/logos/nologo.png'), acceptDef);
+                            }
+                        } else {
+                            console.log(err);
+                        }
+                    } else {
+                        res.contentType('image/png');
+                        res.end(buf)
+                    }
+                });
+        });
         router.get('/tablet_screen', (req, res) => {
             const tabletId = req.query['id'];
             const tbl = this.tablets.get(tabletId);
@@ -1319,6 +1352,7 @@ class App implements TabletHost {
                     .map((h, index) => {
                     return Array.prototype.concat(
                         [ newWritableProperty("", "" + index + ".", new SpanHTMLRenderer()) ], 
+                        newWritableProperty<string>("", "get_tv_logo?name=" + encodeURIComponent(h.name), new ImgHTMLRenderer(30, 30)),
                         [ newWritableProperty("", h.name, new SpanHTMLRenderer()) ],
                         this.makePlayButtonsForChannel(h.url, 
                             (t) => {
@@ -1487,14 +1521,14 @@ class App implements TabletHost {
         return util.wrapToHTML(["html", { lang: "en" }],
             util.wrapToHTML("head", hdr.join("\n")) + "\n" +
             util.wrapToHTML("body", allProps.map((ctrl) => {
-                return ctrl.map((prop: Property<any>): string => {
+                return "<div style='margin-top: 6px; margin-bottom: 3px; border-top: 1px solid grey;'>" + ctrl.map((prop: Property<any>): string => {
                     let res = "";
 
                     res = prop.htmlRenderer.body(prop);
 
                     return res;
-                }).join("&nbsp;\n");
-            }).join("<hr/>\n"))
+                }).join("&nbsp;\n") + "</div>";
+            }).join("\n"))
         );
     }
 

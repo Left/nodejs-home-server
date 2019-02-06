@@ -82,6 +82,23 @@ export class SelectHTMLRenderer<T> implements HTMLRederer<T> {
     }
 }
 
+export class ImgHTMLRenderer implements HTMLRederer<string> {
+    constructor(private w: number, private h: number) {
+    }
+
+    body(prop: Property<string>): string {
+        return `<img id="${prop.id}" src="${prop.get()}" style="max-width:${this.w}px; max-height:${this.h}px; width:auto; height:auto; vertical-align: middle;"/></span>`;
+    }
+
+    updateCode(prop: Property<string>): string {
+        return `document.getElementById('${prop.id}').src = val;`;
+    }
+
+    propName(prop: Property<string>): string {
+        return ""
+    }
+}
+
 export class SpanHTMLRenderer<T> implements HTMLRederer<T> {
     constructor(private tostr: (t:T) => string = (t) => t.toString()) {
     }
