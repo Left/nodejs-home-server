@@ -1243,8 +1243,7 @@ class App implements TabletHost {
             }
         });
 
-        let defChannel: Buffer;
-
+        let nologoBuffer: Buffer; // Cache 'nologo' because it will be used often
         router.get('/get_tv_logo', (req, res) => {
             const n = req.query['name'];
             fs.readFile(path.normalize(__dirname + '/../web/logos/' + n + '.png'),
@@ -1253,15 +1252,15 @@ class App implements TabletHost {
                         if (err.code === 'ENOENT') {
                             const acceptDef = (err?: Error, buf?: Buffer) => {
                                 if (!!buf) {
-                                    if (defChannel !== buf) {
-                                        defChannel = buf;
+                                    if (nologoBuffer !== buf) {
+                                        nologoBuffer = buf;
                                     }
                                     res.contentType('image/png');
-                                    res.end(buf)
+                                    res.end(buf);
                                 }
                             }
-                            if (defChannel) {
-                                acceptDef(undefined, defChannel);
+                            if (nologoBuffer) {
+                                acceptDef(undefined, nologoBuffer);
                             } else {
                                 fs.readFile(path.normalize(__dirname + '/../web/logos/nologo.png'), acceptDef);
                             }
@@ -1711,6 +1710,7 @@ class App implements TabletHost {
         let playing = false;
         if (!reso.error) {
             console.log(c.url, c.name, reso.response);
+            const resolvedAt = new Date();
             this.aceInfo.resp = reso.response;
             // if (reso.response.is_live != 1) {
             //     this.allInformers.runningLine(name + " не транслируется");
@@ -1744,9 +1744,10 @@ class App implements TabletHost {
                             "Peers:", resp.peers
                         ].join(" "));
                     
+                        const timePassed = (new Date()).getTime() - resolvedAt.getTime();
                         if (!playing) {
                             // Wait while 2Mb of data is loaded and then start playback
-                            if (resp.downloaded > 2000000) {
+                            if (resp.downloaded > 2000000 || (resp.peers >= 1 && timePassed > 3000)) {
                                 playing = true;
                                 // this.allInformers.runningLine("Включаем " + c.name + "...");
                                 this.playSimpleUrl(t, reso.response.playback_url, c.name);
@@ -1755,7 +1756,7 @@ class App implements TabletHost {
                         }
                     }
 
-                    await util.delay(300);
+                    await util.delay(500);
                     statsPoll();
                 }
             }
