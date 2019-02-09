@@ -402,7 +402,7 @@ class App implements TabletHost {
                 }
             });
         var timers: NodeJS.Timer[] = [];
-
+        let intervalTimer: NodeJS.Timer;
         const setNewValue = (d: Date | null) => {
             console.log(name + " --> " + d);
             if (d !== that.val) {
@@ -410,13 +410,21 @@ class App implements TabletHost {
                 timers.forEach(t => clearTimeout(t));
                 timers = [];
 
-                setInterval(() => {
-                    if (that.val) {
-                        inProp.setInternal(Math.floor((that.val.getTime() - Date.now())/1000));
-                    } else {
-                        inProp.setInternal(undefined);
-                    }
-                }, 1000);    
+                if (intervalTimer) {
+                    clearInterval(intervalTimer);
+                }
+                if (d) {
+                    intervalTimer = setInterval(() => {
+                        if (that.val) {
+                            inProp.setInternal(Math.floor((that.val.getTime() - Date.now())/1000));
+                        } else {
+                            inProp.setInternal(undefined);
+                        }
+                    }, 1000);
+                } else {
+                    inProp.setInternal(undefined);
+                }
+
 
                 that.val = d;
                 if (that.val !== null) {
@@ -980,7 +988,7 @@ class App implements TabletHost {
     }
 
     constructor() {
-        this.channelsHistoryConf.read();
+        this.channelsHistoryConf.read();        
 
         // Load acestream channels
         this.acestreamHistoryConf.read().then(conf => {
@@ -1420,6 +1428,13 @@ class App implements TabletHost {
         this.controllers.forEach(ct => {
             this.initController(ct);
         });
+
+        this.aceHostAlive.onChange(() => {
+            if (!this.aceHostAlive.get()) {
+                this.nowDecodedByAce.set("");
+                this.statusString.set("");     
+            }   
+        })
 
         Array.from(this.tablets.values()).forEach(tablet => {
             if (tablet.isTcp) {
