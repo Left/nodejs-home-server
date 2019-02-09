@@ -3,29 +3,28 @@ import * as events from "events";
 export interface Property<T> {
     readonly id: string;
     readonly name: string;
-    readonly available: boolean;
     get(): T;
     onChange(fn: () => void): void;
-
     readonly htmlRenderer: HTMLRederer<T>;
 }
 
 export interface HTMLRederer<T> {
     body(prop: Property<T>): string;
     updateCode(prop: Property<T>): string;
+    toHtmlVal(t: T): any;
 }
 
 export function voidHTMLRenderer<T>(): HTMLRederer<T> {
     return {
         body(prop: Property<T>): string { return ""; },
-        updateCode(prop: Property<T>): string { return " "}
+        updateCode(prop: Property<T>): string { return " "},
+        toHtmlVal(t: T): any { return t; }
     };
 }
 
 export class CheckboxHTMLRenderer implements HTMLRederer<boolean> {
     body(prop: Property<boolean>): string {
         return `<label><input type="checkbox" id=${prop.id} 
-            ${prop.available ? "" : "disabled"} 
             ${prop.get() ? "checked" : ""}
             onclick="sendVal('${prop.id}', '${prop.name}', document.getElementById('${prop.id}').checked)"/>${prop.name}</label>`;
     }    
@@ -33,6 +32,8 @@ export class CheckboxHTMLRenderer implements HTMLRederer<boolean> {
     updateCode(prop: Property<boolean>): string {
         return `document.getElementById('${prop.id}').checked = val;`;
     }
+
+    toHtmlVal(t: boolean): any { return t; }
 }
 
 export class ButtonRendrer implements HTMLRederer<void> {
@@ -40,18 +41,20 @@ export class ButtonRendrer implements HTMLRederer<void> {
     }
 
     body(prop: Property<void>): string {
-        return `<input ${prop.available ? "" : "disabled"}  type="button" id="${prop.id}" value="${prop.name}" 
+        return `<input type="button" id="${prop.id}" value="${prop.name}" 
             onclick="${this.onclickAction(prop)}"></input>`;
     }
 
     updateCode(prop: Property<void>): string {
         return '';
     }
+
+    toHtmlVal(t: void): any { return t; }
 }
 
 export class SliderHTMLRenderer implements HTMLRederer<number> {
     body(prop: Property<number>): string {
-        return `<label>${prop.name}<input ${prop.available ? "" : "disabled"}  type="range" id="${prop.id}" min="0" max="100" value="${prop.get()}" 
+        return `<label>${prop.name}<input type="range" id="${prop.id}" min="0" max="100" value="${prop.get()}" 
             name="${prop.name}"
             oninput="sendVal('${prop.id}', '${prop.name}', +document.getElementById('${prop.id}').value)"/></label>`;
     }
@@ -59,6 +62,8 @@ export class SliderHTMLRenderer implements HTMLRederer<number> {
     updateCode(prop: Property<number>): string {
         return `document.getElementById('${prop.id}').value = val;`;
     }
+
+    toHtmlVal(t: number): any { return t; }
 }
 
 export class SelectHTMLRenderer<T> implements HTMLRederer<T> {
@@ -80,6 +85,8 @@ export class SelectHTMLRenderer<T> implements HTMLRederer<T> {
     updateCode(prop: Property<T>): string {
         return `Array.from(document.getElementById('${prop.id}').options).forEach((o, i) => { if (o.value == val) document.getElementById('${prop.id}').selectedIndex = i })`;
     }
+
+    toHtmlVal(t: T): any { return t; }
 }
 
 export class ImgHTMLRenderer implements HTMLRederer<string> {
@@ -97,10 +104,17 @@ export class ImgHTMLRenderer implements HTMLRederer<string> {
     propName(prop: Property<string>): string {
         return ""
     }
+
+    toHtmlVal(t: string): any { return t; }
 }
 
 export class SpanHTMLRenderer<T> implements HTMLRederer<T> {
     constructor(private tostr: (t:T) => string = (t) => t.toString()) {
+    }
+
+    toHtmlVal(val: T) {
+        console.log('!! ' + val + '->' + this.tostr(val));
+        return this.tostr(val);
     }
 
     body(prop: Property<T>): string {
@@ -121,7 +135,7 @@ export class StringAndGoRendrer implements HTMLRederer<string> {
 
     body(prop: Property<string>): string {
         return `<span>
-            <input ${prop.available ? "" : "disabled"}  type="text" 
+            <input type="text" 
             id="${prop.id}" 
             placeholder="${prop.name}"
             value="" />&nbsp;
@@ -132,6 +146,8 @@ export class StringAndGoRendrer implements HTMLRederer<string> {
     updateCode(prop: Property<string>): string {
         return '';
     }
+
+    toHtmlVal(t: string): any { return t; }
 }
 
 export interface WritableProperty<T> extends Property<T> {
@@ -144,7 +160,6 @@ export function isWriteableProperty<T>(object: Property<T>): object is WritableP
 
 export interface Controller {
     readonly name: string;
-    readonly online: boolean;
     readonly properties: Property<any>[];
 }
 
@@ -170,10 +185,6 @@ export class PropertyImpl<T> extends ClassWithId implements Property<T> {
     constructor(public readonly name: string, public readonly htmlRenderer: HTMLRederer<T>, readonly initial: T) {
         super();
         this._val = initial;
-    }
-
-    get available(): boolean {
-        return true;
     }
 
     get(): T {

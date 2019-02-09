@@ -39,8 +39,13 @@ class GPIORelay extends Relay {
         }
     }
 
+    private static gpioCmdInstalled?: boolean;
+
     static gpioInstalled(): boolean {
-        return fs.existsSync(GPIORelay.gpioCmd);
+        if (GPIORelay.gpioCmdInstalled === undefined) {
+            GPIORelay.gpioCmdInstalled = fs.existsSync(GPIORelay.gpioCmd);
+        }
+        return GPIORelay.gpioCmdInstalled;
     }
 
     switch(on: boolean): Promise<void> {
@@ -279,7 +284,6 @@ class App implements TabletHost {
 
     private ctrlGPIO = {
         name: "Комната",
-        online: GPIORelay.gpioInstalled(), // 
         properties: [this.r1, this.r2, this.r3, this.r4]
     }
 
@@ -362,6 +366,8 @@ class App implements TabletHost {
         const hourProp = this.timeProp("Час", 24, onDateChanged);
         const minProp = this.timeProp("Мин", 60, onDateChanged);
         const secProp = this.timeProp("Сек", 60, onDateChanged);
+        const inProp = newWritableProperty<number|undefined>("через", 0,
+            new SpanHTMLRenderer<number>(n => n === undefined ? "" : util.toHourMinSec(n)));
 
         const min = 60;
         const hour = 60 * min;
@@ -403,6 +409,14 @@ class App implements TabletHost {
                 // that.val === undefined || that.val.getTime() != d.getTime())) {
                 timers.forEach(t => clearTimeout(t));
                 timers = [];
+
+                setInterval(() => {
+                    if (that.val) {
+                        inProp.setInternal(Math.floor((that.val.getTime() - Date.now())/1000));
+                    } else {
+                        inProp.setInternal(undefined);
+                    }
+                }, 1000);    
 
                 that.val = d;
                 if (that.val !== null) {
@@ -449,9 +463,8 @@ class App implements TabletHost {
             val: null as Date | null,
             controller: {
                 name: name,
-                online: true, // Always online
                 properties: [
-                    hourProp, minProp, secProp, orBeforeProp
+                    hourProp, minProp, secProp, orBeforeProp, inProp
                 ]
             },
             fireInSeconds: (sec: number) => {
@@ -470,7 +483,7 @@ class App implements TabletHost {
                     type: "onPropChanged",
                     id: prop.id,
                     name: prop.name,
-                    val: prop.get()
+                    val: prop.htmlRenderer.toHtmlVal(prop.get())
                 });
             });
         })
@@ -491,14 +504,12 @@ class App implements TabletHost {
         //this.kindle.screenIsOn.set(false);
         const wasOnIds = [];
         for (const ctrl of this.controllers) {
-            if (ctrl.online) {
-                for (const prop of ctrl.properties) {
-                    if (prop instanceof Relay) {
-                        if (prop.get()) {
-                            wasOnIds.push(prop.id);
-                        }
-                        prop.set(false);
+            for (const prop of ctrl.properties) {
+                if (prop instanceof Relay) {
+                    if (prop.get()) {
+                        wasOnIds.push(prop.id);
                     }
+                    prop.set(false);
                 }
             }
         }
@@ -617,7 +628,6 @@ class App implements TabletHost {
 
     private ctrlAceDecoder = {
         name: "AceStream",
-        online: true, // Always online
         properties: [
             this.aceHostAlive,
             this.nowDecodedByAce,
@@ -630,7 +640,6 @@ class App implements TabletHost {
 
     private ctrlControlOther = {
         name: "Другое",
-        online: true, // Always online
         properties: [
             Button.create("Reboot server", () => {
                 util.runShell("/bin/systemctl", ["restart", "nodeserver"])
@@ -659,10 +668,6 @@ class App implements TabletHost {
                 this.reloadAllWebClients();
             })
         ]
-    }
-
-    private get onlineControllers(): Controller[] {
-        return this.controllers.filter(c => c.online);
     }
 
     // We're using dockerized acestream from https://github.com/lucabelluccini/acestream-engine-armv7-docker
@@ -757,7 +762,7 @@ class App implements TabletHost {
 
     private get controllers(): Controller[] {
         const dynPropsArray = Array.from(this.dynamicControllers.values());
-        dynPropsArray.sort((a, b) => a.id == b.id ? 0 : (a.id < b.id ? -1 : 1));
+        dynPropsArray.sort((a, b) => a.ip == b.ip ? 0 : (a.ip < b.ip ? -1 : 1));
 
         // console.log("Ace channels: ", this.acestreamHistoryConf.last().channels.length);
 
@@ -767,10 +772,10 @@ class App implements TabletHost {
                 this.timer.controller,
                 this.ctrlControlOther,
                 this.ctrlAceDecoder,
-                this.ctrlGPIO,
                 this.miLight,
             ],
-            Array.from(this.tablets.values()),
+            GPIORelay.gpioInstalled() ? [ this.ctrlGPIO ] : [],
+            this.allOnlineTablets(),
             dynPropsArray,
             this.renderChannels()
         );
@@ -1191,7 +1196,11 @@ class App implements TabletHost {
                     } else if (msg.type === 'getPropList') {
                         ws.send(JSON.stringify(this.controllers.map(ct => ({
                             name: ct.name,
-                            props: ct.properties.map(prop => ({ name: prop.name, id: prop.id, val: prop.get() }))
+                            props: ct.properties.map(prop => ({ 
+                                name: prop.name, 
+                                id: prop.id, 
+                                val: (prop.htmlRenderer.toHtmlVal || (x => x))(prop.get())
+                            }))
                         }))));
                     } else {
                         //log the received message and send it back to the client
@@ -1337,7 +1346,7 @@ class App implements TabletHost {
         router.get('/index.html', (req, res) => {
             res.contentType('html');
             res.send(this.renderToHTML(
-                this.onlineControllers.map((ctrl) => {
+                this.controllers.map((ctrl) => {
                     return Array.prototype.concat(
                         ctrl.name ? [ newWritableProperty("", ctrl.name, new SpanHTMLRenderer()) ] : [], 
                         ctrl.properties);

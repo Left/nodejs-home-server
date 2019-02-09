@@ -14,6 +14,12 @@
             "type": "shell",
             "command": "cd client;ng build --watch --base-href=/static/ --output-path=../server/web/production",
             "problemMatcher": []
+        },
+        {
+            "label": "Run server locally",
+            "type": "shell",
+            "command": "cd server;npm run dev",
+            "problemMatcher": []
         }
     ]
 }

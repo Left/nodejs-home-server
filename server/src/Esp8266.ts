@@ -116,11 +116,16 @@ export class ClockController extends ClassWithId implements Controller {
     public readonly lcdInformer?: LcdInformer;
     public readonly internalName: string;
 
-    public tempProperty = new PropertyImpl<string>("Температура", new SpanHTMLRenderer(), "Нет данных");
-    public weightProperty = new PropertyImpl<string>("Вес", new SpanHTMLRenderer(), "Нет данных");
+    public tempProperty = new PropertyImpl<number|undefined>(
+        "Температура", 
+        new SpanHTMLRenderer(v => v === undefined ? "Нет данных" : ((v > 0 ? "+" : "-") + v + "&#8451;")), 
+        undefined);
+    public weightProperty = new PropertyImpl<string>(
+        "Вес", 
+        new SpanHTMLRenderer(), 
+        "Нет данных");
     public screenEnabledProperty = newWritableProperty("Экран", true, new CheckboxHTMLRenderer(),
         (val: boolean) => {
-            console.log("Sending screenEnable", val);
             this.send({ type: 'screenEnable', value: val });
         });
     public brightnessProperty = newWritableProperty("Яркость", 
@@ -268,7 +273,7 @@ export class ClockController extends ClassWithId implements Controller {
                 // console.log(this._name, objData.pingid);
                 break;
             case 'temp':
-                this.tempProperty.setInternal(objData.value + "&#8451;");
+                this.tempProperty.setInternal(objData.value);
                 this.handler.onTemperatureChanged(objData.value);
                 break;
             case 'log':
