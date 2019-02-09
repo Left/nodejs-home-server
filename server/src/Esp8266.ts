@@ -1,4 +1,4 @@
-import { Relay, Controller, Property, ClassWithId, PropertyImpl, SpanHTMLRenderer, Button, newWritableProperty, SliderHTMLRenderer, StringAndGoRendrer } from "./Props";
+import { Relay, Controller, Property, ClassWithId, PropertyImpl, SpanHTMLRenderer, Button, newWritableProperty, SliderHTMLRenderer, StringAndGoRendrer, CheckboxHTMLRenderer } from "./Props";
 import { LcdInformer } from './Informer';
 import { delay } from './Util';
 import * as WebSocket from 'ws';
@@ -50,6 +50,7 @@ export interface Hello extends Msg {
     type: 'hello';
     firmware: string;
     afterRestart: number;
+    screenEnabled?: boolean; 
     devParams: {
         "device.name": string,         // Device Name String("ESP_") + ESP.getChipId()
         "device.name.russian": string, // Device Name (russian)
@@ -117,6 +118,11 @@ export class ClockController extends ClassWithId implements Controller {
 
     public tempProperty = new PropertyImpl<string>("Температура", new SpanHTMLRenderer(), "Нет данных");
     public weightProperty = new PropertyImpl<string>("Вес", new SpanHTMLRenderer(), "Нет данных");
+    public screenEnabledProperty = newWritableProperty("Экран", true, new CheckboxHTMLRenderer(),
+        (val: boolean) => {
+            console.log("Sending screenEnable", val);
+            this.send({ type: 'screenEnable', value: val });
+        });
     public brightnessProperty = newWritableProperty("Яркость", 
         0,
         new SliderHTMLRenderer(),
@@ -161,6 +167,8 @@ export class ClockController extends ClassWithId implements Controller {
                 }
             };
             this.brightnessProperty.setInternal(+hello.devParams.brightness);
+            this.screenEnabledProperty.setInternal(hello.screenEnabled || true);
+            this.properties.push(this.screenEnabledProperty);
             this.properties.push(this.brightnessProperty);
             this.properties.push(newWritableProperty("Go play", "", new StringAndGoRendrer("Play"), (val) => {
                 this.send({ type: 'show', text: val });

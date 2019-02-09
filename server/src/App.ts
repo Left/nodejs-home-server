@@ -486,7 +486,7 @@ class App implements TabletHost {
         }
     }
 
-    public sleepAt = this.createTimer("Выкл", "off", d => {
+    public sleepAt = this.createTimer("Выкл", "off", async d => {
         console.log("SLEEP", d);
         //this.kindle.screenIsOn.set(false);
         const wasOnIds = [];
@@ -505,6 +505,8 @@ class App implements TabletHost {
         const clock = this.findDynController('ClockNRemote');
         if (clock) {
             clock.brightnessProperty.set(5);
+            await util.delay(500);
+            clock.screenEnabledProperty.set(false);
         }
 
         this.relaysState.wasOnIds = wasOnIds;
@@ -598,6 +600,7 @@ class App implements TabletHost {
             const clock = this.findDynController('ClockNRemote');
             if (clock) {
                 clock.brightnessProperty.set(20);
+                clock.screenEnabledProperty.set(true);
             } 
 
             await util.delay(3000);
@@ -881,6 +884,7 @@ class App implements TabletHost {
     private dayBegins() {
         const clock = this.findDynController('ClockNRemote');
         if (clock) {
+            clock.screenEnabledProperty.set(true);
             clock.brightnessProperty.set(40);
             if (clock.lcdInformer) {
                 clock.lcdInformer.runningLine("Рассвет");
