@@ -113,7 +113,6 @@ export class SpanHTMLRenderer<T> implements HTMLRederer<T> {
     }
 
     toHtmlVal(val: T) {
-        console.log('!! ' + val + '->' + this.tostr(val));
         return this.tostr(val);
     }
 
