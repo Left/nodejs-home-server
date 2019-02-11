@@ -270,6 +270,7 @@ class App implements TabletHost {
     public server: http.Server;
     public readonly wss: WebSocket.Server;
     public currentTemp?: number;
+    public isSleeping: boolean = false;
 
     public static readonly acestreamHost = "192.168.121.38:6878";
 
@@ -508,6 +509,7 @@ class App implements TabletHost {
     }
 
     public sleepAt = this.createTimer("Выкл", "off", async d => {
+        this.isSleeping = true;
         console.log("SLEEP", d);
         //this.kindle.screenIsOn.set(false);
         const wasOnIds = [];
@@ -588,6 +590,7 @@ class App implements TabletHost {
 
     public wakeAt = this.createTimer("Вкл", "on", d => {
         console.log("WAKE", d);
+        this.isSleeping = false;
         //this.nexus7.screenIsOn.set(true);
         // for (const wo of this.relaysState.wasOnIds) {
         //     (ClassWithId.byId(wo) as Relay).set(true);
@@ -895,6 +898,7 @@ class App implements TabletHost {
     private dayEndsTimer: util.Disposable = util.emptyDisposable;
 
     private dayBegins() {
+        this.isSleeping = false;
         const clock = this.findDynController('ClockNRemote');
         if (clock) {
             clock.screenEnabledProperty.set(true);
@@ -988,6 +992,35 @@ class App implements TabletHost {
     }
 
     constructor() {
+        /*
+        const sock = dgram.createSocket("udp4");
+        let oldClr = 0;
+
+        setInterval(async () => {
+            let clr = 0;
+            while (clr == oldClr) clr = Math.random() * 0x8;
+
+            let w = 160;
+            let h = 16;
+            for (let nn = 0; nn < 3; ++nn) {
+                for (let x = 0; x < 320; x+=w) {
+                    for (let y = 0; y < 240; y+=h) {
+                        sock.send(
+                            Buffer.concat([
+                                new Buffer([0, x/256, x%256, y/256, y%256, w, h]),
+                                new Buffer(w*h/2).fill(clr | clr << 4)
+                            ]),
+                            49152, "192.168.121.170", (err, bytes) => {
+                            // console.log(err, bytes);
+                        });
+                        await util.delay(0);
+                    }
+                }
+                await util.delay(10);
+            }
+        }, 3000);
+        */
+        
         this.channelsHistoryConf.read();        
 
         // Load acestream channels
@@ -1165,6 +1198,7 @@ class App implements TabletHost {
                             }
                             this.initController(clockController);
                             clockController.send({ type: "unixtime", value: Math.floor((new Date()).getTime() / 1000) });
+                            clockController.screenEnabledProperty.set(!this.isSleeping);
 
                             // this.allInformers.runningLine('Подключено ' + clockController.name);
 
