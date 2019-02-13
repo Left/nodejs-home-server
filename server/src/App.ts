@@ -68,6 +68,49 @@ class GPIORelay extends Relay {
     }
 }
 
+interface WeatherError400 {
+    cod: 400|401|402|403|404|405|406|407|408|409|410|411|412|413|414|415|416|417|418|419|421|422|423|424|426|428|429|431|449|451|499;
+    message: string;
+}
+
+interface WeatherError500 {
+    cod: 500|501|502|503|504|505|506|507|508|509|510|511|520|521|522|523|524|525|526;
+    message: string;
+}
+
+interface WeatherInfo {
+    cod: 200;
+    weather: { 
+        id: number,
+        main: string,
+        description: string,
+        icon: string
+    } [];
+    base: string;
+    main: { 
+        temp: number,
+        pressure: number,
+        humidity: number,
+        temp_min: number,
+        temp_max: number,
+        sea_level: number,
+        grnd_level: number 
+    };
+    wind: { speed: number, deg: number };
+    rain: { '3h': number };
+    clouds: { all: number };
+    dt: number;
+    sys: { 
+        message: number,
+        country: string,
+        sunrise: number,
+        sunset: number 
+    },
+    id: number;
+    name: string;
+    coord: { lon: number, lat: number }
+};
+
 interface MiLightBulbState {
     on: boolean;
     allWhite: boolean;
@@ -331,6 +374,9 @@ class App implements TabletHost {
     private readonly tablets: Map<string, Tablet> = new Map(
         [this.kindle, this.nexus7, this.nexus7TCP].map(t => [t.id, t] as [string, Tablet])
     );
+
+    private readonly lat = 44.9704778;
+    private readonly lng = 34.1187681;
 
     private timeProp(name: string, upto: number, onChange: (v: number) => void): WritablePropertyImpl<number> {
         return newWritableProperty<number>(
@@ -646,6 +692,16 @@ class App implements TabletHost {
         ]
     };
 
+    private nowWeatherIcon = newWritableProperty<string>("", "", new ImgHTMLRenderer(30, 30));
+    private nowWeather = newWritableProperty<string>("", "", new SpanHTMLRenderer());
+    private ctrlWeather = {
+        name: "Погода",
+        properties: [
+            this.nowWeatherIcon,
+            this.nowWeather
+        ]
+    };
+
     
     private aceInfo?: AceServerInfo;
 
@@ -783,6 +839,7 @@ class App implements TabletHost {
                 this.timer.controller,
                 this.ctrlControlOther,
                 this.ctrlAceDecoder,
+                this.ctrlWeather,
                 this.miLight,
             ],
             GPIORelay.gpioInstalled() ? [ this.ctrlGPIO ] : [],
@@ -921,6 +978,8 @@ class App implements TabletHost {
         this.miLight.brightness.set(100);
     }
 
+    private savedVolumeForMute?: number;
+
     private irKeyHandlers: IRKeysHandler[] = [
         this.createPowerOnOffTimerKeys('power', () => [
             { showName: "Выкл", valueName: "мин", action: (dd) => this.timerIn(dd * 60, "Выключение", this.sleepAt) },
@@ -949,6 +1008,17 @@ class App implements TabletHost {
         }),
         this.simpleCmd([['clear'], ['min']], "Лента на кухне", () => {
             this.toggleRelay('KitchenRelay', 1);
+        }),
+        this.simpleCmd([['mute']], "Тихо", () => {
+            if (this.savedVolumeForMute === undefined) {
+                this.allInformers.staticLine('Тихо');
+                this.savedVolumeForMute = this.kindle.volume.get();
+                this.kindle.volume.set(0);
+            } else {
+                this.allInformers.staticLine('Громко');
+                this.kindle.volume.set(this.savedVolumeForMute);
+                this.savedVolumeForMute = undefined;
+            }
         }),
         // Sound controls
         this.makeUpDownKeys([
@@ -991,7 +1061,25 @@ class App implements TabletHost {
         }
     }
 
+    private async updateWeather() {
+        const apik = "ac8274e67503eb354fc3b98b2bf66488";
+        const cityid = 693805;
+        const ress = await curl.get(`https://api.openweathermap.org/data/2.5/weather?id=${cityid}&mode=json&units=metric&lang=ru&APPID=${apik}`);
+        const jso = JSON.parse(ress) as (WeatherInfo | WeatherError400 | WeatherError500);
+        if (jso.cod === 200) {
+            //jso
+            // console.log(jso.weather[0]);
+            this.nowWeather.set(jso.weather[0].description + ' ' + util.tempAsString(jso.main.temp));
+            this.nowWeatherIcon.set(`http://openweathermap.org/img/w/${jso.weather[0].icon}.png`);
+        } else {
+            console.log(ress);
+        }
+    }
+
     constructor() {
+        this.updateWeather();
+        // Each 15 mins, update weather
+        setInterval(() => this.updateWeather(), 15*60*1000);
         /*
         const sock = dgram.createSocket("udp4");
         let oldClr = 0;
@@ -1041,10 +1129,8 @@ class App implements TabletHost {
 
         const getSunrizeSunset = () => {
             const now = new Date();
-            const lat = 44.9704778;
-            const lng = 34.1187681;
             console.log('sunrise query');
-            curl.get(`https://api.sunrise-sunset.org/json?formatted=0&lat=${lat}&lng=${lng}&date=${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`)
+            curl.get(`https://api.sunrise-sunset.org/json?formatted=0&lat=${this.lat}&lng=${this.lng}&date=${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`)
                 .then(resStr => {
                     const res = JSON.parse(resStr) as SunrizeError | SunrizeDate;
                     if (res.status === 'OK') {
@@ -1133,7 +1219,8 @@ class App implements TabletHost {
                                     this.allInformers.runningLine('Отключено ' + clockController.name);
                                 },
                                 onTemperatureChanged: (temp: number) => {
-                                    this.allInformers.additionalInfo((temp == 0 ? "" : (temp > 0 ? "+" : "-")) + temp + "\xB0");
+                                    this.allInformers.additionalInfo(
+                                        [util.tempAsString(temp), this.nowWeather.get()].filter(x => !!x).join(', '));
                                 },
                                 onWeightChanged: (weight: number) => {
                                     this.allInformers.staticLine(weight + "г");

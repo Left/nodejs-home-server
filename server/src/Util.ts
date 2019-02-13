@@ -174,6 +174,10 @@ export function thisOrNextDayFromHMS(hh: number, mm: number, ss: number): Date {
     return d;
 }
 
+export function tempAsString(temp: number) {
+    return (temp == 0 ? "" : (temp > 0 ? "+" : "-")) + temp + "\xB0";
+}
+
 export interface Config<T> {
     read(): Promise<T>;
     change(changer: (t: T) => void): Promise<void>;
