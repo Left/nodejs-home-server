@@ -239,17 +239,18 @@ export class Tablet implements Controller {
             if (parse) {
                 this._connectingNow = true;
                 return new Promise<void>((accept, reject) => {
-                    // console.log('Connecting', this.id);
                     adbClient.connect(parse[1], +(parse[2])).then(() => {
                         this._connectingNow = false;
-                        console.log('Connected', this.id);
                         this.init()
-                            .then(() => accept())
-                            .catch(() => reject());
+                            .then(() => {
+                                this._online = true;
+                                accept(void 0);
+                            })
+                            .catch((e) => reject(e));
                     })
                     .catch((e: Error) => {
-                        console.log(e);
                         this._connectingNow = false;
+                        reject(e);
                     });
                 });
             }
@@ -263,8 +264,7 @@ export class Tablet implements Controller {
     }
 
     public shellCmdStream(cmd: string): Promise<stream.Stream> {
-        return this.connectIfNeeded().then(
-            () => adbClient.shell(this.id, cmd));
+        return adbClient.shell(this.id, cmd);
     };
 
     public shellCmdBuf(cmd: string): Promise<Buffer> {
@@ -395,7 +395,5 @@ export class Tablet implements Controller {
             clearInterval(this._timer);
         }
         this._online = false;
-        // Try to connect
-        this.connectIfNeeded();
     }
 }

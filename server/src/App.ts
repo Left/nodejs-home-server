@@ -223,11 +223,11 @@ interface IRKeysHandler {
     /**
      * This method should check array and return milliseconds before accepting
      */
-    partial(arr: string[], final: boolean): number | null;
+    partial(remoteId: string, arr: string[], final: boolean): number | null;
     /**
      * Accept the command
      */
-    complete(arr: string[]): void;
+    complete(remoteId: string, arr: string[]): void;
 }
 
 type ChannelType = "Url" | "Ace";
@@ -851,7 +851,7 @@ class App implements TabletHost {
 
     private simpleCmd(prefixes: string[][], showName: string, action: () => void): IRKeysHandler {
         return {
-            partial: arr => {
+            partial: (remoteId, arr, finalCheck) => {
                 if (prefixes.some(prefix => util.arraysAreEqual(prefix, arr))) {
                     return 0; // Accept immediatelly
                 }
@@ -861,16 +861,16 @@ class App implements TabletHost {
                 }
                 return null;
             },
-            complete: arr => {
+            complete: (remoteId, arr) => {
                 this.allInformers.runningLine(showName);
                 action();
             }
-        };
+        } as IRKeysHandler;
     }
 
     private createPowerOnOffTimerKeys(prefix: string, actions: () => { showName: string, valueName?: string, action: (dd: number) => void }[]): IRKeysHandler {
         return {
-            partial: arr => {
+            partial: (remoteId, arr, finalCheck) => {
                 const firstNonPref = util.getFirstNonPrefixIndex(arr, prefix)
                 if (firstNonPref == 0 || arr.slice(firstNonPref).some(x => !util.isNumKey(x))) {
                     return null; // Not our beast
@@ -888,7 +888,7 @@ class App implements TabletHost {
                     return 2000;
                 }
             },
-            complete: arr => {
+            complete: (remoteId, arr) => {
                 const firstNonPref = util.getFirstNonPrefixIndex(arr, prefix)
                 const dd = util.numArrToVal(arr.slice(firstNonPref));
                 if (dd) {
@@ -928,7 +928,7 @@ class App implements TabletHost {
 
     private makeUpDownKeys(keys: {key: string, action: () => void}[]): IRKeysHandler {
         return {
-            partial: (arr, final) => {
+            partial: (remoteId, arr, final) => {
                 const allAreVolControls = arr.length > 0 && arr.every(k => keys.some(kk => kk.key === k));
                 if (allAreVolControls) {
                     if (!final) {
@@ -945,7 +945,7 @@ class App implements TabletHost {
                 }
 
             },
-            complete: arr => {
+            complete: (remoteId, arr) => {
                 // console.log("Nothing to do");
             }
         } as IRKeysHandler;
@@ -1083,11 +1083,13 @@ class App implements TabletHost {
 
         setInterval(() => {
             this.tablets.forEach((t: Tablet) => {
-                if (!t.online) {
-                    t.connectIfNeeded().catch(e => {});
+                if (!t.online && t.isTcp) {
+                    t.connectIfNeeded()
+                        .then(() => this.reloadAllWebClients())
+                        .catch(e => {});
                 }
             });
-        }, 10*1000);
+        }, 3*1000);
         /*
         const sock = dgram.createSocket("udp4");
         let oldClr = 0;
@@ -1252,7 +1254,7 @@ class App implements TabletHost {
                                         irState.seq.push(keyId);
                                         var toHandle;
                                         for (const handler of this.irKeyHandlers) {
-                                            const toWait = handler.partial(irState.seq, false);
+                                            const toWait = handler.partial(remoteId, irState.seq, false);
                                             if (toWait != null) {
                                                 toHandle = handler;
                                                 irState.wait = toWait;
@@ -1269,8 +1271,8 @@ class App implements TabletHost {
                                             const now = new Date().getTime();
                                             if ((now - irState.lastRemote) >= irState.wait) {
                                                 // Go!
-                                                if (irState.handler && irState.handler.partial(irState.seq, true) !== null) {
-                                                    irState.handler.complete(irState.seq);
+                                                if (irState.handler && irState.handler.partial(remoteId, irState.seq, true) !== null) {
+                                                    irState.handler.complete(remoteId, irState.seq);
                                                 }
 
                                                 irState.seq = [];
@@ -1564,14 +1566,7 @@ class App implements TabletHost {
                 this.statusString.set("");     
             }   
         })
-
-        Array.from(this.tablets.values()).forEach(tablet => {
-            if (tablet.isTcp) {
-                console.log('Tablet', tablet.id, 'connecting');
-                tablet.connectIfNeeded();
-            }
-        });
-    }
+   }
 
     private reloadM3uPlaylists() {
         this.parseM3Us([
