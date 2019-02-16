@@ -162,13 +162,8 @@ export class Tablet implements Controller {
         ], 
         this.isTcp ? [] : [
             Button.create("TCPIP", () => {
-                console.log(this.id);
-                adbClient.getDHCPIpAddress(this.id).then((ip: string) => {
-                    adbClient.tcpip(this.id).then((port: number) => {
-                        console.log(">", port, this.id);
-                        return adbClient.connect(ip, port);
-                    });
-                });
+                return adbClient.tcpip(this.id);
+            })
 /*
                 adbClient.tcpip(this.id)
                     // .then((port: number) => {
@@ -192,7 +187,6 @@ export class Tablet implements Controller {
                             });
                     });
 */
-            }),
         ]);
     }
 
@@ -253,9 +247,10 @@ export class Tablet implements Controller {
                             .then(() => accept())
                             .catch(() => reject());
                     })
-                        .catch(() => {
-                            this._connectingNow = false;
-                        });
+                    .catch((e: Error) => {
+                        console.log(e);
+                        this._connectingNow = false;
+                    });
                 });
             }
         }

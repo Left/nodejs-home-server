@@ -175,7 +175,7 @@ export function thisOrNextDayFromHMS(hh: number, mm: number, ss: number): Date {
 }
 
 export function tempAsString(temp: number) {
-    return (temp == 0 ? "" : (temp > 0 ? "+" : "-")) + temp + "\xB0";
+    return (temp == 0 ? "" : (temp > 0 ? "+" : "")) + temp + "\xB0";
 }
 
 export interface Config<T> {
@@ -183,6 +183,7 @@ export interface Config<T> {
     change(changer: (t: T) => void): Promise<void>;
     last(): T
 }
+
 
 export function newConfig<T extends Object>(initial: T, fileName: string): Config<T> {
     return new (class C implements Config<T> {

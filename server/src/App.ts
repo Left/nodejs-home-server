@@ -880,7 +880,7 @@ class App implements TabletHost {
                 const a = actionsa[(firstNonPref - 1) % actionsa.length];
                 if (firstNonPref == arr.length) {
                     // No numbers yet
-                    this.allInformers.staticLine(a.showName);
+                    this.allInformers.runningLine(a.showName);
                     return 3000;
                 } else {
                     // Numbers are here
@@ -982,8 +982,8 @@ class App implements TabletHost {
 
     private irKeyHandlers: IRKeysHandler[] = [
         this.createPowerOnOffTimerKeys('power', () => [
-            { showName: "Выкл", valueName: "мин", action: (dd) => this.timerIn(dd * 60, "Выключение", this.sleepAt) },
-            { showName: "Вкл", valueName: "мин", action: (dd) => this.timerIn(dd * 60, "Включение", this.wakeAt) },
+            { showName: "Выключение", valueName: "мин", action: (dd) => this.timerIn(dd * 60, "Выключение", this.sleepAt) },
+            { showName: "Включение", valueName: "мин", action: (dd) => this.timerIn(dd * 60, "Включение", this.wakeAt) },
             { showName: "Таймер", valueName: "мин", action: (dd) => this.timerIn(dd * 60, "Таймер", this.timer) }
         ]),
         this.makeSwitchChannelIrSeq('ent'),
@@ -1080,6 +1080,14 @@ class App implements TabletHost {
         this.updateWeather();
         // Each 15 mins, update weather
         setInterval(() => this.updateWeather(), 15*60*1000);
+
+        setInterval(() => {
+            this.tablets.forEach((t: Tablet) => {
+                if (!t.online) {
+                    t.connectIfNeeded().catch(e => {});
+                }
+            });
+        }, 10*1000);
         /*
         const sock = dgram.createSocket("udp4");
         let oldClr = 0;
@@ -1511,7 +1519,7 @@ class App implements TabletHost {
                     return Array.prototype.concat(
                         [ newWritableProperty("", "" + index + ".", new SpanHTMLRenderer()) ], 
                         [ newWritableProperty("", h.name, new SpanHTMLRenderer()) ],
-                        this.makePlayButtonsForChannel(h.url, t => this.playURL(t, h.url, name))
+                        this.makePlayButtonsForChannel(h.url, t => this.playURL(t, h.url, h.name))
                     );
                 })
             ));
@@ -1559,7 +1567,7 @@ class App implements TabletHost {
 
         Array.from(this.tablets.values()).forEach(tablet => {
             if (tablet.isTcp) {
-                // console.log('Tablet', tablet.id);
+                console.log('Tablet', tablet.id, 'connecting');
                 tablet.connectIfNeeded();
             }
         });
@@ -1817,9 +1825,13 @@ class App implements TabletHost {
   
     public async playAce(t: Tablet, c: Channel): Promise<void> {
         const newFromHistory = this.acestreamHistoryConf.last().channels.find(c2 => c.name.localeCompare(c2.name) === 0);
-        if (newFromHistory && newFromHistory.url != c.url) {
-            c.url = newFromHistory.url;
-            console.log("Got new AceHash", c.url, newFromHistory.name, newFromHistory.cat);
+        if (newFromHistory) {
+            if (newFromHistory.url != c.url) {
+                c.url = newFromHistory.url;
+                console.log("Got new AceHash", c.url, newFromHistory.name, newFromHistory.cat);
+            } else {
+                console.log("AceHash is the same");
+            }
         } else {
             console.log("Not found in history");
         }
