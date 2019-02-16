@@ -1,6 +1,6 @@
 
 export interface LcdInformer {
-    runningLine(str: string): void;
+    runningLine(str: string, totalMsToShow: number): void;
     staticLine(str: string): void;
     additionalInfo(str: string): void;
 }
@@ -8,9 +8,9 @@ export interface LcdInformer {
 export class CompositeLcdInformer implements LcdInformer {   
     private dynamicInformers: Map<string, LcdInformer> = new Map();
 
-    public runningLine(str: string) {
+    public runningLine(str: string, totalMsToShow: number) {
         for (const inf of this.dynamicInformers.values()) {
-            inf.runningLine(str);
+            inf.runningLine(str, totalMsToShow);
         }
     }
     public staticLine(str: string) {

@@ -308,6 +308,32 @@ class AceServerInfo {
     }
 }
 
+type Labeled = {
+    lbl: string;
+};
+type Action = Labeled & {
+    action: () => {};
+};
+type SubMenu = Labeled & {
+    submenu: () => Menu[];
+};
+type Menu = (Action | SubMenu);
+
+type KeyType = {
+    [k in 'menu' | 'up' | 'down' | 'left' | 'right']: string;
+};
+
+type MenuKeysType = {
+    [remote: string]: KeyType;
+};
+const menuKeys = {
+    'CanonCamera': { menu: 'set', up: 'up', down: 'down', left: 'left', right: 'right' },
+    'transcendPhotoFrame': { menu: 'ok', up: 'up', down: 'down', left: 'left', right: 'right' },
+    'prologicTV': { menu: 'ent', up: 'channel_up', down: 'channel_down', left: 'volume_down', right: 'volume_up' },
+    'tvtuner': { menu: 'n5', up: 'n2', down: 'n8', left: 'n4', right: 'n6' },
+} as MenuKeysType;
+
+
 class App implements TabletHost {
     public expressApi: express.Express;
     public server: http.Server;
@@ -494,7 +520,7 @@ class App implements TabletHost {
                             timers.push(setTimeout(() => {
                                 // 
                                 console.log(m + ' минут до ' + name);
-                                this.allInformers.runningLine(m + ' минут до ' + name.toLowerCase());
+                                this.allInformers.runningLine(m + ' минут до ' + name.toLowerCase(), 3000);
                             }, msB));
                         }
                     });
@@ -642,7 +668,7 @@ class App implements TabletHost {
         //     (ClassWithId.byId(wo) as Relay).set(true);
         // }
         const wake = async () => {
-            this.allInformers.runningLine("Просыпаемся...");
+            this.allInformers.runningLine("Просыпаемся...", 10000);
 
             await util.delay(2000);
             this.miLight.brightness.set(10);
@@ -862,7 +888,7 @@ class App implements TabletHost {
                 return null;
             },
             complete: (remoteId, arr) => {
-                this.allInformers.runningLine(showName);
+                this.allInformers.runningLine(showName, 2000);
                 action();
             }
         } as IRKeysHandler;
@@ -880,7 +906,7 @@ class App implements TabletHost {
                 const a = actionsa[(firstNonPref - 1) % actionsa.length];
                 if (firstNonPref == arr.length) {
                     // No numbers yet
-                    this.allInformers.runningLine(a.showName);
+                    this.allInformers.runningLine(a.showName, 2000);
                     return 3000;
                 } else {
                     // Numbers are here
@@ -905,7 +931,7 @@ class App implements TabletHost {
             timer: { val: Date | null, fireInSeconds: (sec: number) => void}): void {
         timer.fireInSeconds(val);
         util.delay(3000).then(() => 
-            this.allInformers.runningLine(name + " в " + util.toHMS(timer.val!)) );
+            this.allInformers.runningLine(name + " в " + util.toHMS(timer.val!), 3000) );
     }
 
     private makeSwitchChannelIrSeq(irk: string) {
@@ -920,7 +946,7 @@ class App implements TabletHost {
                                 this.playURL(t, chan.url, chan.name);
                             });
                     } else {
-                        this.allInformers.runningLine("Канал " + dd + " не найден");
+                        this.allInformers.runningLine("Канал " + dd + " не найден", 3000);
                     }
                 }
             })).slice());
@@ -961,7 +987,7 @@ class App implements TabletHost {
             clock.screenEnabledProperty.set(true);
             clock.brightnessProperty.set(40);
             if (clock.lcdInformer) {
-                clock.lcdInformer.runningLine("Рассвет");
+                clock.lcdInformer.runningLine("Рассвет", 3000);
             }
         }
         this.miLight.brightness.set(50);
@@ -972,7 +998,7 @@ class App implements TabletHost {
         if (clock) {
             clock.brightnessProperty.set(40);
             if (clock.lcdInformer) {
-                clock.lcdInformer.runningLine("Закат");
+                clock.lcdInformer.runningLine("Закат", 3000);
             }
         }
         this.miLight.brightness.set(100);
@@ -1026,11 +1052,144 @@ class App implements TabletHost {
             { key: 'volume_down', action: () => this.kindle.volume.set(this.kindle.volume.get() - 100 / 15)}
         ]),
         // Channel controls
+        /*
         this.makeUpDownKeys([
             { key: 'channel_up', action: () => this.playChannel(this.kindle, this.nextChannel(this.kindle, 1))},
             { key: 'channel_down', action: () => this.playChannel(this.kindle, this.nextChannel(this.kindle, -1))}
-        ])
+        ]),
+        */
+        this.makeMainMenu(menuKeys, {
+            lbl: '', submenu: () => [
+                { lbl: 'Свет', submenu: () => [
+                    { lbl: "Комната", submenu: () => [
+                        { lbl: "Потолок", action: () => {
+                            this.switchRelay(this.r4);
+                        } },
+                        { lbl: "Шкаф", action: () => {
+                            this.switchRelay(this.r1);
+                        } },
+                        { lbl: "MiLight", action: () => {
+                            this.miLight.switchOn.set(!this.miLight.switchOn.get());
+                        } },
+                    ]},
+                    { lbl: "Кухня", submenu: () => [
+                        { lbl: "Потолок", action: () => {
+                            this.toggleRelay('KitchenRelay', 0);
+                        } },
+                        { lbl: "Лента", action: () => {
+                            this.toggleRelay('KitchenRelay', 1);
+                        } }
+                    ]},
+                    { lbl: "Коридор", action: () => {
+                        this.switchRelay(this.r3);
+                    }}
+                ]},
+                {
+                    lbl: 'Каналы', 
+                    submenu: () => this.channelsHistoryConf.last().channels.map((c, i) => ({
+                        lbl: c.name,
+                        submenu: () => Array.prototype.concat(
+                            this.allOnlineTablets().map(t => ({
+                                lbl: "на " + t.shortName,
+                                action: () => {
+                                    this.playChannel(t, c);
+                                }
+                            }))
+                            ,[])
+                    }) as Menu)
+                },
+                {
+                    lbl: 'Каналы (Torrent)', 
+                    submenu: () => (this.acestreamHistoryConf.last().channels.map((c, i) => ({
+                        lbl: c.name,
+                        submenu: () => Array.prototype.concat(
+                            this.allOnlineTablets().map(t => ({
+                                lbl: "на " + t.shortName,
+                                action: () => {
+                                    this.playAce(t, c);
+                                    // this.playChannel(t, c);
+                                }
+                            }))
+                            ,[])
+                    }) as Menu))
+                },
+                {
+                    lbl: 'Планшеты', 
+                    submenu: () => this.allOnlineTablets().map(t => ({
+                        lbl: t.shortName,
+                        submenu: () => [
+                            { lbl: 'Вкл', action: async () => {
+                                await t.screenIsOn.set(true);
+                            }},
+                            { lbl: 'Выкл', action: async () => {
+                                await t.stopPlaying(); 
+                                await t.screenIsOn.set(false);
+                            }},
+                            { lbl: 'Reboot', action: () => console.log('REBOOT') }
+                        ]
+                    } as Menu))
+                }
+        ]} as Menu)
     ];
+
+    private makeMainMenu(menuKeys: MenuKeysType, menu: Menu): IRKeysHandler {
+        return {
+            partial: (remoteId, arr, final) => {
+                const keyset = menuKeys[remoteId];
+                // console.log(arr.slice(0, 1), [ keyset.menu ]);
+                if (util.arraysAreEqual(arr.slice(0, 1), [keyset.menu])) {
+                    const ind = [0];
+                    arr.slice(1).forEach(val => {
+                        switch (val) {
+                            case keyset.up:
+                                ind[ind.length - 1]--;
+                                break;
+                            case keyset.down:
+                                ind[ind.length - 1]++;
+                                break;
+                            case keyset.menu:
+                                ind.splice(0, ind.length);
+                                ind.push(0);
+                                break;
+                            case keyset.left:
+                                ind.pop();
+                                break;
+                            case keyset.right:
+                                ind.push(0);
+                                break;
+                        }
+                    });
+                    type Aux = [Menu, boolean, number];
+                    const res: Aux = ind.reduce((dd: Aux, i) => {
+                        if ('submenu' in dd[0]) {
+                            const arrr = dd[0].submenu();
+                            for (; i < 0; i += arrr.length);
+                            i = i % arrr.length;
+                            return [ arrr[i], false, i] as Aux;
+                        }
+                        else {
+                            return [ dd[0], true, 0] as Aux;
+                        }
+                    }, [ menu, false, 0]);
+                    if (res) {
+                        if (('action' in res[0]) && res[1]) {
+                            if (final) {
+                                res[0].action(); // Go ahead!
+                            } else {
+                                return 0;
+                            }
+                        }
+                        const line = res[0].lbl;
+                        console.log(line);
+                        this.allInformers.runningLine(line, 8000);
+                    }
+                    return 8000;
+                }
+                return null; // We didn't recognize the command
+            },
+            complete: (remoteId, arr) => {}
+        } as IRKeysHandler;
+    }
 
     private nextChannel(tbl: Tablet, add: number): Channel {
         const inArr = this.channelsHistoryConf.last().channels.filter(c => !!c.channel).slice();
@@ -1226,7 +1385,7 @@ class App implements TabletHost {
                                         this.allInformers.delete(ip);
                                     }
                                     this.reloadAllWebClients();
-                                    this.allInformers.runningLine('Отключено ' + clockController.name);
+                                    this.allInformers.runningLine('Отключено ' + clockController.name, 3000);
                                 },
                                 onTemperatureChanged: (temp: number) => {
                                     this.allInformers.additionalInfo(
@@ -1297,7 +1456,7 @@ class App implements TabletHost {
                             clockController.send({ type: "unixtime", value: Math.floor((new Date()).getTime() / 1000) });
                             clockController.screenEnabledProperty.set(!this.isSleeping);
 
-                            // this.allInformers.runningLine('Подключено ' + clockController.name);
+                            // this.allInformers.runningLine('Подключено ' + clockController.name, 3000);
 
                             // Reload
                             this.reloadAllWebClients();
@@ -1688,7 +1847,9 @@ class App implements TabletHost {
         util.delay(1000).then(() => {
             const found = this.tablets.get(device.id);
             if (found) {
-                found.init();
+                found
+                    .init()
+                    .catch(e => {});
             }
         });
     }
@@ -1846,7 +2007,7 @@ class App implements TabletHost {
 
         this.aceInfo = new AceServerInfo(c.url);
         this.nowDecodedByAce.setInternal(c.name);
-        this.allInformers.runningLine("Загружаем " + c.name + "...");
+        this.allInformers.runningLine("Загружаем " + c.name + "...", 3000);
         const res = await curl.get("http://" + App.acestreamHost + 
             "/hls/manifest.m3u8?" +
                 [
@@ -1918,7 +2079,7 @@ class App implements TabletHost {
             }
             statsPoll();
         } else {
-            this.allInformers.runningLine("Ошибка загрузки " + c.name + ": " + reso.error);
+            this.allInformers.runningLine("Ошибка загрузки " + c.name + ": " + reso.error, 3000);
             throw new Error(reso.error);
         }
         // 
@@ -1933,9 +2094,13 @@ class App implements TabletHost {
 
         this.r2.switch(true);
 
-        this.allInformers.runningLine("Включаем " + name + " на " + t.shortName);
+        this.allInformers.runningLine("Включаем " + name + " на " + t.shortName, 3000);
         
         t.playURL(url);
+    }
+
+    private switchRelay(relay: GPIORelay): any {
+        relay.switch(!relay.get());
     }
 }
 

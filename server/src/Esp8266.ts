@@ -161,8 +161,8 @@ export class ClockController extends ClassWithId implements Controller {
         }
         if (hello.devParams["hasScreen"] === 'true') {
             this.lcdInformer = {
-                runningLine: (str) => {
-                    this.send({ type: 'show', text: str });
+                runningLine: (str, totalMsToShow) => {
+                    this.send({ type: 'show', totalMsToShow, text: str });
                 },
                 staticLine: (str) => {
                     this.send({ type: 'tune', text: str });
@@ -170,7 +170,7 @@ export class ClockController extends ClassWithId implements Controller {
                 additionalInfo: (str) => {
                     this.send({ type: 'additional-info', text: str });
                 }
-            };
+            } as LcdInformer;
             this.brightnessProperty.setInternal(+hello.devParams.brightness);
             this.screenEnabledProperty.setInternal(hello.screenEnabled || true);
             this.properties.push(this.screenEnabledProperty);
