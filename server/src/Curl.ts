@@ -20,7 +20,7 @@ export function get(_url: string): Promise<string> {
         };
 
         const process = (resp: http.IncomingMessage) => {
-            if (resp.statusCode == 302 || resp.statusCode == 301) {
+            if ((resp.statusCode == 302 || resp.statusCode == 301) && resp.headers.location) {
                 get(resp.headers.location)
                     .then(data => accept(data))
                     .catch(err => decline(err));

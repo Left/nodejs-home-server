@@ -4,7 +4,7 @@ export interface Property<T> {
     readonly id: string;
     readonly name: string;
     get(): T;
-    onChange(fn: () => void): void;
+    onChange(fn: () => void): Disposable;
     readonly htmlRenderer: HTMLRederer<T>;
 }
 
@@ -176,6 +176,10 @@ export class ClassWithId {
     }
 }
 
+export interface Disposable {
+    dispose(): void;
+}
+
 export class PropertyImpl<T> extends ClassWithId implements Property<T> {
     protected evs: events.EventEmitter = new events.EventEmitter();
     private _val: T;
@@ -197,9 +201,14 @@ export class PropertyImpl<T> extends ClassWithId implements Property<T> {
         }
     }
 
-    onChange(fn: () => void): void {
+    onChange(fn: () => void): Disposable {
         // TODO: Impl me
         this.evs.on('change', fn);
+        return {
+            dispose: () => {
+                this.evs.removeListener('change', fn);
+            }
+        };
     }
 
     protected fireOnChange() {

@@ -12,7 +12,7 @@ import * as querystring from 'querystring';
 import * as curl from "./Curl";
 import * as util from "./Util";
 import { getYoutubeInfo } from "./Youtube";
-import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer, ImgHTMLRenderer } from "./Props";
+import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer, ImgHTMLRenderer, Disposable } from "./Props";
 import { TabletHost, Tablet, adbClient, Tracker, Device } from "./Tablet";
 import { CompositeLcdInformer } from './Informer';
 import { ClockController, Hello, ClockControllerEvents } from './Esp8266';
@@ -559,19 +559,6 @@ class App implements TabletHost {
         return that;
     }
 
-    private initController(ct: Controller): void {
-        ct.properties().forEach(prop => {
-            prop.onChange(() => {
-                this.broadcastToWebClients({
-                    type: "onPropChanged",
-                    id: prop.id,
-                    name: prop.name,
-                    val: prop.htmlRenderer.toHtmlVal(prop.get())
-                });
-            });
-        })
-    }
-
     public relaysState = {
         wasOnIds: [] as string[],
         toJsonType: function () {
@@ -725,7 +712,7 @@ class App implements TabletHost {
             ] : []))
     };
 
-    private nowWeatherIcon = newWritableProperty<string>("", "", new ImgHTMLRenderer(30, 30));
+    private nowWeatherIcon = newWritableProperty<string>("", "", new ImgHTMLRenderer(40, 40));
     private nowWeather = newWritableProperty<string>("", "", new SpanHTMLRenderer());
     private ctrlWeather = {
         name: "Погода",
@@ -763,7 +750,7 @@ class App implements TabletHost {
             Button.createClientRedirect("Settings", "/settings.html"),
             newWritableProperty<boolean>("Allow renames", this.allowRenames, new CheckboxHTMLRenderer(), (val: boolean) => {
                 this.allowRenames = val;
-                this.reloadAllWebClients('main');
+                this.reloadAllWebClients('web');
             })
         ]
     }
@@ -783,7 +770,7 @@ class App implements TabletHost {
             public properties(): Property<any>[] {
                 return Array.prototype.concat(
                     additionalPropsBefore,
-                    newWritableProperty<string>("", "get_tv_logo?name=" + encodeURIComponent(h.name), new ImgHTMLRenderer(30, 30)),
+                    newWritableProperty<string>("", "get_tv_logo?name=" + encodeURIComponent(h.name), new ImgHTMLRenderer(40, 40)),
                     newWritableProperty<string>("", h.name, new SpanHTMLRenderer()),
                     that.makePlayButtonsForChannel(h.url, t => that.playChannel(t, h)), 
                     additionalPropsAfter);
@@ -836,7 +823,7 @@ class App implements TabletHost {
                                 hist.channels.splice(index, 1);
                             }
                         }).then(() => {
-                            this.reloadAllWebClients('main');
+                            this.reloadAllWebClients('web');
                         });
                     }),
                 ],
@@ -844,19 +831,63 @@ class App implements TabletHost {
                     newWritableProperty("New name", h.name, new StringAndGoRendrer("Rename"), (val) => {
                         this.channelsHistoryConf.change(hist => {
                             h.name = val;
-                        }).then(() => this.reloadAllWebClients('main'));
+                        }).then(() => this.reloadAllWebClients('web'));
                     }),
                 ] : []));
         });
     }
 
+    private allPropsFor: Map<string, () => Promise<Property<any>[][]>> = new Map([
+        ['web', async () => this.controllers.map((ctrl) => {
+            return Array.prototype.concat(
+                ctrl.name ? [ newWritableProperty("", ctrl.name, new SpanHTMLRenderer()) ] : [], 
+                ctrl.properties());
+        })],
+        ["ace", async () => this.acestreamHistoryConf.last().channels
+            .filter(h => h.cat 
+                && !h.cat.match(/18(_?)plus/) 
+                && !h.name.match(/Nuart/gi)
+                && !h.name.match(/Visit-X/gi))
+            .map((h, index) => {
+            return Array.prototype.concat(
+                [ newWritableProperty("", "" + index + ".", new SpanHTMLRenderer()) ], 
+                newWritableProperty<string>("", "get_tv_logo?name=" + encodeURIComponent(h.name), new ImgHTMLRenderer(40, 40)),
+                [ newWritableProperty("", h.name, new SpanHTMLRenderer()) ],
+                this.makePlayButtonsForChannel(h.url, 
+                    (t) => {
+                        this.playAce(t, h);
+                        // that.playURL(t, h.url, h.name)
+                    })
+            );
+        })],
+        ["iptv", async () => this.tvChannels.last().channels.map((h, index) => {
+            return Array.prototype.concat(
+                [ newWritableProperty("", "" + index + ".", new SpanHTMLRenderer()) ], 
+                [ newWritableProperty("", h.name, new SpanHTMLRenderer()) ],
+                this.makePlayButtonsForChannel(h.url, t => this.playURL(t, h.url, h.name))
+            );
+        })],
+        ["settings", async () => {
+            const keys = await this.keysSettings.read();
+            return Object.getOwnPropertyNames(keys).map((kn2) => {
+                const kn = kn2 as (keyof KeysSettings);
+                return [
+                    newWritableProperty(kn, keys[kn], new StringAndGoRendrer("Change"), val => {
+                        keys[kn] = val;
+                        this.keysSettings.change(c => c[kn] = val);
+                    })
+                ];
+            });
+        }]
+    ]);
+
     private reloadAllWebClients(val: string) {
         this.broadcastToWebClients({ type: "reloadProps", value: val });
     }
 
-    private toAceUrl(aceCode: string): string {
-        return "http://192.168.121.38:6878/ace/getstream?id=" + aceCode +"&hlc=1&spv=0&transcode_audio=0&transcode_mp3=0&transcode_ac3=0&preferred_audio_language=ru";
-    }
+    // private toAceUrl(aceCode: string): string {
+    //     return "http://192.168.121.38:6878/ace/getstream?id=" + aceCode +"&hlc=1&spv=0&transcode_audio=0&transcode_mp3=0&transcode_ac3=0&preferred_audio_language=ru";
+    // }
 
     private get controllers(): Controller[] {
         const dynPropsArray = Array.from(this.dynamicControllers.values());
@@ -1251,7 +1282,7 @@ class App implements TabletHost {
             this.tablets.forEach((t: Tablet) => {
                 if (!t.online && t.isTcp) {
                     t.connectIfNeeded()
-                        .then(() => this.reloadAllWebClients('main'))
+                        .then(() => this.reloadAllWebClients('web'))
                         .catch(e => {});
                 }
             });
@@ -1354,7 +1385,7 @@ class App implements TabletHost {
         this.wss.on('connection', (ws: WebSocket, request) => {
             const url = (request.url || '/').split('/').filter(p => !!p);
             // console.log("Connection from", request.connection.remoteAddress, request.url);
-            const remoteAddress = request.connection.remoteAddress;
+            const remoteAddress = request.connection.remoteAddress!;
             const ip = util.parseOr(remoteAddress, /::ffff:(.*)/, remoteAddress);
 
             //connection is up, let's add a simple simple event
@@ -1391,7 +1422,7 @@ class App implements TabletHost {
                                     if (clockController.lcdInformer) {
                                         this.allInformers.delete(ip);
                                     }
-                                    this.reloadAllWebClients('main');
+                                    this.reloadAllWebClients('web');
                                     this.allInformers.runningLine('Отключено ' + clockController.name, 3000);
                                 },
                                 onTemperatureChanged: (temp: number) => {
@@ -1459,14 +1490,13 @@ class App implements TabletHost {
                             if (clockController.lcdInformer) {
                                 this.allInformers.set(ip, clockController.lcdInformer);
                             }
-                            this.initController(clockController);
                             clockController.send({ type: "unixtime", value: Math.floor((new Date()).getTime() / 1000) });
                             clockController.screenEnabledProperty.set(!this.isSleeping);
 
                             // this.allInformers.runningLine('Подключено ' + clockController.name, 3000);
 
                             // Reload
-                            this.reloadAllWebClients('main');
+                            this.reloadAllWebClients('web');
 
                             ws.on('error', () => { clockController.dropConnection(); });
                             ws.on('close', () => { clockController.dropConnection(); });
@@ -1480,6 +1510,25 @@ class App implements TabletHost {
                     }
                 });
             } else if (util.arraysAreEqual(url, ['web'])) {
+                const lambda = this.allPropsFor.get(url[0]);
+                let dispose: Disposable[] = [];
+                if (lambda) {
+                    lambda().then(allProps => {
+                        allProps.forEach(propArr => {
+                            propArr.forEach(prop => {
+                                dispose.push(prop.onChange(() => {
+                                    this.broadcastToWebClients({
+                                        type: "onPropChanged",
+                                        id: prop.id,
+                                        name: prop.name,
+                                        val: prop.htmlRenderer.toHtmlVal(prop.get())
+                                    });
+                                }));
+                            });
+                        });
+                    });
+                }
+
                 // This is web client. Let's report server revision
                 this.serverHashIdPromise.then((hashId) => {
                     ws.send(JSON.stringify({ type: 'serverVersion', val: hashId }));
@@ -1514,7 +1563,8 @@ class App implements TabletHost {
                 });
 
                 ws.on('close', (message: string) => {
-                    // console.log('closed web client');
+                    dispose.forEach(d => d.dispose());
+                    dispose = [];
                 });
             } else {
                 console.log("WTH???", url);
@@ -1586,7 +1636,7 @@ class App implements TabletHost {
                     .catch((e: Error) => {})
                 })).then(all => {
                     const filtered = all.filter(stn => stn && stn[0].size > 0);
-                    const process = (err, buf) => {
+                    const process = (err?: NodeJS.ErrnoException, buf?: Buffer) => {
                         if (!!err) {
                             if (err.code === 'ENOENT') {
                                 const acceptDef = (err?: Error, buf?: Buffer) => {
@@ -1617,7 +1667,7 @@ class App implements TabletHost {
                             fs.readFile(path.normalize(__dirname + '/../web/logos/' + first[1] + '.png'), process);
                         }
                     } else {
-                        process({ code: 'ENOENT' }, null);
+                        process({ code: 'ENOENT' } as NodeJS.ErrnoException, undefined);
                     }
                 });
         });
@@ -1678,65 +1728,21 @@ class App implements TabletHost {
                     ].join('\n')));
             }
         });
-        router.get('/index.html', (req, res) => {
+        router.get('/index.html', async (req, res) => {
             res.contentType('html');
-            res.send(this.renderToHTML(
-                this.controllers.map((ctrl) => {
-                    return Array.prototype.concat(
-                        ctrl.name ? [ newWritableProperty("", ctrl.name, new SpanHTMLRenderer()) ] : [], 
-                        ctrl.properties());
-                }), "main"
-            ));
+            res.send(await this.renderToHTML("web"));
         });
-        router.get('/torrent_tv.html', (req, res) => {
+        router.get('/torrent_tv.html', async (req, res) => {
             res.contentType('html');
-            res.send(this.renderToHTML(
-                this.acestreamHistoryConf.last().channels
-                    .filter(h => h.cat 
-                        && !h.cat.match(/18(_?)plus/) 
-                        && !h.name.match(/Nuart/gi)
-                        && !h.name.match(/Visit-X/gi))
-                    .map((h, index) => {
-                    return Array.prototype.concat(
-                        [ newWritableProperty("", "" + index + ".", new SpanHTMLRenderer()) ], 
-                        newWritableProperty<string>("", "get_tv_logo?name=" + encodeURIComponent(h.name), new ImgHTMLRenderer(30, 30)),
-                        [ newWritableProperty("", h.name, new SpanHTMLRenderer()) ],
-                        this.makePlayButtonsForChannel(h.url, 
-                            (t) => {
-                                this.playAce(t, h);
-                                // that.playURL(t, h.url, h.name)
-                            })
-                    );
-                })
-            , "ace"));
+            res.send(await this.renderToHTML("ace"));
         });
-        router.get('/tv.html', (req, res) => {
+        router.get('/tv.html', async (req, res) => {
             res.contentType('html');
-            res.send(this.renderToHTML(
-                this.tvChannels.last().channels.map((h, index) => {
-                    return Array.prototype.concat(
-                        [ newWritableProperty("", "" + index + ".", new SpanHTMLRenderer()) ], 
-                        [ newWritableProperty("", h.name, new SpanHTMLRenderer()) ],
-                        this.makePlayButtonsForChannel(h.url, t => this.playURL(t, h.url, h.name))
-                    );
-                }), 'iptv'
-            ));
+            res.send(await this.renderToHTML("iptv"));
         });
-
-    
         router.get('/settings.html', async (req, res) => {
-            const keys = await this.keysSettings.read();
-            const keyProps = Object.getOwnPropertyNames(keys).map((kn2) => {
-                const kn = kn2 as (keyof KeysSettings);
-                return [
-                    newWritableProperty(kn, keys[kn], new StringAndGoRendrer("Change"), val => {
-                        keys[kn] = val;
-                        this.keysSettings.change(c => c[kn] = val);
-                    })
-                ];
-            });
             res.contentType('html');
-            res.send(this.renderToHTML(keyProps, 'settings'));
+            res.send(await this.renderToHTML('settings'));
         });
 
         this.expressApi.use('/', router);
@@ -1766,11 +1772,6 @@ class App implements TabletHost {
             .catch((err: Error) => {
                 console.error('Something went wrong:', err.stack)
             })
-
-        // Subscribe to all the props changes
-        this.controllers.forEach(ct => {
-            this.initController(ct);
-        });
 
         this.aceHostAlive.onChange(() => {
             if (!this.aceHostAlive.get()) {
@@ -1808,7 +1809,8 @@ class App implements TabletHost {
             .catch(e => console.log(e));
     }
 
-    private renderToHTML(allProps: Property<any>[][], idToReferesh = "web"): string {
+    private async renderToHTML(idToReferesh: string): Promise<string> {
+        const allProps = await this.allPropsFor.get(idToReferesh)!();
         const propChangedMap = allProps.map((props, ctrlIndex) => {
             return props.map((prop: Property<any>, prIndex: number): string => {
                 return `'${prop.id}' : (val) => { ${prop.htmlRenderer.updateCode(prop)} }`
@@ -1993,7 +1995,7 @@ class App implements TabletHost {
                 hist.channels.splice(0, 0, c);
             }
         }).then(() => {
-            this.reloadAllWebClients('main');
+            this.reloadAllWebClients('web');
         });
         ;
     }
@@ -2115,7 +2117,7 @@ class App implements TabletHost {
                     if (!evo.error) {
                         const resp = evo.response as StatusResponce;
 
-                        this.statusString.setInternal([
+                        this.statusString.set([
                             "Status:", resp.status,
                             "Downloaded:", util.kbmbgb(resp.downloaded),
                             "Download speed:", util.kbmbgb(resp.speed_down*1000) + "/sec",

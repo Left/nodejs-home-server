@@ -127,8 +127,8 @@ class VolumeControl extends WritablePropertyImpl<number> {
  * Tablet
  */
 export class Tablet implements Controller {
-    private _name: string;
-    private _androidVersion: string;
+    _name: string;
+    _androidVersion: string;
     public get name() { return this.shortName; }
 
     private _online: boolean = false;
