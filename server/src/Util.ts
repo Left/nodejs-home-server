@@ -175,7 +175,7 @@ export function thisOrNextDayFromHMS(hh: number, mm: number, ss: number): Date {
 }
 
 export function tempAsString(temp: number) {
-    return (temp == 0 ? "" : (temp > 0 ? "+" : "")) + temp + "\xB0";
+    return (temp == 0 ? "" : (temp > 0 ? "+" : "")) + temp.toLocaleString('ru', {minimumIntegerDigits: 1, maximumFractionDigits: 1, useGrouping: false}) + "\xB0";
 }
 
 export interface Config<T> {

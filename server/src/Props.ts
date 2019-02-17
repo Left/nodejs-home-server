@@ -159,7 +159,7 @@ export function isWriteableProperty<T>(object: Property<T>): object is WritableP
 
 export interface Controller {
     readonly name: string;
-    readonly properties: Property<any>[];
+    properties(): Property<any>[];
 }
 
 export class ClassWithId {
@@ -250,6 +250,10 @@ export class Button extends WritablePropertyImpl<void> {
 
     static createCopyToClipboard(name: string, value: string): Button {
         return new Button(name, () => {}, new ButtonRendrer(() => "copyToClipboard('" + value + "')"));
+    }
+
+    static createCopyToClipboardLambda(name: string, value: () => string): Button {
+        return new Button(name, () => {}, new ButtonRendrer(() => "copyToClipboard('" + value() + "')"));
     }
 }
 

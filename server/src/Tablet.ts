@@ -1,4 +1,4 @@
-import { Relay, WritablePropertyImpl, SliderHTMLRenderer, Controller, newWritableProperty, StringAndGoRendrer, Button, SpanHTMLRenderer, PropertyImpl, Property } from "./Props";
+import { Relay, WritablePropertyImpl, SliderHTMLRenderer, Controller, newWritableProperty, StringAndGoRendrer, Button, SpanHTMLRenderer, PropertyImpl } from "./Props";
 import * as util from "./Util";
 import { LcdInformer } from './Informer';
 
@@ -129,7 +129,7 @@ class VolumeControl extends WritablePropertyImpl<number> {
 export class Tablet implements Controller {
     private _name: string;
     private _androidVersion: string;
-    public get name() { return this._online ? `${this._name}, android ${this._androidVersion}` : "Offline"; }
+    public get name() { return this.shortName; }
 
     private _online: boolean = false;
     private _timer?: NodeJS.Timer;
@@ -143,27 +143,7 @@ export class Tablet implements Controller {
         this._name = id;
         this._androidVersion = "<Unknown>";
 
-        const tbl = this;
-
-        this.properties = Array.prototype.concat([
-            this.screenIsOn,
-            this.volume,
-            this.battery,
-            // this.orientation,
-            this.playingUrl,
-            newWritableProperty("Go play", "", new StringAndGoRendrer("Play"), (val) => {
-                this.app.playURL(tbl, val, "");
-            }),
-            Button.create("Pause", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Pause")),
-            Button.create("Play", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Play")),
-            Button.create("Stop playing", () => this.stopPlaying()),
-            Button.createClientRedirect("Screen", "/tablet/tablet.html?id=" + querystring.escape(this.id)),
-            Button.create("Reset", () => this.shellCmd("reboot")),
-        ], 
-        this.isTcp ? [] : [
-            Button.create("TCPIP", () => {
-                return adbClient.tcpip(this.id);
-            })
+      
 /*
                 adbClient.tcpip(this.id)
                     // .then((port: number) => {
@@ -187,7 +167,6 @@ export class Tablet implements Controller {
                             });
                     });
 */
-        ]);
     }
 
     public volume = new VolumeControl(this);
@@ -221,7 +200,28 @@ export class Tablet implements Controller {
         }
    })(this);
 
-    public readonly properties: Property<any>[];
+    public properties() {
+        return Array.prototype.concat([
+            this.screenIsOn,
+            this.volume,
+            this.battery,
+            // this.orientation,
+            this.playingUrl,
+            newWritableProperty("Go play", "", new StringAndGoRendrer("Play"), (val) => {
+                this.app.playURL(this, val, "");
+            }),
+            Button.create("Pause", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Pause")),
+            Button.create("Play", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Play")),
+            Button.create("Stop playing", () => this.stopPlaying()),
+            Button.createClientRedirect("Screen", "/tablet/tablet.html?id=" + querystring.escape(this.id)),
+            Button.create("Reset", () => this.shellCmd("reboot")),
+        ],
+        this.isTcp ? [] : [
+            Button.create("TCPIP", () => {
+                return adbClient.tcpip(this.id);
+            })
+        ]);
+    }
 
     public serializable(): any {
         return {
@@ -319,29 +319,41 @@ export class Tablet implements Controller {
         });
     }
 
+    private initializing = false;
+
     public init(): Promise<void> {
+        if (!!this.initializing) {
+            return Promise.reject();
+        }
+        this.initializing = true;
         // And then open shell
-        return adbClient.getProperties(this.id).then((props: { [k: string]: string }) => {
-            this._name = props['ro.product.model'];
-            this._androidVersion = props['ro.build.version.release'];
+        return adbClient.getProperties(this.id)
+            .then((props: { [k: string]: string }) => {
+                this._name = props['ro.product.model'];
+                this._androidVersion = props['ro.build.version.release'];
 
-            if (!this._timer) {
-                this._timer = setInterval(() => {
+                if (!this._timer) {
+                    this._timer = setInterval(() => {
+                        this.timerTask();
+                    }, 10000);
+
                     this.timerTask();
-                }, 10000);
+                }
 
-                this.timerTask();
-            }
+                this._online = true;
 
-            this._online = true;
+                this.volume.onChange(() => {
+                    this.app.allInformers.staticLine(
+                        String.fromCharCode(0xe000) + Math.floor(this.volume.get()) + "%");
+                });
 
-            this.volume.onChange(() => {
-                this.app.allInformers.staticLine(
-                    String.fromCharCode(0xe000) + Math.floor(this.volume.get()) + "%");
+                this.initializing = false;
+                return void 0;
+            })
+            .catch((e: Error) => {
+                console.log(this.id, e);
+                this.initializing = false;
             });
-
-            return void 0;
-        });
     }
 
     public async timerTask() {

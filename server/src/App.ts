@@ -171,12 +171,9 @@ class MiLightBulb implements Controller {
             });
         });
 
-    readonly properties: Property<any>[] = [
-        this.switchOn,
-        this.allWhite,
-        this.brightness,
-        this.hue
-    ];
+    public properties() {
+        return [this.switchOn, this.allWhite, this.brightness, this.hue] as Property<any>[]
+    };
 
     private send(buf: number[]): Promise<void> {
         const sock = dgram.createSocket("udp4");
@@ -354,7 +351,7 @@ class App implements TabletHost {
 
     private ctrlGPIO = {
         name: "Комната",
-        properties: [this.r1, this.r2, this.r3, this.r4]
+        properties: () => [this.r1, this.r2, this.r3, this.r4]
     }
 
     private dynamicControllers: Map<string, ClockController> = new Map();
@@ -544,7 +541,7 @@ class App implements TabletHost {
             val: null as Date | null,
             controller: {
                 name: name,
-                properties: [
+                properties: () => [
                     hourProp, minProp, secProp, orBeforeProp, inProp
                 ]
             },
@@ -558,7 +555,8 @@ class App implements TabletHost {
     }
 
     private initController(ct: Controller): void {
-        ct.properties.forEach(prop => {
+        console.log(ct.name);
+        ct.properties().forEach(prop => {
             prop.onChange(() => {
                 this.broadcastToWebClients({
                     type: "onPropChanged",
@@ -586,7 +584,7 @@ class App implements TabletHost {
         //this.kindle.screenIsOn.set(false);
         const wasOnIds = [];
         for (const ctrl of this.controllers) {
-            for (const prop of ctrl.properties) {
+            for (const prop of ctrl.properties()) {
                 if (prop instanceof Relay) {
                     if (prop.get()) {
                         wasOnIds.push(prop.id);
@@ -705,35 +703,37 @@ class App implements TabletHost {
         wake();
     });
 
+    private aceInfo?: AceServerInfo;
+
     private nowDecodedByAce = newWritableProperty<string>("", "", new SpanHTMLRenderer());
     private statusString = newWritableProperty<string>("", "", new SpanHTMLRenderer());
+    private playingUrl = Button.createCopyToClipboardLambda("Copy URL", () => (this.aceInfo && this.aceInfo.resp ? this.aceInfo.resp.playback_url : ""));
     private aceHostAlive = newWritableProperty<boolean>("", false, new SpanHTMLRenderer(v => v ? "Сервер включен" : "Сервер выключен"));
 
     private ctrlAceDecoder = {
         name: "AceStream",
-        properties: [
-            this.aceHostAlive,
-            this.nowDecodedByAce,
-            this.statusString
-        ]
+        properties: () => Array.prototype.concat([
+                this.aceHostAlive,
+            ], (!!this.aceInfo ? [
+                this.nowDecodedByAce,
+                this.playingUrl,
+                this.statusString
+            ] : []))
     };
 
     private nowWeatherIcon = newWritableProperty<string>("", "", new ImgHTMLRenderer(30, 30));
     private nowWeather = newWritableProperty<string>("", "", new SpanHTMLRenderer());
     private ctrlWeather = {
         name: "Погода",
-        properties: [
+        properties: () => [
             this.nowWeatherIcon,
             this.nowWeather
         ]
     };
 
-    
-    private aceInfo?: AceServerInfo;
-
     private ctrlControlOther = {
         name: "Другое",
-        properties: [
+        properties: () => [
             Button.create("Reboot server", () => {
                 util.runShell("/bin/systemctl", ["restart", "nodeserver"])
             }),
@@ -774,8 +774,7 @@ class App implements TabletHost {
         const that = this;
         return new (class Channels implements Controller {
             public readonly name = "";
-            public readonly online = true; // Always online
-            public get properties(): Property<any>[] {
+            public properties(): Property<any>[] {
                 return Array.prototype.concat(
                     additionalPropsBefore,
                     newWritableProperty<string>("", "get_tv_logo?name=" + encodeURIComponent(h.name), new ImgHTMLRenderer(30, 30)),
@@ -1191,7 +1190,7 @@ class App implements TabletHost {
         } as IRKeysHandler;
     }
 
-    private nextChannel(tbl: Tablet, add: number): Channel {
+    public nextChannel(tbl: Tablet, add: number): Channel {
         const inArr = this.channelsHistoryConf.last().channels.filter(c => !!c.channel).slice();
 
         if (inArr.length == 0) {
@@ -1228,7 +1227,7 @@ class App implements TabletHost {
         if (jso.cod === 200) {
             //jso
             // console.log(jso.weather[0]);
-            this.nowWeather.set(jso.weather[0].description + ' ' + util.tempAsString(jso.main.temp));
+            this.nowWeather.set(jso.weather[0].description + ' ' + util.tempAsString(jso.main.temp) + ' ветер ' + jso.wind.speed + 'м/c');
             this.nowWeatherIcon.set(`http://openweathermap.org/img/w/${jso.weather[0].icon}.png`);
         } else {
             console.log(ress);
@@ -1494,7 +1493,7 @@ class App implements TabletHost {
                     } else if (msg.type === 'getPropList') {
                         ws.send(JSON.stringify(this.controllers.map(ct => ({
                             name: ct.name,
-                            props: ct.properties.map(prop => ({ 
+                            props: ct.properties().map(prop => ({ 
                                 name: prop.name, 
                                 id: prop.id, 
                                 val: (prop.htmlRenderer.toHtmlVal || (x => x))(prop.get())
@@ -1647,7 +1646,7 @@ class App implements TabletHost {
                 this.controllers.map((ctrl) => {
                     return Array.prototype.concat(
                         ctrl.name ? [ newWritableProperty("", ctrl.name, new SpanHTMLRenderer()) ] : [], 
-                        ctrl.properties);
+                        ctrl.properties());
                 })
             ));
         });
@@ -1844,14 +1843,17 @@ class App implements TabletHost {
 
     private processDevice(device: Device): void {
         // Wait some time for device to auth...
-        util.delay(1000).then(() => {
-            const found = this.tablets.get(device.id);
-            if (found) {
-                found
-                    .init()
-                    .catch(e => {});
-            }
-        });
+        if (device.type !== 'offline') {
+            util.delay(1000).then(() => {
+                const table = this.tablets.get(device.id);
+                if (table) {
+                    console.log('device - INIT', device);
+                    table
+                        .init()
+                        .catch(e => { console.log('Device - err', device.id, e); });
+                }
+            });
+        }
     }
 
     public listen(port: number, errCont: any) {
@@ -1879,13 +1881,16 @@ class App implements TabletHost {
                 if (f2) {
                     return Promise.resolve(f2.name + " (TV)");
                 }
-                const f3 = this.acestreamHistoryConf.last().channels.find(x => url === this.toAceUrl(x.url));
-                if (f3) {
-                    return Promise.resolve(f3.name + " (Torrent)");
+                if (this.aceInfo && this.aceInfo.resp && this.aceInfo.resp.playback_url === url) {
+                    const aceHash = this.aceInfo.aceId;
+                    const f3 = this.acestreamHistoryConf.last().channels.find(x => aceHash === x.url);
+                    if (f3) {
+                        return Promise.resolve(f3.name);
+                    }
                 }
-                
+
                 return getYoutubeInfo(url)
-                    .then(u => u.title + " (Youtube)");
+                    .then(u => u.title);
             });
     }
 

@@ -111,7 +111,8 @@ export class ClockController extends ClassWithId implements Controller {
     protected intervalId?: NodeJS.Timer;
     protected lastResponse = Date.now();
     private readonly _name: string;
-    public readonly properties: Property<any>[];
+    private readonly _properties: Property<any>[];
+    public properties() { return this._properties; }
     public get name() { return this._name; }
     public readonly lcdInformer?: LcdInformer;
     public readonly internalName: string;
@@ -151,13 +152,13 @@ export class ClockController extends ClassWithId implements Controller {
         this.baseWeight = ClockController.baseW.get(this._name);
         this.lastResponse = Date.now();
 
-        this.properties = [];
+        this._properties = [];
         if (hello.devParams['hasHX711'] === 'true') {
-            this.properties.push(this.weightProperty);
-            this.properties.push(Button.create("Weight reset", () => this.tare()));
+            this._properties.push(this.weightProperty);
+            this._properties.push(Button.create("Weight reset", () => this.tare()));
         }
         if (hello.devParams['hasDS18B20'] === 'true') {
-            this.properties.push(this.tempProperty);
+            this._properties.push(this.tempProperty);
         }
         if (hello.devParams["hasScreen"] === 'true') {
             this.lcdInformer = {
@@ -173,9 +174,9 @@ export class ClockController extends ClassWithId implements Controller {
             } as LcdInformer;
             this.brightnessProperty.setInternal(+hello.devParams.brightness);
             this.screenEnabledProperty.setInternal(hello.screenEnabled || true);
-            this.properties.push(this.screenEnabledProperty);
-            this.properties.push(this.brightnessProperty);
-            this.properties.push(newWritableProperty("Go play", "", new StringAndGoRendrer("Play"), (val) => {
+            this._properties.push(this.screenEnabledProperty);
+            this._properties.push(this.brightnessProperty);
+            this._properties.push(newWritableProperty("Go play", "", new StringAndGoRendrer("Play"), (val) => {
                 this.send({ type: 'show', text: val });
             }));
         }
@@ -185,11 +186,11 @@ export class ClockController extends ClassWithId implements Controller {
                 .forEach((rn, index) => {
                     const relay = new ControllerRelay(this, index, rn);
                     this.relays.push(relay);
-                    this.properties.push(relay);
+                    this._properties.push(relay);
                 });
         }
 
-        this.properties.push(Button.create("Restart", () => this.reboot()));
+        this._properties.push(Button.create("Restart", () => this.reboot()));
 
         this.intervalId = setInterval(() => {
             // console.log(this.name, "wasRecentlyContacted", this.wasRecentlyContacted());
