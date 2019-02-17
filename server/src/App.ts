@@ -3,6 +3,7 @@ import * as http from 'http';
 import * as WebSocket from 'ws';
 // import * as stream from "stream";
 import * as fs from "fs";
+import * as nodeutil from "util";
 import * as path from "path";
 import * as dgram from "dgram";
 import * as crypto from 'crypto';
@@ -330,6 +331,10 @@ const menuKeys = {
     'tvtuner': { menu: 'n5', up: 'n2', down: 'n8', left: 'n4', right: 'n6' },
 } as MenuKeysType;
 
+interface KeysSettings {
+    weatherApiKey: string;
+}
+
 
 class App implements TabletHost {
     public expressApi: express.Express;
@@ -555,7 +560,6 @@ class App implements TabletHost {
     }
 
     private initController(ct: Controller): void {
-        console.log(ct.name);
         ct.properties().forEach(prop => {
             prop.onChange(() => {
                 this.broadcastToWebClients({
@@ -756,9 +760,10 @@ class App implements TabletHost {
             Button.create("Reboot Orange Pi", () => util.runShell("reboot", [])),
             Button.createClientRedirect("TV Channels", "/tv.html"),
             Button.createClientRedirect("AceStream Channels", "/torrent_tv.html"),
+            Button.createClientRedirect("Settings", "/settings.html"),
             newWritableProperty<boolean>("Allow renames", this.allowRenames, new CheckboxHTMLRenderer(), (val: boolean) => {
                 this.allowRenames = val;
-                this.reloadAllWebClients();
+                this.reloadAllWebClients('main');
             })
         ]
     }
@@ -767,6 +772,7 @@ class App implements TabletHost {
     private acestreamHistoryConf = util.newConfig({ channels: [] as Channel[], lastUpdate: 0 }, "acestream_tv_channels");
     private tvChannels = util.newConfig({ channels: [] as Channel[], lastUpdate: 0 }, "m3u_tv_channels");
     private channelsHistoryConf = util.newConfig({ channels: [] as Channel[] }, "tv_channels");
+    private keysSettings = util.newConfig({ weatherApiKey: "" }, "keys");
 
     private channelAsController(h: Channel, 
         additionalPropsBefore: Property<any>[] = [],
@@ -830,7 +836,7 @@ class App implements TabletHost {
                                 hist.channels.splice(index, 1);
                             }
                         }).then(() => {
-                            this.reloadAllWebClients();
+                            this.reloadAllWebClients('main');
                         });
                     }),
                 ],
@@ -838,14 +844,14 @@ class App implements TabletHost {
                     newWritableProperty("New name", h.name, new StringAndGoRendrer("Rename"), (val) => {
                         this.channelsHistoryConf.change(hist => {
                             h.name = val;
-                        }).then(() => this.reloadAllWebClients());
+                        }).then(() => this.reloadAllWebClients('main'));
                     }),
                 ] : []));
         });
     }
 
-    private reloadAllWebClients() {
-        this.broadcastToWebClients({ type: "reloadProps" });
+    private reloadAllWebClients(val: string) {
+        this.broadcastToWebClients({ type: "reloadProps", value: val });
     }
 
     private toAceUrl(aceCode: string): string {
@@ -1220,14 +1226,16 @@ class App implements TabletHost {
     }
 
     private async updateWeather() {
-        const apik = "ac8274e67503eb354fc3b98b2bf66488";
         const cityid = 693805;
-        const ress = await curl.get(`https://api.openweathermap.org/data/2.5/weather?id=${cityid}&mode=json&units=metric&lang=ru&APPID=${apik}`);
+        const keys = await this.keysSettings.read();
+        const ress = await curl.get(`https://api.openweathermap.org/data/2.5/weather?id=${cityid}&mode=json&units=metric&lang=ru&APPID=${keys.weatherApiKey}`);
         const jso = JSON.parse(ress) as (WeatherInfo | WeatherError400 | WeatherError500);
         if (jso.cod === 200) {
             //jso
             // console.log(jso.weather[0]);
-            this.nowWeather.set(jso.weather[0].description + ' ' + util.tempAsString(jso.main.temp) + ' ветер ' + jso.wind.speed + 'м/c');
+            const str = jso.weather[0].description + ' ' + util.tempAsString(jso.main.temp) + ' ветер ' + jso.wind.speed + 'м/c';
+            console.log(str);
+            this.nowWeather.set(str);
             this.nowWeatherIcon.set(`http://openweathermap.org/img/w/${jso.weather[0].icon}.png`);
         } else {
             console.log(ress);
@@ -1243,7 +1251,7 @@ class App implements TabletHost {
             this.tablets.forEach((t: Tablet) => {
                 if (!t.online && t.isTcp) {
                     t.connectIfNeeded()
-                        .then(() => this.reloadAllWebClients())
+                        .then(() => this.reloadAllWebClients('main'))
                         .catch(e => {});
                 }
             });
@@ -1383,7 +1391,7 @@ class App implements TabletHost {
                                     if (clockController.lcdInformer) {
                                         this.allInformers.delete(ip);
                                     }
-                                    this.reloadAllWebClients();
+                                    this.reloadAllWebClients('main');
                                     this.allInformers.runningLine('Отключено ' + clockController.name, 3000);
                                 },
                                 onTemperatureChanged: (temp: number) => {
@@ -1458,7 +1466,7 @@ class App implements TabletHost {
                             // this.allInformers.runningLine('Подключено ' + clockController.name, 3000);
 
                             // Reload
-                            this.reloadAllWebClients();
+                            this.reloadAllWebClients('main');
 
                             ws.on('error', () => { clockController.dropConnection(); });
                             ws.on('close', () => { clockController.dropConnection(); });
@@ -1555,31 +1563,61 @@ class App implements TabletHost {
 
         let nologoBuffer: Buffer; // Cache 'nologo' because it will be used often
         router.get('/get_tv_logo', (req, res) => {
-            const n = req.query['name'];
-            fs.readFile(path.normalize(__dirname + '/../web/logos/' + n + '.png'),
-                (err, buf) => {
-                    if (!!err) {
-                        if (err.code === 'ENOENT') {
-                            const acceptDef = (err?: Error, buf?: Buffer) => {
-                                if (!!buf) {
-                                    if (nologoBuffer !== buf) {
-                                        nologoBuffer = buf;
+            const n: string = req.query['name'];
+            if (!n) {
+            }
+            const names = [
+                n,
+                n.replace(/\s*\d+\s*/gi, ""), 
+                n.replace(/\s*HD\s*/gi, ""), 
+                n.replace(/\s*\(.*\)\s*/gi, "")];
+            names.sort((s1, s2) => -s1.localeCompare(s2));
+            const namesDistinct = names.reduce((prev: string[], curr) => {
+                if (prev.length == 0 || curr !== prev[prev.length - 1]) {
+                    return Array.prototype.concat(prev, [curr]);
+                } else {
+                    return prev;
+                }
+            }, []);
+            // console.log(names, namesDistinct);
+            Promise.all(namesDistinct.map((n: string) => { 
+                return nodeutil.promisify(fs.stat)(__dirname + '/../web/logos/' + n + '.png')
+                    .then(st => [st, n] as [fs.Stats, string])
+                    .catch((e: Error) => {})
+                })).then(all => {
+                    const filtered = all.filter(stn => stn && stn[0].size > 0);
+                    const process = (err, buf) => {
+                        if (!!err) {
+                            if (err.code === 'ENOENT') {
+                                const acceptDef = (err?: Error, buf?: Buffer) => {
+                                    if (!!buf) {
+                                        if (nologoBuffer !== buf) {
+                                            nologoBuffer = buf;
+                                        }
+                                        res.contentType('image/png');
+                                        res.end(buf);
                                     }
-                                    res.contentType('image/png');
-                                    res.end(buf);
                                 }
-                            }
-                            if (nologoBuffer) {
-                                acceptDef(undefined, nologoBuffer);
+                                if (nologoBuffer) {
+                                    acceptDef(undefined, nologoBuffer);
+                                } else {
+                                    fs.readFile(path.normalize(__dirname + '/../web/logos/nologo.png'), acceptDef);
+                                }
                             } else {
-                                fs.readFile(path.normalize(__dirname + '/../web/logos/nologo.png'), acceptDef);
+                                console.log(err);
                             }
                         } else {
-                            console.log(err);
+                            res.contentType('image/png');
+                            res.end(buf)
+                        }
+                    };
+                    if (filtered.length > 0 && !!filtered[0]) {
+                        const first = filtered[0];
+                        if (!!first) {
+                            fs.readFile(path.normalize(__dirname + '/../web/logos/' + first[1] + '.png'), process);
                         }
                     } else {
-                        res.contentType('image/png');
-                        res.end(buf)
+                        process({ code: 'ENOENT' }, null);
                     }
                 });
         });
@@ -1647,7 +1685,7 @@ class App implements TabletHost {
                     return Array.prototype.concat(
                         ctrl.name ? [ newWritableProperty("", ctrl.name, new SpanHTMLRenderer()) ] : [], 
                         ctrl.properties());
-                })
+                }), "main"
             ));
         });
         router.get('/torrent_tv.html', (req, res) => {
@@ -1670,7 +1708,7 @@ class App implements TabletHost {
                             })
                     );
                 })
-            ));
+            , "ace"));
         });
         router.get('/tv.html', (req, res) => {
             res.contentType('html');
@@ -1681,8 +1719,24 @@ class App implements TabletHost {
                         [ newWritableProperty("", h.name, new SpanHTMLRenderer()) ],
                         this.makePlayButtonsForChannel(h.url, t => this.playURL(t, h.url, h.name))
                     );
-                })
+                }), 'iptv'
             ));
+        });
+
+    
+        router.get('/settings.html', async (req, res) => {
+            const keys = await this.keysSettings.read();
+            const keyProps = Object.getOwnPropertyNames(keys).map((kn2) => {
+                const kn = kn2 as (keyof KeysSettings);
+                return [
+                    newWritableProperty(kn, keys[kn], new StringAndGoRendrer("Change"), val => {
+                        keys[kn] = val;
+                        this.keysSettings.change(c => c[kn] = val);
+                    })
+                ];
+            });
+            res.contentType('html');
+            res.send(this.renderToHTML(keyProps, 'settings'));
         });
 
         this.expressApi.use('/', router);
@@ -1721,7 +1775,7 @@ class App implements TabletHost {
         this.aceHostAlive.onChange(() => {
             if (!this.aceHostAlive.get()) {
                 this.nowDecodedByAce.set("");
-                this.statusString.set("");     
+                this.statusString.set("");
             }   
         })
    }
@@ -1754,7 +1808,7 @@ class App implements TabletHost {
             .catch(e => console.log(e));
     }
 
-    private renderToHTML(allProps: Property<any>[][]): string {
+    private renderToHTML(allProps: Property<any>[][], idToReferesh = "web"): string {
         const propChangedMap = allProps.map((props, ctrlIndex) => {
             return props.map((prop: Property<any>, prIndex: number): string => {
                 return `'${prop.id}' : (val) => { ${prop.htmlRenderer.updateCode(prop)} }`
@@ -1781,7 +1835,7 @@ class App implements TabletHost {
                         const d = JSON.parse(event.data);
                         if (d.type === 'onPropChanged') {
                             propChangeMap[d.id](d.val);
-                        } else if (d.type === 'reloadProps') {
+                        } else if (d.type === 'reloadProps' && d.value === '${idToReferesh}') {
                             location.reload(); // Temp, will be impl in other way
                         } else if (d.type === 'serverVersion') {
                             if (!!serverVersion && d.val !== serverVersion) {
@@ -1939,7 +1993,7 @@ class App implements TabletHost {
                 hist.channels.splice(0, 0, c);
             }
         }).then(() => {
-            this.reloadAllWebClients();
+            this.reloadAllWebClients('main');
         });
         ;
     }
@@ -2011,7 +2065,9 @@ class App implements TabletHost {
         }
 
         this.aceInfo = new AceServerInfo(c.url);
-        this.nowDecodedByAce.setInternal(c.name);
+        this.nowDecodedByAce.set(c.name);
+        this.statusString.set("");
+
         this.allInformers.runningLine("Загружаем " + c.name + "...", 3000);
         const res = await curl.get("http://" + App.acestreamHost + 
             "/hls/manifest.m3u8?" +
