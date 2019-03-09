@@ -1281,8 +1281,13 @@ class App implements TabletHost {
         setInterval(() => {
             this.tablets.forEach((t: Tablet) => {
                 if (!t.online && t.isTcp) {
+                    const oldOnline = t.online;
                     t.connectIfNeeded()
-                        .then(() => this.reloadAllWebClients('web'))
+                        .then(() => {
+                            if (oldOnline != t.online) {
+                                this.reloadAllWebClients('web')
+                            }
+                        })
                         .catch(e => {});
                 }
             });
@@ -1917,6 +1922,8 @@ class App implements TabletHost {
     }
 
     private broadcastToWebClients(arg: Object): void {
+        // console.log(JSON.stringify(arg));
+        // console.trace();
         this.wss.clients.forEach(cl => {
             try {
                 cl.send(JSON.stringify(arg));

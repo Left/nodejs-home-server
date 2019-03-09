@@ -118,9 +118,13 @@ export function trace<T>(x: T): T {
 }
 
 export function parseOr(str: string, regex:RegExp, fallback: string): string {
-    const matched = str.match(regex);
-    if (matched) {
-        return matched[1];
+    try {
+        const matched = str.match(regex);
+        if (matched) {
+            return matched[1];
+        }
+    } catch (e) {
+        return fallback;        
     }
     return fallback;
 }
