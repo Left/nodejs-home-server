@@ -228,13 +228,26 @@ export function newWritableProperty<T>(
     name: string, 
     initial: T, 
     htmlRenderer: HTMLRederer<T> = voidHTMLRenderer(), 
-    onSet: (v:T)=>void = ()=>{}): WritablePropertyImpl<T> {
+    handlers: { 
+        init?(_this: WritablePropertyImpl<T>): void;
+        onSet?(v:T): void;
+    } = {}): WritablePropertyImpl<T> {
+
     return new (class WP extends WritablePropertyImpl<T> {
+        constructor() {
+            super(name, htmlRenderer, initial);
+            if (handlers.init) { 
+                handlers.init(this);
+            }
+        }
+
         set(val: T): void {
             this.setInternal(val);
-            onSet(val);
+            if (handlers.onSet) { 
+                handlers.onSet(val);
+            }
         }
-    })(name, htmlRenderer, initial);
+    })();
 }
 
 export class Button extends WritablePropertyImpl<void> {

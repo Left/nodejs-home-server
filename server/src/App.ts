@@ -3,6 +3,7 @@ import * as http from 'http';
 import * as WebSocket from 'ws';
 // import * as stream from "stream";
 import * as fs from "fs";
+import * as os from "os";
 import * as nodeutil from "util";
 import * as path from "path";
 import * as dgram from "dgram";
@@ -147,8 +148,8 @@ class MiLightBulb implements Controller {
         }
     })(this);
 
-    public readonly allWhite = newWritableProperty<boolean>("All white", false, new CheckboxHTMLRenderer(),
-        (val: boolean) => {
+    public readonly allWhite = newWritableProperty<boolean>("All white", false, new CheckboxHTMLRenderer(), {
+        onSet: (val: boolean) => {
             this.config.change(conf => conf.allWhite = val).then(() => {
                 if (val) {
                     this.send([0xC2, 0x00, 0x55]);
@@ -156,21 +157,21 @@ class MiLightBulb implements Controller {
                     this.send([0x40, (0xff * this.hue.get() / 100), 0x55]);
                 }
             });
-        });
+        }});
 
-    public readonly brightness = newWritableProperty<number>("Brightness", 50, new SliderHTMLRenderer(),
-        (val: number) => {
+    public readonly brightness = newWritableProperty<number>("Brightness", 50, new SliderHTMLRenderer(), {
+        onSet: (val: number) => {
             this.config.change(conf => conf.brightness = val).then(() => {
                 this.send([0x4E, 0x2 + (0x15 * val / 100), 0x55]);
             });
-        });
+        }});
 
-    public readonly hue = newWritableProperty<number>("Hue", 50, new SliderHTMLRenderer(),
-        (val: number) => {
+    public readonly hue = newWritableProperty<number>("Hue", 50, new SliderHTMLRenderer(), {
+        onSet: (val: number) => {
             this.config.change(conf => { conf.hue = val; conf.allWhite = false; }).then(() => {
                 this.allWhite.set(false);
             });
-        });
+        }});
 
     public properties() {
         return [this.switchOn, this.allWhite, this.brightness, this.hue] as Property<any>[]
@@ -411,7 +412,7 @@ class App implements TabletHost {
             name,
             0,
             new SelectHTMLRenderer<number>(Array.from({ length: upto }, ((v, k) => k)), i => "" + i),
-            (v: number) => { onChange(v); });
+            { onSet: (v: number) => { onChange(v); }});
     }
 
     private createTimer(name: string, 
@@ -466,7 +467,7 @@ class App implements TabletHost {
                 }
                 return "";
             }),
-            (_n: number) => {
+            { onSet: (_n: number) => {
                 const n = timerIn[_n];
                 if (n.startsWith("val")) {
                     that.fireInSeconds(+n.slice(3));
@@ -475,7 +476,7 @@ class App implements TabletHost {
                 } else if (n === "atdate") {
                     onDateChanged();
                 }
-            });
+            }});
         var timers: NodeJS.Timer[] = [];
         let intervalTimer: NodeJS.Timer;
         const setNewValue = (d: Date | null) => {
@@ -722,6 +723,22 @@ class App implements TabletHost {
         ]
     };
 
+    private _freeMem = newWritableProperty<number>("Free memory", 0, new SpanHTMLRenderer(v => { return Math.floor(v) + "%";}), {
+        init: (_this) => {
+            let lastReportedTime = Date.now();
+            setInterval(() => {
+                // console.log(os.freemem());
+                const freeMem = os.freemem()*100/os.totalmem();
+                _this.set(freeMem);
+                if (freeMem < 10 && (Date.now() - lastReportedTime) > 20000) {
+                    lastReportedTime = Date.now();
+                    console.log('Low memory: ', freeMem);
+                    this.allInformers.runningLine('На сервере мало памяти', 3000);
+                }
+            }, 2000);
+        }
+    });
+
     private ctrlControlOther = {
         name: "Другое",
         properties: () => [
@@ -748,10 +765,11 @@ class App implements TabletHost {
             Button.createClientRedirect("TV Channels", "/tv.html"),
             Button.createClientRedirect("AceStream Channels", "/torrent_tv.html"),
             Button.createClientRedirect("Settings", "/settings.html"),
-            newWritableProperty<boolean>("Allow renames", this.allowRenames, new CheckboxHTMLRenderer(), (val: boolean) => {
+            newWritableProperty<boolean>("Allow renames", this.allowRenames, new CheckboxHTMLRenderer(), { onSet: (val: boolean) => {
                 this.allowRenames = val;
                 this.reloadAllWebClients('web');
-            })
+            }}),
+            this._freeMem
         ]
     }
 
@@ -810,11 +828,11 @@ class App implements TabletHost {
                 [
                     newWritableProperty<number>("", (h.channel || -1),
                         new SelectHTMLRenderer<number>(channels, _n => "" + _n),
-                            (num) => {
+                            { onSet: (num) => {
                                 this.channelsHistoryConf.change(hist => {
                                     h.channel = num;
                                 })
-                            })
+                            }})
                 ],
                 Array.prototype.concat(h.channel ? [] : [
                     Button.create("Remove", () => {
@@ -828,11 +846,11 @@ class App implements TabletHost {
                     }),
                 ],
                 (this.allowRenames) ? [
-                    newWritableProperty("New name", h.name, new StringAndGoRendrer("Rename"), (val) => {
+                    newWritableProperty("New name", h.name, new StringAndGoRendrer("Rename"), { onSet: (val) => {
                         this.channelsHistoryConf.change(hist => {
                             h.name = val;
                         }).then(() => this.reloadAllWebClients('web'));
-                    }),
+                    }}),
                 ] : []));
         });
     }
@@ -872,10 +890,10 @@ class App implements TabletHost {
             return Object.getOwnPropertyNames(keys).map((kn2) => {
                 const kn = kn2 as (keyof KeysSettings);
                 return [
-                    newWritableProperty(kn, keys[kn], new StringAndGoRendrer("Change"), val => {
+                    newWritableProperty(kn, keys[kn], new StringAndGoRendrer("Change"), { onSet: val => {
                         keys[kn] = val;
                         this.keysSettings.change(c => c[kn] = val);
-                    })
+                    }})
                 ];
             });
         }]
@@ -2036,9 +2054,9 @@ class App implements TabletHost {
 
                     return res as Channel[];
                 } else {
-                    throw new Error('Invalid format');
+                    throw new Error('Invalid format for ' + _url);
                 }
-            });
+            }).catch(e => console.error(e));
         })).then(arr => {
             const res = Array.prototype.concat(...arr);
             res.sort((a, b) => a.name.localeCompare(b.name));

@@ -125,15 +125,19 @@ export class ClockController extends ClassWithId implements Controller {
         "Вес", 
         new SpanHTMLRenderer(), 
         "Нет данных");
-    public screenEnabledProperty = newWritableProperty("Экран", true, new CheckboxHTMLRenderer(),
-        (val: boolean) => {
-            this.send({ type: 'screenEnable', value: val });
+    public screenEnabledProperty = newWritableProperty("Экран", true, new CheckboxHTMLRenderer(), 
+        {
+            onSet: (val: boolean) => {
+                this.send({ type: 'screenEnable', value: val });
+            }
         });
     public brightnessProperty = newWritableProperty("Яркость", 
         0,
-        new SliderHTMLRenderer(),
-        (val: number) => {
-            this.send({ type: 'brightness', value: val });
+        new SliderHTMLRenderer(), 
+        {
+            onSet: (val: number) => {
+                this.send({ type: 'brightness', value: val });
+            }
         });
     private static baseW: Map<string, number> = new Map();
     private baseWeight?: number;
@@ -176,8 +180,8 @@ export class ClockController extends ClassWithId implements Controller {
             this.screenEnabledProperty.setInternal(hello.screenEnabled || true);
             this._properties.push(this.screenEnabledProperty);
             this._properties.push(this.brightnessProperty);
-            this._properties.push(newWritableProperty("Go play", "", new StringAndGoRendrer("Play"), (val) => {
-                this.send({ type: 'show', text: val });
+            this._properties.push(newWritableProperty("Go play", "", new StringAndGoRendrer("Play"), {
+                onSet: (val) => this.send({ type: 'show', text: val })
             }));
         }
         if (!!hello.devParams['relay.names']) {

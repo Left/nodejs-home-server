@@ -207,9 +207,9 @@ export class Tablet implements Controller {
             this.battery,
             // this.orientation,
             this.playingUrl,
-            newWritableProperty("Go play", "", new StringAndGoRendrer("Play"), (val) => {
+            newWritableProperty("Go play", "", new StringAndGoRendrer("Play"), { onSet: (val) => {
                 this.app.playURL(this, val, "");
-            }),
+            }}),
             Button.create("Pause", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Pause")),
             Button.create("Play", () => this.shellCmd("am broadcast -a org.videolan.vlc.remote.Play")),
             Button.create("Stop playing", () => this.stopPlaying()),
