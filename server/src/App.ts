@@ -726,14 +726,20 @@ class App implements TabletHost {
     private _freeMem = newWritableProperty<number>("Free memory", 0, new SpanHTMLRenderer(v => { return Math.floor(v) + "%";}), {
         init: (_this) => {
             let lastReportedTime = Date.now();
+            let startedRebooting = false;
             setInterval(() => {
                 // console.log(os.freemem());
                 const freeMem = os.freemem()*100/os.totalmem();
                 _this.set(freeMem);
-                if (freeMem < 10 && (Date.now() - lastReportedTime) > 20000) {
+                if (freeMem < 15 && (Date.now() - lastReportedTime) > 20000) {
                     lastReportedTime = Date.now();
                     console.log('Low memory: ', freeMem);
                     this.allInformers.runningLine('На сервере мало памяти', 3000);
+                }
+                if (freeMem < 8 && !startedRebooting) {
+                    startedRebooting = true;
+                    this.allInformers.runningLine('Перегружаем сервис', 3000);
+                    this.rebootService();
                 }
             }, 2000);
         }
@@ -742,8 +748,8 @@ class App implements TabletHost {
     private ctrlControlOther = {
         name: "Другое",
         properties: () => [
-            Button.create("Reboot server", () => {
-                util.runShell("/bin/systemctl", ["restart", "nodeserver"])
+            Button.create("Reboot service", () => {
+                this.rebootService();
             }),
             Button.create("Reboot AceStream", () => {
                 const go = async () => {
@@ -2189,6 +2195,10 @@ class App implements TabletHost {
 
     private switchRelay(relay: GPIORelay): any {
         relay.switch(!relay.get());
+    }
+
+    private rebootService(): void {
+        util.runShell("/bin/systemctl", ["restart", "nodeserver"]);
     }
 }
 
