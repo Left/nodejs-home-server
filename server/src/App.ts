@@ -582,6 +582,7 @@ class App implements TabletHost {
                         wasOnIds.push(prop.id);
                     }
                     prop.set(false);
+                    await util.delay(1000);
                 }
             }
         }
@@ -738,8 +739,9 @@ class App implements TabletHost {
                 }
                 if (freeMem < 8 && !startedRebooting) {
                     startedRebooting = true;
-                    this.allInformers.runningLine('Перегружаем сервис', 3000);
-                    this.rebootService();
+                    this.allInformers.runningLine('Перегружаем сервис - осталось совсем мало памяти', 3000);
+                    util.delay(2000).then(() => this.rebootService());
+                    this.rebootAceStream();
                 }
             }, 2000);
         }
@@ -752,20 +754,7 @@ class App implements TabletHost {
                 this.rebootService();
             }),
             Button.create("Reboot AceStream", () => {
-                const go = async () => {
-                    console.log('Before reboot');
-                    const dockerPs = await util.runShell("/usr/bin/docker", ["ps"]);
-                    const line = util.splitLines(dockerPs).find(s => !!s.match(/left76\/ace:vadim-acestream/gi));
-                    console.log("Got line", line);
-                    if (line) {
-                        const containerId = line.split(' ')[0];
-                        console.log("Got id", containerId);
-                        await util.runShell("/usr/bin/docker", ["restart", containerId]);
-                    }   
-                    await util.delay(1000);
-                };
-                
-                go();
+                this.rebootAceStream();
             }),
             Button.create("Reboot Orange Pi", () => util.runShell("reboot", [])),
             Button.createClientRedirect("TV Channels", "/tv.html"),
@@ -2200,6 +2189,20 @@ class App implements TabletHost {
     private rebootService(): void {
         util.runShell("/bin/systemctl", ["restart", "nodeserver"]);
     }
+
+    private async rebootAceStream() {
+        console.log('Before reboot');
+        const dockerPs = await util.runShell("/usr/bin/docker", ["ps"]);
+        const line = util.splitLines(dockerPs).find(s => !!s.match(/left76\/ace:vadim-acestream/gi));
+        console.log("Got line", line);
+        if (line) {
+            const containerId = line.split(' ')[0];
+            console.log("Got id", containerId);
+            await util.runShell("/usr/bin/docker", ["restart", containerId]);
+        }   
+        await util.delay(1000);
+    };
+
 }
 
 process.on('uncaughtException', (err: Error) => {
