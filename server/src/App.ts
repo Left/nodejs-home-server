@@ -12,7 +12,7 @@ import * as querystring from 'querystring';
 
 import * as curl from "./Curl";
 import * as util from "./Util";
-import { getYoutubeInfo } from "./Youtube";
+import { getYoutubeInfo, parseYoutubeUrl, getYoutubeInfoById } from "./Youtube";
 import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer, ImgHTMLRenderer, Disposable } from "./Props";
 import { TabletHost, Tablet, adbClient, Tracker, Device } from "./Tablet";
 import { CompositeLcdInformer } from './Informer';
@@ -229,10 +229,9 @@ interface IRKeysHandler {
     complete(remoteId: string, arr: string[]): void;
 }
 
-type ChannelType = "Url" | "Ace";
+type ChannelType = 'Url' | 'Youtube' | 'Ace';
 
 interface Channel {
-    type?: ChannelType;
     name: string;
     cat?: string;
     url: string;
@@ -240,7 +239,15 @@ interface Channel {
 }
 
 function getType(c: Channel): ChannelType{
-    return c.type || "Url"
+    if (c.url.match(/^[a-f0-9]+$/i)) {
+        return 'Ace';
+    } else {
+        const ytbInfo = parseYoutubeUrl(c.url);
+        if (ytbInfo) {
+            return 'Youtube';
+        }
+    }
+    return 'Url';
 }
 
 function compareChannels(c1: Channel, c2: Channel): number {
@@ -352,12 +359,16 @@ class App implements TabletHost {
     private r2 = new GPIORelay("Колонки", 40, this.gpioRelays, 1);
     private r3 = new GPIORelay("Коридор", 36, this.gpioRelays, 2);
     private r4 = new GPIORelay("Потолок", 32, this.gpioRelays, 3);
+    private r5 = new GPIORelay("R5", 37, this.gpioRelays, 4);
+    private r6 = new GPIORelay("R6", 35, this.gpioRelays, 5);
+    private r7 = new GPIORelay("R7", 33, this.gpioRelays, 6);
+    private r8 = new GPIORelay("R8", 31, this.gpioRelays, 7);
 
     private allowRenames = false;
 
     private ctrlGPIO = {
         name: "Комната",
-        properties: () => [this.r1, this.r2, this.r3, this.r4]
+        properties: () => [this.r1, this.r2, this.r3, this.r4, this.r5, this.r6, this.r7, this.r8 ]
     }
 
     private dynamicControllers: Map<string, ClockController> = new Map();
@@ -783,7 +794,12 @@ class App implements TabletHost {
             public properties(): Property<any>[] {
                 return Array.prototype.concat(
                     additionalPropsBefore,
-                    newWritableProperty<string>("", "get_tv_logo?name=" + encodeURIComponent(h.name), new ImgHTMLRenderer(40, 40)),
+                    newWritableProperty<string>("", "get_tv_logo?" + 
+                        {
+                            'Ace': () => "name=" + encodeURIComponent(h.name),
+                            'Youtube': () => "ytb=" + parseYoutubeUrl(h.url)!.id,
+                            'Url': () => "name=" + encodeURIComponent(h.name)
+                        }[getType(h)](), new ImgHTMLRenderer(40, 40)),                     
                     newWritableProperty<string>("", h.name, new SpanHTMLRenderer()),
                     that.makePlayButtonsForChannel(h.url, t => that.playChannel(t, h)), 
                     additionalPropsAfter);
@@ -1387,6 +1403,10 @@ class App implements TabletHost {
                 const str = await curl.get("http://" + App.acestreamHost + "/webui/api/service?method=get_version&format=json");
                 const parsed = JSON.parse(str);
                 this.aceHostAlive.setInternal(parsed.error == null);
+                if (!!parsed.error && !!this.aceInfo) {
+                    this.aceInfo = undefined;
+                    this.reloadAllWebClients('web');
+                }
             } catch (e) {
                 this.aceHostAlive.setInternal(false);
             }
@@ -1632,62 +1652,69 @@ class App implements TabletHost {
         let nologoBuffer: Buffer; // Cache 'nologo' because it will be used often
         router.get('/get_tv_logo', (req, res) => {
             const n: string = req.query['name'];
-            if (!n) {
-            }
-            const names = [
-                n,
-                n.replace(/\s*\d+\s*/gi, ""), 
-                n.replace(/\s*HD\s*/gi, ""), 
-                n.replace(/\s*\(.*\)\s*/gi, "")];
-            names.sort((s1, s2) => -s1.localeCompare(s2));
-            const namesDistinct = names.reduce((prev: string[], curr) => {
-                if (prev.length == 0 || curr !== prev[prev.length - 1]) {
-                    return Array.prototype.concat(prev, [curr]);
-                } else {
-                    return prev;
-                }
-            }, []);
-            // console.log(names, namesDistinct);
-            Promise.all(namesDistinct.map((n: string) => { 
-                return nodeutil.promisify(fs.stat)(__dirname + '/../web/logos/' + n + '.png')
-                    .then(st => [st, n] as [fs.Stats, string])
-                    .catch((e: Error) => {})
-                })).then(all => {
-                    const filtered = all.filter(stn => stn && stn[0].size > 0);
-                    const process = (err?: NodeJS.ErrnoException, buf?: Buffer) => {
-                        if (!!err) {
-                            if (err.code === 'ENOENT') {
-                                const acceptDef = (err?: Error, buf?: Buffer) => {
-                                    if (!!buf) {
-                                        if (nologoBuffer !== buf) {
-                                            nologoBuffer = buf;
+            const ytb: string = req.query['ytb'];
+            if (n) {
+                const names = [
+                    n,
+                    n.replace(/\s*\d+\s*/gi, ""), 
+                    n.replace(/\s*HD\s*/gi, ""), 
+                    n.replace(/\s*\(.*\)\s*/gi, "")];
+                names.sort((s1, s2) => -s1.localeCompare(s2));
+                const namesDistinct = names.reduce((prev: string[], curr) => {
+                    if (prev.length == 0 || curr !== prev[prev.length - 1]) {
+                        return Array.prototype.concat(prev, [curr]);
+                    } else {
+                        return prev;
+                    }
+                }, []);
+                // console.log(names, namesDistinct);
+                Promise.all(namesDistinct.map((n: string) => { 
+                    return nodeutil.promisify(fs.stat)(__dirname + '/../web/logos/' + n + '.png')
+                        .then(st => [st, n] as [fs.Stats, string])
+                        .catch((e: Error) => {})
+                    })).then(all => {
+                        const filtered = all.filter(stn => stn && stn[0].size > 0);
+                        const process = (err?: NodeJS.ErrnoException, buf?: Buffer) => {
+                            if (!!err) {
+                                if (err.code === 'ENOENT') {
+                                    const acceptDef = (err?: Error, buf?: Buffer) => {
+                                        if (!!buf) {
+                                            if (nologoBuffer !== buf) {
+                                                nologoBuffer = buf;
+                                            }
+                                            res.contentType('image/png');
+                                            res.end(buf);
                                         }
-                                        res.contentType('image/png');
-                                        res.end(buf);
                                     }
-                                }
-                                if (nologoBuffer) {
-                                    acceptDef(undefined, nologoBuffer);
+                                    if (nologoBuffer) {
+                                        acceptDef(undefined, nologoBuffer);
+                                    } else {
+                                        fs.readFile(path.normalize(__dirname + '/../web/logos/nologo.png'), acceptDef);
+                                    }
                                 } else {
-                                    fs.readFile(path.normalize(__dirname + '/../web/logos/nologo.png'), acceptDef);
+                                    console.log(err);
                                 }
                             } else {
-                                console.log(err);
+                                res.contentType('image/png');
+                                res.end(buf)
+                            }
+                        };
+                        if (filtered.length > 0 && !!filtered[0]) {
+                            const first = filtered[0];
+                            if (!!first) {
+                                fs.readFile(path.normalize(__dirname + '/../web/logos/' + first[1] + '.png'), process);
                             }
                         } else {
-                            res.contentType('image/png');
-                            res.end(buf)
+                            process({ code: 'ENOENT' } as NodeJS.ErrnoException, undefined);
                         }
-                    };
-                    if (filtered.length > 0 && !!filtered[0]) {
-                        const first = filtered[0];
-                        if (!!first) {
-                            fs.readFile(path.normalize(__dirname + '/../web/logos/' + first[1] + '.png'), process);
-                        }
-                    } else {
-                        process({ code: 'ENOENT' } as NodeJS.ErrnoException, undefined);
-                    }
-                });
+                    });
+            } else if (!!ytb) {
+                getYoutubeInfoById(ytb)
+                    .then(resInfo => {
+                        res.redirect(resInfo.thumbnailUrl);
+                    })
+                    .catch(e => console.error(e));
+            }
         });
         router.get('/tablet_screen', (req, res) => {
             const tabletId = req.query['id'];
@@ -1801,7 +1828,7 @@ class App implements TabletHost {
 
     private reloadM3uPlaylists() {
         this.parseM3Us([
-            "http://iptviptv.do.am/_ld/0/1_IPTV.m3u",
+            // "http://iptviptv.do.am/_ld/0/1_IPTV.m3u",
             "http://tritel.net.ru/cp/files/Tritel-IPTV.m3u",
             "http://getsapp.ru/IPTV/Auto_IPTV.m3u",
             "https://webarmen.com/my/iptv/auto.nogrp.m3u",
@@ -1971,8 +1998,8 @@ class App implements TabletHost {
     }
 
     public playChannel(t: Tablet, c: Channel): Promise<void> {
-        console.log("Playing " + JSON.stringify(c));
-        if (c.type == 'Ace') {
+        console.log("Playing " + JSON.stringify(c) + ' as ' + getType(c));
+        if (getType(c) == 'Ace') {
             return this.playAce(t, c);
         } else {
             return this.playURL(t, c.url, c.name);
@@ -2008,7 +2035,7 @@ class App implements TabletHost {
             } else {
                 // Move channel to the first place
                 const c = hist.channels[index];
-                if (c.type === "Ace") {
+                if (getType(c) === "Ace") {
                     c.url = ch.url; // Update ACE URL
                 }
                 hist.channels.splice(index, 1);
