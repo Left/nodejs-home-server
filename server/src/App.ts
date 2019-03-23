@@ -691,6 +691,7 @@ class App implements TabletHost {
             const kr = this.findDynController('KitchenRelay');
             if (kr) {
                 kr.relays[1].switch(true);
+                kr.screenEnabledProperty.set(true);
             }
 
             const clock = this.findDynController('ClockNRemote');
@@ -739,9 +740,9 @@ class App implements TabletHost {
         init: (_this) => {
             let lastReportedTime = Date.now();
             let startedRebooting = false;
-            setInterval(() => {
-                // console.log(os.freemem());
-                const freeMem = os.freemem()*100/os.totalmem();
+            setInterval(async () => {
+                const minfo = await this.getMemInfo();
+                const freeMem = minfo['MemAvailable']*100/minfo['MemTotal'];
                 _this.set(freeMem);
                 if (freeMem < 15 && (Date.now() - lastReportedTime) > 20000) {
                     lastReportedTime = Date.now();
@@ -754,7 +755,7 @@ class App implements TabletHost {
                     util.delay(2000).then(() => this.rebootService());
                     this.rebootAceStream();
                 }
-            }, 2000);
+            }, 5000);
         }
     });
 
@@ -1055,6 +1056,11 @@ class App implements TabletHost {
                 clock.lcdInformer.runningLine("Рассвет", 3000);
             }
         }
+        const kr = this.findDynController('KitchenRelay');
+        if (kr) {
+            kr.screenEnabledProperty.set(true);
+        }
+        
         this.miLight.brightness.set(50);
     }
 
@@ -2231,7 +2237,31 @@ class App implements TabletHost {
         await util.delay(1000);
     };
 
+    private async getMemInfo(): Promise<MemInfo> {
+        return new Promise((accept, reject) => {
+            fs.readFile('/proc/meminfo', 'utf8', function(err, contents) {
+                if (err) {
+                    reject(err);
+                } else {
+                    const res = {} as MemInfo;
+                    const lines = util.splitLines(contents);
+                    lines.forEach(l => {
+                        const splitl = l.split(/:?\s+/).map(s => s.trim());
+                        const name = splitl[0];
+                        const val = +(splitl[1]);
+                        res[name] = val;                    
+                    });
+                    
+                    accept(res);
+                }
+            });
+    
+        });
+        
+    }
 }
+
+type MemInfo = { [key: string]: number };
 
 process.on('uncaughtException', (err: Error) => {
     console.error(err.stack);
