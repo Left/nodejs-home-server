@@ -10,6 +10,12 @@
             "problemMatcher": []
         },
         {
+            "label": "deploy by docker",
+            "type": "shell",
+            "command": "docker build --rm -f \"server/Dockerfile\" -t left76/nodehomeserver:latest server;docker push left76/nodehomeserver:latest;ssh root@192.168.121.38 'docker pull left76/nodehomeserver:latest';ssh root@192.168.121.38 'docker restart left76/nodehomeserver:latest'",
+            "problemMatcher": []
+        },
+        {
             "label": "Build web client",
             "type": "shell",
             "command": "cd client;ng build --watch --base-href=/static/ --output-path=../server/web/production",

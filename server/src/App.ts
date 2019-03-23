@@ -359,16 +359,16 @@ class App implements TabletHost {
     private r2 = new GPIORelay("Колонки", 40, this.gpioRelays, 1);
     private r3 = new GPIORelay("Коридор", 36, this.gpioRelays, 2);
     private r4 = new GPIORelay("Потолок", 32, this.gpioRelays, 3);
-    private r5 = new GPIORelay("R5", 37, this.gpioRelays, 4);
-    private r6 = new GPIORelay("R6", 35, this.gpioRelays, 5);
-    private r7 = new GPIORelay("R7", 33, this.gpioRelays, 6);
-    private r8 = new GPIORelay("R8", 31, this.gpioRelays, 7);
+    // private r5 = new GPIORelay("R5", 37, this.gpioRelays, 4);
+    // private r6 = new GPIORelay("R6", 35, this.gpioRelays, 5);
+    // private r7 = new GPIORelay("R7", 33, this.gpioRelays, 6);
+    // private r8 = new GPIORelay("R8", 31, this.gpioRelays, 7);
 
     private allowRenames = false;
 
     private ctrlGPIO = {
         name: "Комната",
-        properties: () => [this.r1, this.r2, this.r3, this.r4, this.r5, this.r6, this.r7, this.r8 ]
+        properties: () => [this.r1, this.r2, this.r3, this.r4/*, this.r5, this.r6, this.r7, this.r8 */ ]
     }
 
     private dynamicControllers: Map<string, ClockController> = new Map();
@@ -2014,17 +2014,17 @@ class App implements TabletHost {
                 url, 
                 name
             });
+
+            this.playSimpleUrl(t, url, _name);
         };
         if (!_name) {
-            Promise.race([
+            return Promise.race([
                 this.nameFromUrl(url).catch(() => url),
-                util.delay(5000).then(() => url)
+                util.delay(15000).then(() => { console.log('Timeout getting name from ' + url); return url; })
             ]).then(gotName);
         } else {
-            gotName(_name);
+            return gotName(_name);
         }
-
-        return this.playSimpleUrl(t, url, _name);
     }
 
     private justStartedToPlayChannel(ch: Channel) {
@@ -2206,6 +2206,7 @@ class App implements TabletHost {
 
         this.allInformers.runningLine("Включаем " + name + " на " + t.shortName, 3000);
         
+        console.log('playSimpleUrl', url);
         t.playURL(url);
     }
 
