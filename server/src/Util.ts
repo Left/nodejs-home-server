@@ -188,6 +188,14 @@ export interface Config<T> {
     last(): T
 }
 
+export function toFixedPoint(v: number, fracDigits: number = 2): string {
+    return v.toLocaleString('ru', {
+        minimumIntegerDigits: 1, 
+        maximumFractionDigits: fracDigits, 
+        minimumFractionDigits: fracDigits,
+        useGrouping: false
+    });
+}
 
 export function newConfig<T extends Object>(initial: T, fileName: string): Config<T> {
     return new (class C implements Config<T> {

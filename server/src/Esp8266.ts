@@ -1,6 +1,6 @@
 import { Relay, Controller, Property, ClassWithId, PropertyImpl, SpanHTMLRenderer, Button, newWritableProperty, SliderHTMLRenderer, StringAndGoRendrer, CheckboxHTMLRenderer } from "./Props";
 import { LcdInformer } from './Informer';
-import { delay } from './Util';
+import { delay, toFixedPoint } from './Util';
 import * as WebSocket from 'ws';
 
 interface PingResult {
@@ -16,7 +16,7 @@ interface Msg {
 }
 
 interface Temp extends Msg {
-    type: 'temp';
+    type: 'temp' | 'humidity' | 'pressure';
     value: number;
 }
 
@@ -63,6 +63,7 @@ export interface Hello extends Msg {
         "hasScreen": string,           // Has screen "true"
         "hasHX711": string,            // Has HX711 (weight detector) "false"
         "hasDS18B20": string,          // Has DS18B20 (temp sensor) "false"
+        "hasBME280": string,           // Has BME280 (temp & humidity sensor)
         "hasButton": string,           // Has button on D7 "false"
         "brightness": string           // Brightness [0..100] "0"
         "relay.names": string          // Relay names, separated by ;
@@ -79,7 +80,7 @@ type AnyMessage = Log | Temp | Hello | IRKey | Weight | ButtonPressed | PingResu
 
 export interface ClockControllerEvents {
     onDisconnect: () => void;
-    onTemperatureChanged: (temp: number) => void;
+    onWeatherChanged: (weather: { temp?: number, humidity?: number pressure?: number}) => void;
     onWeightReset: () => void;
     onWeightChanged: (weight: number) => void;
     onIRKey: (remoteId: string, keyId: string) => void;
@@ -120,6 +121,14 @@ export class ClockController extends ClassWithId implements Controller {
     public tempProperty = new PropertyImpl<number|undefined>(
         "Температура", 
         new SpanHTMLRenderer(v => v === undefined ? "Нет данных" : ((v > 0 ? "+" : "-") + v + "&#8451;")), 
+        undefined);
+    public humidityProperty = new PropertyImpl<number|undefined>(
+        "Влажность", 
+        new SpanHTMLRenderer(v => v === undefined ? "Нет данных" : (v + "%")), 
+        undefined);
+    public pressureProperty = new PropertyImpl<number|undefined>(
+        "Давление", 
+        new SpanHTMLRenderer(v => v === undefined ? "Нет данных" : (toFixedPoint(v, 0) + "Па (" + toFixedPoint(v*0.00750062, 1) + "мм рт ст)")), 
         undefined);
     public weightProperty = new PropertyImpl<string>(
         "Вес", 
@@ -163,6 +172,9 @@ export class ClockController extends ClassWithId implements Controller {
         }
         if (hello.devParams['hasDS18B20'] === 'true') {
             this._properties.push(this.tempProperty);
+        }
+        if (hello.devParams['hasBME280'] === 'true') {
+            this._properties.push(this.tempProperty, this.humidityProperty, this.pressureProperty);
         }
         if (hello.devParams["hasScreen"] === 'true') {
             this.lcdInformer = {
@@ -270,6 +282,9 @@ export class ClockController extends ClassWithId implements Controller {
 
     public processMsg(objData: AnyMessage) {
         this.lastResponse = Date.now();
+        const weatherHasChanged = () => {
+            this.handler.onWeatherChanged({ temp: this.tempProperty.get(), humidity: this.humidityProperty.get(), pressure: this.pressureProperty.get() });
+        }
         switch (objData.type) {
             case 'pingresult':
                 if (objData.vcc && objData.vcc != -1 && objData.vcc != 0xffff) {
@@ -279,7 +294,15 @@ export class ClockController extends ClassWithId implements Controller {
                 break;
             case 'temp':
                 this.tempProperty.setInternal(objData.value);
-                this.handler.onTemperatureChanged(objData.value);
+                weatherHasChanged();
+                break;
+            case 'humidity':
+                this.humidityProperty.setInternal(objData.value);
+                weatherHasChanged();
+                break;
+            case 'pressure':
+                this.pressureProperty.setInternal(objData.value);
+                weatherHasChanged();
                 break;
             case 'log':
                 console.log(this + " " + "log: ", objData.val);

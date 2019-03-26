@@ -3,7 +3,6 @@ import * as http from 'http';
 import * as WebSocket from 'ws';
 // import * as stream from "stream";
 import * as fs from "fs";
-import * as os from "os";
 import * as nodeutil from "util";
 import * as path from "path";
 import * as dgram from "dgram";
@@ -1431,6 +1430,7 @@ class App implements TabletHost {
             // console.log("Connection from", request.connection.remoteAddress, request.url);
             const remoteAddress = request.connection.remoteAddress!;
             const ip = util.parseOr(remoteAddress, /::ffff:(.*)/, remoteAddress);
+            ws.url = url[0];
 
             //connection is up, let's add a simple simple event
             if (util.arraysAreEqual(url, ['esp'])) {
@@ -1469,9 +1469,14 @@ class App implements TabletHost {
                                     this.reloadAllWebClients('web');
                                     this.allInformers.runningLine('Отключено ' + clockController.name, 3000);
                                 },
-                                onTemperatureChanged: (temp: number) => {
+                                onWeatherChanged: (val) => {
                                     this.allInformers.additionalInfo(
-                                        [util.tempAsString(temp), this.nowWeather.get()].filter(x => !!x).join(', '));
+                                        Array.prototype.concat(
+                                            val.temp ? [util.tempAsString(val.temp)] : [],
+                                            val.pressure ? ["давление " + util.toFixedPoint(val.pressure*0.00750062, 1) + "мм рт ст"] : [],
+                                            val.humidity ? ["влажность " + util.toFixedPoint(val.humidity, 1) + "%"] : [],
+                                            [this.nowWeather.get()]
+                                        ).filter(x => !!x).join(', '));
                                 },
                                 onWeightChanged: (weight: number) => {
                                     this.allInformers.staticLine(weight + "г");
@@ -1968,13 +1973,14 @@ class App implements TabletHost {
     }
 
     private broadcastToWebClients(arg: Object): void {
-        // console.log(JSON.stringify(arg));
         // console.trace();
         this.wss.clients.forEach(cl => {
-            try {
-                cl.send(JSON.stringify(arg));
-            } catch (e) {
-                // Ignore it
+            if (cl.url === 'web') {
+                try {
+                    cl.send(JSON.stringify(arg));
+                } catch (e) {
+                    // Ignore it
+                }
             }
         });
     }
