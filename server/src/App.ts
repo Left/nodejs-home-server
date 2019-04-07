@@ -163,7 +163,11 @@ class MiLightBulb implements Controller {
             this.config.change(conf => conf.brightness = val).then(() => {
                 this.send([0x4E, 0x2 + (0x15 * val / 100), 0x55]);
             });
-        }});
+        },
+        preSet: (val: number) => {
+            return Math.min(Math.max(val, 0), 100);
+        }
+    });
 
     public readonly hue = newWritableProperty<number>("Hue", 50, new SliderHTMLRenderer(), {
         onSet: (val: number) => {
@@ -602,6 +606,10 @@ class App implements TabletHost {
             await util.delay(500);
             clock.screenEnabledProperty.set(false);
         }
+        const ledStripe = this.findDynController('LedStripe');
+        if (ledStripe) {
+            ledStripe.screenEnabledProperty.set(false);
+        }
 
         this.relaysState.wasOnIds = wasOnIds;
     });
@@ -1017,14 +1025,16 @@ class App implements TabletHost {
             })).slice());
     }
 
-    private makeUpDownKeys(keys: {key: string, action: () => void}[]): IRKeysHandler {
+    private makeUpDownKeys(keys: {key: string, remoteId?: string, action: () => void}[]): IRKeysHandler {
         return {
             partial: (remoteId, arr, final) => {
                 const allAreVolControls = arr.length > 0 && arr.every(k => keys.some(kk => kk.key === k));
                 if (allAreVolControls) {
                     if (!final) {
                         const last = arr[arr.length - 1];
-                        const kk = keys.find(kk => last === kk.key);
+                        const kk = keys.find(kk => 
+                            last === kk.key && 
+                            (!kk.remoteId || kk.remoteId == remoteId));
                         if (kk) {
                             kk.action()
                         }
@@ -1121,6 +1131,14 @@ class App implements TabletHost {
             { key: 'volume_up', action: () => this.kindle.volume.set(this.kindle.volume.get() + 100 / 15)},
             { key: 'volume_down', action: () => this.kindle.volume.set(this.kindle.volume.get() - 100 / 15)}
         ]),
+        this.makeUpDownKeys([
+            { key: 'rotate_cw', remoteId: 'encoder_left', action: () => this.kindle.volume.set(this.kindle.volume.get() + 100 / 15)},
+            { key: 'rotate_ccw', remoteId: 'encoder_left', action: () => this.kindle.volume.set(this.kindle.volume.get() - 100 / 15)}
+        ]),
+        this.makeUpDownKeys([
+            { key: 'rotate_cw', remoteId: 'encoder_right', action: () => this.miLight.brightness.set(this.miLight.brightness.get() + 100 / 15)},
+            { key: 'rotate_ccw', remoteId: 'encoder_right', action: () => this.miLight.brightness.set(this.miLight.brightness.get() - 100 / 15)}
+        ]),
         // Channel controls
         /*
         this.makeUpDownKeys([
@@ -1207,7 +1225,7 @@ class App implements TabletHost {
             partial: (remoteId, arr, final) => {
                 const keyset = menuKeys[remoteId];
                 // console.log(arr.slice(0, 1), [ keyset.menu ]);
-                if (util.arraysAreEqual(arr.slice(0, 1), [keyset.menu])) {
+                if (!!keyset && util.arraysAreEqual(arr.slice(0, 1), [keyset.menu])) {
                     const ind = [0];
                     arr.slice(1).forEach(val => {
                         switch (val) {
@@ -1495,7 +1513,7 @@ class App implements TabletHost {
 
                                     const irState = _irState!;
                                     const now = new Date().getTime();
-                                    if (now - irState.lastRemote > 200) {
+                                    if ((now - irState.lastRemote > 200) || remoteId.startsWith('encoder_')) {
                                         // console.log(remoteId, keyId, (now - irState.lastRemote) );
                                         irState.seq.push(keyId);
                                         var toHandle;

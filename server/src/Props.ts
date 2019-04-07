@@ -231,6 +231,7 @@ export function newWritableProperty<T>(
     handlers: { 
         init?(_this: WritablePropertyImpl<T>): void;
         onSet?(v:T): void;
+        preSet?(v:T): T;
     } = {}): WritablePropertyImpl<T> {
 
     return new (class WP extends WritablePropertyImpl<T> {
@@ -242,6 +243,9 @@ export function newWritableProperty<T>(
         }
 
         set(val: T): void {
+            if (handlers.preSet) {
+                val = handlers.preSet(val);
+            }
             this.setInternal(val);
             if (handlers.onSet) { 
                 handlers.onSet(val);

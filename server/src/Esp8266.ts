@@ -46,28 +46,31 @@ interface RelayState extends Msg {
     value: boolean;
 }
 
+type DevParams = {
+    "device.name": string,         // Device Name String("ESP_") + ESP.getChipId()
+    "device.name.russian": string, // Device Name (russian)
+    "wifi.name": string,           // WiFi SSID ""
+    // "wifi.pwd": string,         // WiFi Password "true"
+    "websocket.server": string,    // WebSocket server ""
+    "websocket.port": string,      // WebSocket port ""
+    "ntpTime": string,             // Get NTP time "true"
+    "invertRelay": string,         // Invert relays "false"
+    "hasScreen": string,           // Has screen "true"
+    "hasHX711": string,            // Has HX711 (weight detector) "false"
+    "hasDS18B20": string,          // Has DS18B20 (temp sensor) "false"
+    "hasBME280": string,           // Has BME280 (temp & humidity sensor)
+    "hasButton": string,           // Has button on D7 "false"
+    "brightness": string           // Brightness [0..100] "0"
+    "relay.names": string          // Relay names, separated by ;
+    "hasLedStripe": string         // Has LED stripe
+};
+
 export interface Hello extends Msg {
     type: 'hello';
     firmware: string;
     afterRestart: number;
     screenEnabled?: boolean; 
-    devParams: {
-        "device.name": string,         // Device Name String("ESP_") + ESP.getChipId()
-        "device.name.russian": string, // Device Name (russian)
-        "wifi.name": string,           // WiFi SSID ""
-        // "wifi.pwd": string,         // WiFi Password "true"
-        "websocket.server": string,    // WebSocket server ""
-        "websocket.port": string,      // WebSocket port ""
-        "ntpTime": string,             // Get NTP time "true"
-        "invertRelay": string,         // Invert relays "false"
-        "hasScreen": string,           // Has screen "true"
-        "hasHX711": string,            // Has HX711 (weight detector) "false"
-        "hasDS18B20": string,          // Has DS18B20 (temp sensor) "false"
-        "hasBME280": string,           // Has BME280 (temp & humidity sensor)
-        "hasButton": string,           // Has button on D7 "false"
-        "brightness": string           // Brightness [0..100] "0"
-        "relay.names": string          // Relay names, separated by ;
-    }
+    devParams: DevParams;
 }
 
 interface IRKey extends Msg {
@@ -134,10 +137,15 @@ export class ClockController extends ClassWithId implements Controller {
         "Вес", 
         new SpanHTMLRenderer(), 
         "Нет данных");
-    public screenEnabledProperty = newWritableProperty("Экран", true, new CheckboxHTMLRenderer(), 
+    public screenEnabledProperty = newWritableProperty("Экран", false, new CheckboxHTMLRenderer(), 
         {
             onSet: (val: boolean) => {
-                this.send({ type: 'screenEnable', value: val });
+                if (this.devParams.hasScreen) {
+                    this.send({ type: 'screenEnable', value: val });
+                }
+                if (this.devParams.hasLedStripe) {
+                    this.send({ type: 'ledstripe', value: new Array(64).fill(val ? '000000FF' : '00000000').join('') });
+                }
             }
         });
     public brightnessProperty = newWritableProperty("Яркость", 
@@ -152,6 +160,7 @@ export class ClockController extends ClassWithId implements Controller {
     private baseWeight?: number;
     private lastWeight?: number;
     public readonly relays: ControllerRelay[] = [];
+    private readonly devParams: DevParams;
 
     constructor(private readonly ws: WebSocket,
         public readonly ip: string,
@@ -166,17 +175,32 @@ export class ClockController extends ClassWithId implements Controller {
         this.lastResponse = Date.now();
 
         this._properties = [];
-        if (hello.devParams['hasHX711'] === 'true') {
+        this.devParams = hello.devParams;
+
+        if (this.devParams['hasHX711'] === 'true') {
             this._properties.push(this.weightProperty);
             this._properties.push(Button.create("Weight reset", () => this.tare()));
         }
-        if (hello.devParams['hasDS18B20'] === 'true') {
+        if (this.devParams['hasLedStripe'] === 'true') {
+            this._properties.push(this.screenEnabledProperty);
+            this._properties.push(Button.create("ON", () => {
+                this.send({ type: 'ledstripe', value: new Array(64).fill('000000FF').join('') });
+            }));
+            this._properties.push(Button.create("OFF", () => {
+                this.send({ type: 'ledstripe', value: new Array(64).fill('00000000').join('') });
+            }));
+            this._properties.push(newWritableProperty("Color", "", new StringAndGoRendrer("Set"), {
+                onSet: (val) => {
+                    this.send({ type: 'ledstripe', value: new Array(64).fill(val).join('') });
+                }}));
+        }
+        if (this.devParams['hasDS18B20'] === 'true') {
             this._properties.push(this.tempProperty);
         }
-        if (hello.devParams['hasBME280'] === 'true') {
+        if (this.devParams['hasBME280'] === 'true') {
             this._properties.push(this.tempProperty, this.humidityProperty, this.pressureProperty);
         }
-        if (hello.devParams["hasScreen"] === 'true') {
+        if (this.devParams["hasScreen"] === 'true') {
             this.lcdInformer = {
                 runningLine: (str, totalMsToShow) => {
                     this.send({ type: 'show', totalMsToShow, text: str });
@@ -196,7 +220,7 @@ export class ClockController extends ClassWithId implements Controller {
                 onSet: (val) => this.send({ type: 'show', text: val })
             }));
         }
-        if (!!hello.devParams['relay.names']) {
+        if (!!this.devParams['relay.names']) {
             hello.devParams['relay.names']
                 .split(';')
                 .forEach((rn, index) => {
