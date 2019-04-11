@@ -83,7 +83,7 @@ type AnyMessage = Log | Temp | Hello | IRKey | Weight | ButtonPressed | PingResu
 
 export interface ClockControllerEvents {
     onDisconnect: () => void;
-    onWeatherChanged: (weather: { temp?: number, humidity?: number pressure?: number}) => void;
+    onWeatherChanged: (weather: { temp?: number, humidity?: number, pressure?: number}) => void;
     onWeightReset: () => void;
     onWeightChanged: (weight: number) => void;
     onIRKey: (remoteId: string, keyId: string) => void;
@@ -156,6 +156,10 @@ export class ClockController extends ClassWithId implements Controller {
                 this.send({ type: 'brightness', value: val });
             }
         });
+    public ledStripeColorProperty = newWritableProperty("Color", "", new StringAndGoRendrer("Set"), {
+        onSet: (val) => {
+            this.send({ type: 'ledstripe', value: new Array(64).fill(val).join('') });
+        }});
     private static baseW: Map<string, number> = new Map();
     private baseWeight?: number;
     private lastWeight?: number;
@@ -189,10 +193,7 @@ export class ClockController extends ClassWithId implements Controller {
             this._properties.push(Button.create("OFF", () => {
                 this.send({ type: 'ledstripe', value: new Array(64).fill('00000000').join('') });
             }));
-            this._properties.push(newWritableProperty("Color", "", new StringAndGoRendrer("Set"), {
-                onSet: (val) => {
-                    this.send({ type: 'ledstripe', value: new Array(64).fill(val).join('') });
-                }}));
+            this._properties.push(this.ledStripeColorProperty);
         }
         if (this.devParams['hasDS18B20'] === 'true') {
             this._properties.push(this.tempProperty);

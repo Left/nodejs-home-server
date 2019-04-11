@@ -679,12 +679,12 @@ class App implements TabletHost {
         const wake = async () => {
             this.allInformers.runningLine("Просыпаемся...", 10000);
 
-            await util.delay(2000);
-            this.miLight.brightness.set(10);
-            await util.delay(100);
-            this.miLight.allWhite.set(true);
-            await util.delay(100);
-            this.miLight.switchOn.set(true);
+            // await util.delay(2000);
+            // this.miLight.brightness.set(10);
+            // await util.delay(100);
+            // this.miLight.allWhite.set(true);
+            // await util.delay(100);
+            // this.miLight.switchOn.set(true);
 
             this.kindle.screenIsOn.set(true);
             await util.delay(100)
@@ -697,20 +697,23 @@ class App implements TabletHost {
 
             const kr = this.findDynController('KitchenRelay');
             if (kr) {
-                kr.relays[1].switch(true);
+                // kr.relays[1].switch(true);
                 kr.screenEnabledProperty.set(true);
             }
 
             const clock = this.findDynController('ClockNRemote');
             if (clock) {
-                clock.brightnessProperty.set(20);
-                clock.screenEnabledProperty.set(true);
+                const se = await clock.screenEnabledProperty.get();
+                if (!se) {
+                    clock.brightnessProperty.set(20);
+                    clock.screenEnabledProperty.set(true);
+                }
             } 
 
-            await util.delay(3000);
-            this.r1.switch(true);
+            // await util.delay(3000);
+            // this.r1.switch(true);
 
-            this.miLight.brightness.set(80);
+            // this.miLight.brightness.set(80);
         }
         wake();
     });
@@ -948,9 +951,12 @@ class App implements TabletHost {
         );
     }
 
-    private simpleCmd(prefixes: string[][], showName: string, action: () => void): IRKeysHandler {
+    private simpleCmd(prefixes: string[][], showName: string, action: () => void, remote?: string): IRKeysHandler {
         return {
             partial: (remoteId, arr, finalCheck) => {
+                if (!!remote && remoteId !== remote)
+                    return null;
+
                 if (prefixes.some(prefix => util.arraysAreEqual(prefix, arr))) {
                     return 0; // Accept immediatelly
                 }
@@ -1025,7 +1031,7 @@ class App implements TabletHost {
             })).slice());
     }
 
-    private makeUpDownKeys(keys: {key: string, remoteId?: string, action: () => void}[]): IRKeysHandler {
+    private makeUpDownKeys(keys: {key: string, remoteId?: string, action: () => void}[], delay: number = 2500): IRKeysHandler {
         return {
             partial: (remoteId, arr, final) => {
                 const allAreVolControls = arr.length > 0 && arr.every(k => keys.some(kk => kk.key === k));
@@ -1040,7 +1046,7 @@ class App implements TabletHost {
                         }
                     }
 
-                    return 2500;
+                    return delay;
                 } else {
                     return null; // We didn't recognize the command
                 }
@@ -1060,10 +1066,16 @@ class App implements TabletHost {
         const clock = this.findDynController('ClockNRemote');
         if (clock) {
             clock.screenEnabledProperty.set(true);
-            clock.brightnessProperty.set(40);
-            if (clock.lcdInformer) {
-                clock.lcdInformer.runningLine("Рассвет", 3000);
-            }
+            (async () => {
+                clock.brightnessProperty.set(10);
+                if (clock.lcdInformer) {
+                    clock.lcdInformer.runningLine("Рассвет", 3000);
+                }
+                for (let i = 0; i < 90; ++i) {
+                    await util.delay(5*1000)
+                    clock.brightnessProperty.set(clock.brightnessProperty.get() + 1);
+                }
+            })();
         }
         const kr = this.findDynController('KitchenRelay');
         if (kr) {
@@ -1081,7 +1093,17 @@ class App implements TabletHost {
                 clock.lcdInformer.runningLine("Закат", 3000);
             }
         }
-        this.miLight.brightness.set(100);
+        // this.miLight.brightness.set(100);
+    }
+
+    private modifyBrightness(delta: number) {
+        const brNow = this.miLight.brightness.get() + delta;
+        this.miLight.brightness.set(brNow);
+        const ledStripe = this.findDynController('LedStripe');
+        if (ledStripe) {
+            const ww = Math.floor(Math.min(0xff, Math.max(0, (0xff * brNow / 100)))).toString(16).toUpperCase();
+            ledStripe.ledStripeColorProperty.set(util.padLeft(ww, '0', 8));
+        }
     }
 
     private savedVolumeForMute?: number;
@@ -1097,11 +1119,16 @@ class App implements TabletHost {
         this.simpleCmd([['fullscreen']], "MiLight", () => {
             this.miLight.switchOn.switch(!this.miLight.switchOn.get());
         }),
+        this.simpleCmd([['click']], "MiLight", () => {
+            const onNow = this.miLight.switchOn.get();
+            this.miLight.switchOn.switch(!onNow);
+            const ledStripe = this.findDynController('LedStripe');
+            if (ledStripe) {
+                ledStripe.screenEnabledProperty.set(!onNow);
+            }            
+        }, 'encoder_right'),
         this.simpleCmd([["record"]], "Лампа на шкафу", () => {
             this.r1.switch(!this.r1.get());
-        }),
-        this.simpleCmd([[]], "Колонки", () => {
-            this.r2.switch(!this.r2.get());
         }),
         this.simpleCmd([['stop']], "Коридор", () => {
             this.r3.switch(!this.r3.get());
@@ -1134,11 +1161,11 @@ class App implements TabletHost {
         this.makeUpDownKeys([
             { key: 'rotate_cw', remoteId: 'encoder_left', action: () => this.kindle.volume.set(this.kindle.volume.get() + 100 / 15)},
             { key: 'rotate_ccw', remoteId: 'encoder_left', action: () => this.kindle.volume.set(this.kindle.volume.get() - 100 / 15)}
-        ]),
+        ], 10),
         this.makeUpDownKeys([
-            { key: 'rotate_cw', remoteId: 'encoder_right', action: () => this.miLight.brightness.set(this.miLight.brightness.get() + 100 / 15)},
-            { key: 'rotate_ccw', remoteId: 'encoder_right', action: () => this.miLight.brightness.set(this.miLight.brightness.get() - 100 / 15)}
-        ]),
+            { key: 'rotate_cw', remoteId: 'encoder_right', action: () => this.modifyBrightness(+100/10)},
+            { key: 'rotate_ccw', remoteId: 'encoder_right', action: () => this.modifyBrightness(-100/10)}
+        ], 10),
         // Channel controls
         /*
         this.makeUpDownKeys([
@@ -1527,7 +1554,7 @@ class App implements TabletHost {
                                         if (toHandle) {
                                             irState.handler = toHandle;
                                         } else {
-                                            console.log('Ignored ' + irState.seq.join(","));
+                                            console.log('Ignored ' + irState.seq.join(",") + ' on ' + remoteId);
                                             irState.seq = [];
                                         }
 

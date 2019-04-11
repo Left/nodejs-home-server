@@ -3,6 +3,22 @@ import * as fs from "fs";
 import * as os from "os";
 import { clearInterval } from "timers";
 
+
+export function padLeft(s: string, padString: string, targetLength: number) {
+    targetLength = targetLength >> 0; //floor if number or convert non-number to 0;
+    padString = String(padString || ' ');
+    if (s.length > targetLength) {
+        return String(s);
+    }
+    else {
+        targetLength = targetLength - s.length;
+        if (targetLength > padString.length) {
+            padString += padString.repeat(targetLength/padString.length); //append to original to ensure we are longer than needed
+        }
+        return padString.slice(0,targetLength) + String(s);
+    }
+};
+
 export function splitLines(s: string): string[] {
     return s.split(/\r\n|\r|\n/);
 }
