@@ -891,7 +891,7 @@ class App implements TabletHost {
             .map((h, index) => {
             return Array.prototype.concat(
                 [ newWritableProperty("", "" + index + ".", new SpanHTMLRenderer()) ], 
-                newWritableProperty<string>("", "get_tv_logo?name=" + encodeURIComponent(h.name), new ImgHTMLRenderer(40, 40)),
+                // newWritableProperty<string>("", "get_tv_logo?name=" + encodeURIComponent(h.name), new ImgHTMLRenderer(40, 40)),
                 [ newWritableProperty("", h.name, new SpanHTMLRenderer()) ],
                 this.makePlayButtonsForChannel(h.url, 
                     (t) => {
@@ -951,12 +951,9 @@ class App implements TabletHost {
         );
     }
 
-    private simpleCmd(prefixes: string[][], showName: string, action: () => void, remote?: string): IRKeysHandler {
+    private simpleCmd(prefixes: string[][], showName: string, action: (remoteId: string, keys: string[]) => void): IRKeysHandler {
         return {
             partial: (remoteId, arr, finalCheck) => {
-                if (!!remote && remoteId !== remote)
-                    return null;
-
                 if (prefixes.some(prefix => util.arraysAreEqual(prefix, arr))) {
                     return 0; // Accept immediatelly
                 }
@@ -968,7 +965,7 @@ class App implements TabletHost {
             },
             complete: (remoteId, arr) => {
                 this.allInformers.runningLine(showName, 2000);
-                action();
+                action(remoteId, arr);
             }
         } as IRKeysHandler;
     }
@@ -1031,18 +1028,18 @@ class App implements TabletHost {
             })).slice());
     }
 
-    private makeUpDownKeys(keys: {key: string, remoteId?: string, action: () => void}[], delay: number = 2500): IRKeysHandler {
+    private makeUpDownKeys(keys: {keys: string[], remoteId?: string, action: (remoteId: string, key: string) => void}[], delay: number = 2500): IRKeysHandler {
         return {
             partial: (remoteId, arr, final) => {
-                const allAreVolControls = arr.length > 0 && arr.every(k => keys.some(kk => kk.key === k));
+                const allAreVolControls = arr.length > 0 && arr.every(k => keys.some(kk => kk.keys.indexOf(k) !== -1));
                 if (allAreVolControls) {
                     if (!final) {
                         const last = arr[arr.length - 1];
-                        const kk = keys.find(kk => 
-                            last === kk.key && 
+                        const kk2 = keys.find(kk => 
+                            (kk.keys.indexOf(last) !== -1) && 
                             (!kk.remoteId || kk.remoteId == remoteId));
-                        if (kk) {
-                            kk.action()
+                        if (kk2) {
+                            kk2.action(remoteId, last)
                         }
                     }
 
@@ -1096,12 +1093,19 @@ class App implements TabletHost {
         // this.miLight.brightness.set(100);
     }
 
-    private modifyBrightness(delta: number) {
+    private modifyBrightnessMi(delta: number) {
         const brNow = this.miLight.brightness.get() + delta;
         this.miLight.brightness.set(brNow);
+    }
+
+    private modifyBrightnessLed(delta: number) {
         const ledStripe = this.findDynController('LedStripe');
         if (ledStripe) {
-            const ww = Math.floor(Math.min(0xff, Math.max(0, (0xff * brNow / 100)))).toString(16).toUpperCase();
+            const clrNow = ledStripe.ledStripeColorProperty.get() || "00000000";
+            const brNow = (parseInt(clrNow, 16) & 0xff) * 100 / 0xff;
+            const brNeed = brNow + delta;
+
+            const ww = Math.floor(Math.min(0xff, Math.max(0, (0xff * brNeed / 100)))).toString(16).toUpperCase();
             ledStripe.ledStripeColorProperty.set(util.padLeft(ww, '0', 8));
         }
     }
@@ -1119,14 +1123,6 @@ class App implements TabletHost {
         this.simpleCmd([['fullscreen']], "MiLight", () => {
             this.miLight.switchOn.switch(!this.miLight.switchOn.get());
         }),
-        this.simpleCmd([['click']], "MiLight", () => {
-            const onNow = this.miLight.switchOn.get();
-            this.miLight.switchOn.switch(!onNow);
-            const ledStripe = this.findDynController('LedStripe');
-            if (ledStripe) {
-                ledStripe.screenEnabledProperty.set(!onNow);
-            }            
-        }, 'encoder_right'),
         this.simpleCmd([["record"]], "Лампа на шкафу", () => {
             this.r1.switch(!this.r1.get());
         }),
@@ -1155,24 +1151,46 @@ class App implements TabletHost {
         }),
         // Sound controls
         this.makeUpDownKeys([
-            { key: 'volume_up', action: () => this.kindle.volume.set(this.kindle.volume.get() + 100 / 15)},
-            { key: 'volume_down', action: () => this.kindle.volume.set(this.kindle.volume.get() - 100 / 15)}
+            { keys: ['volume_up', 'volume_down'], action: (remote, key) => { 
+                let tablet = this.kindle;
+                if (remote === 'tvtuner') {
+                    tablet = this.nexus7TCP;
+                }
+                if (!tablet.screenIsOn.get()) {
+                    tablet.screenIsOn.set(true);
+                }
+                tablet.volume.set(tablet.volume.get() + (key === 'volume_up' ? +1 : -1) * 100 / 15)
+            }}
         ]),
+        this.simpleCmd([['click']], "MiLight", (remoteId, keys) => {
+            if (remoteId == 'encoder_right') {
+                const onNow = this.miLight.switchOn.get();
+                this.miLight.switchOn.switch(!onNow);
+            } else if (remoteId == 'encoder_middle') {
+                const ledStripe = this.findDynController('LedStripe');
+                if (ledStripe) {
+                    const onNow = ledStripe.screenEnabledProperty.get();
+                    ledStripe.screenEnabledProperty.set(!onNow);
+                }
+            } else if (remoteId == 'encoder_right') {
+                this.kindle.screenIsOn.set(!this.kindle.screenIsOn.get());
+            }
+        }),
         this.makeUpDownKeys([
-            { key: 'rotate_cw', remoteId: 'encoder_left', action: () => this.kindle.volume.set(this.kindle.volume.get() + 100 / 15)},
-            { key: 'rotate_ccw', remoteId: 'encoder_left', action: () => this.kindle.volume.set(this.kindle.volume.get() - 100 / 15)}
+            { keys: ['rotate_cw', 'rotate_ccw'], action: (remote, key) => {
+                const sign = (key === 'rotate_cw' ? +1 : -1);
+                if (remote === 'encoder_left') {
+                    if (!this.kindle.screenIsOn.get()) {
+                        this.kindle.screenIsOn.set(true);
+                    }
+                    this.kindle.volume.set(this.kindle.volume.get() + sign * 100 / 15);
+                } else if (remote === 'encoder_middle') {
+                    this.modifyBrightnessLed(sign * 7);
+                } else if (remote === 'encoder_right') {
+                    this.modifyBrightnessMi(sign * 10);
+                }
+            }}
         ], 10),
-        this.makeUpDownKeys([
-            { key: 'rotate_cw', remoteId: 'encoder_right', action: () => this.modifyBrightness(+100/10)},
-            { key: 'rotate_ccw', remoteId: 'encoder_right', action: () => this.modifyBrightness(-100/10)}
-        ], 10),
-        // Channel controls
-        /*
-        this.makeUpDownKeys([
-            { key: 'channel_up', action: () => this.playChannel(this.kindle, this.nextChannel(this.kindle, 1))},
-            { key: 'channel_down', action: () => this.playChannel(this.kindle, this.nextChannel(this.kindle, -1))}
-        ]),
-        */
         this.makeMainMenu(menuKeys, {
             lbl: '', submenu: () => [
                 { lbl: 'Свет', submenu: () => [
