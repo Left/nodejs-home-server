@@ -1172,8 +1172,10 @@ class App implements TabletHost {
                     const onNow = ledStripe.screenEnabledProperty.get();
                     ledStripe.screenEnabledProperty.set(!onNow);
                 }
-            } else if (remoteId == 'encoder_right') {
-                this.kindle.screenIsOn.set(!this.kindle.screenIsOn.get());
+            } else if (remoteId == 'encoder_left') {
+                // this.kindle.screenIsOn.set(!this.kindle.screenIsOn.get());
+                //                
+                this.switchRelay(this.r4);
             }
         }),
         this.makeUpDownKeys([
