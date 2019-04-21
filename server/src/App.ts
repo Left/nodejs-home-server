@@ -15,7 +15,7 @@ import { getYoutubeInfo, parseYoutubeUrl, getYoutubeInfoById } from "./Youtube";
 import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer, ImgHTMLRenderer, Disposable } from "./Props";
 import { TabletHost, Tablet, adbClient, Tracker, Device } from "./Tablet";
 import { CompositeLcdInformer } from './Informer';
-import { ClockController, Hello, ClockControllerEvents } from './Esp8266';
+import { ClockController, Hello, ClockControllerEvents, RGBA } from './Esp8266';
 // import { parse } from 'url';
 
 class GPIORelay extends Relay {
@@ -1101,12 +1101,11 @@ class App implements TabletHost {
     private modifyBrightnessLed(delta: number) {
         const ledStripe = this.findDynController('LedStripe');
         if (ledStripe) {
-            const clrNow = ledStripe.ledStripeColorProperty.get() || "00000000";
-            const brNow = (parseInt(clrNow, 16) & 0xff) * 100 / 0xff;
-            const brNeed = brNow + delta;
-
-            const ww = Math.floor(Math.min(0xff, Math.max(0, (0xff * brNeed / 100)))).toString(16).toUpperCase();
-            ledStripe.ledStripeColorProperty.set(util.padLeft(ww, '0', 8));
+            const now = RGBA.parse(ledStripe.ledStripeColorProperty.get());
+            if (now) {
+                const res = now.changeBrightness(delta);
+                ledStripe.ledStripeColorProperty.set(res.asString());
+            }
         }
     }
 
@@ -1561,7 +1560,7 @@ class App implements TabletHost {
                                     const irState = _irState!;
                                     const now = new Date().getTime();
                                     if ((now - irState.lastRemote > 200) || remoteId.startsWith('encoder_')) {
-                                        // console.log(remoteId, keyId, (now - irState.lastRemote) );
+                                        console.log(remoteId, keyId);
                                         irState.seq.push(keyId);
                                         var toHandle;
                                         for (const handler of this.irKeyHandlers) {

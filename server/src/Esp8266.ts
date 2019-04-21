@@ -116,6 +116,62 @@ class ControllerRelay extends Relay {
     }
 }
 
+type LOWER = -1;
+type EQUAL = 0;
+type GREATER = 1;
+type COMPARE_RES = LOWER | EQUAL | GREATER;
+
+export class RGBA {
+    constructor(
+        public readonly r: number, 
+        public readonly g: number,
+        public readonly b: number,
+        public readonly w: number) {
+    }
+
+    static validate(x: number): number {
+        return Math.max(Math.min(Math.floor(x), 255), 0);
+    }
+    
+    public transformTo(clr: RGBA, percent: number): RGBA {
+        const f = (from: number, to: number): number => {
+            return RGBA.validate(from + ((to - from) * percent / 100));
+        };
+        return new RGBA(f(this.r, clr.r), f(this.g, clr.g), f(this.b, clr.b), f(this.w, clr.w));
+    }
+
+    changeBrightness(percent: number) {
+        const f = (from: number): number => {
+            return RGBA.validate(from * (100 + percent) / 100);
+        };
+        return new RGBA(f(this.r), f(this.g), f(this.b), f(this.w));
+    }
+
+    public asString(): string {
+        const f = (x: number): string => {
+            const ret = x.toString(16);
+            return (ret.length == 1 ? ('0' + ret) : ret).toUpperCase();
+        } 
+        return f(this.r) + f(this.g) + f(this.b) + f(this.w); 
+    }
+
+    public static parse(str: string): RGBA|undefined {
+        return new RGBA(
+            RGBA.validate(Number.parseInt(str.substr(0, 2), 16)),
+            RGBA.validate(Number.parseInt(str.substr(2, 2), 16)),
+            RGBA.validate(Number.parseInt(str.substr(4, 2), 16)),
+            RGBA.validate(Number.parseInt(str.substr(6, 2), 16))
+        )
+    }
+
+    public compare(rgbNow: RGBA): COMPARE_RES {
+        if (this.r === rgbNow.r && this.g === rgbNow.g && this.b === rgbNow.b && this.w === rgbNow.w) {
+            return 0;
+        }
+        return 1;
+    }
+}
+
 export class ClockController extends ClassWithId implements Controller {
     protected pingId = 0;
     protected intervalId?: NodeJS.Timer;
@@ -150,10 +206,7 @@ export class ClockController extends ClassWithId implements Controller {
                     this.send({ type: 'screenEnable', value: val });
                 }
                 if (this.devParams["hasLedStripe"] === 'true') {
-                    // console.log(this.name);
-                    // console.log(this.ledStripeColorProperty.get());
-                    // console.trace();
-                    this.send({ type: 'ledstripe', value: new Array(64).fill(val ? '000000FF' : '00000000').join('') });
+                    this.ledStripeColorProperty.set(val ? '000000FF' : '00000000');
                 }
             }
         });
@@ -166,8 +219,24 @@ export class ClockController extends ClassWithId implements Controller {
             }
         });
     public ledStripeColorProperty = newWritableProperty("Color", "", new StringAndGoRendrer("Set"), {
-        onSet: (val) => {
-            this.send({ type: 'ledstripe', value: new Array(64).fill(val).join('') });
+        onSet: (val, oldVal) => {
+            const rgbNow = RGBA.parse(oldVal);
+            const rgbTo = RGBA.parse(val);
+            if (!rgbNow || !rgbTo) {
+                // ?
+            } else if (rgbTo.compare(rgbNow) !== 0) {
+                (async () => {
+                    for (var p = 0; p <= 255; p+=2) {
+                        await delay(30);
+                        if (val != this.ledStripeColorProperty.get()) {
+                            // Color has changed. stop all flickering!
+                            return;
+                        }
+                        const s = rgbNow.transformTo(rgbTo, p).asString();
+                        this.send({ type: 'ledstripe', value: new Array(64).fill(s).join('') });
+                    }
+                })();
+            }
         }});
     private static baseW: Map<string, number> = new Map();
     private baseWeight?: number;
@@ -197,11 +266,27 @@ export class ClockController extends ClassWithId implements Controller {
         if (this.devParams['hasLedStripe'] === 'true') {
             this._properties.push(this.screenEnabledProperty);
             this._properties.push(Button.create("ON", () => {
-                this.send({ type: 'ledstripe', value: new Array(64).fill('000000FF').join('') });
+                this.ledStripeColorProperty.set('000000FF');
             }));
             this._properties.push(Button.create("OFF", () => {
-                this.send({ type: 'ledstripe', value: new Array(64).fill('00000000').join('') });
+                this.ledStripeColorProperty.set('00000000');
             }));
+            this._properties.push(Button.create("GREEN", () => {
+                this.ledStripeColorProperty.set('41F48900');
+            }));
+            this._properties.push(Button.create("ORANGE", () => {
+                this.ledStripeColorProperty.set('F4B84100');
+            }));
+            this._properties.push(Button.create("ZIMA", () => {
+                this.ledStripeColorProperty.set('42ADF400');
+            }));
+            this._properties.push(Button.create("+", () => {
+                this.ledStripeColorProperty.set(RGBA.parse(this.ledStripeColorProperty.get())!.changeBrightness(10).asString());
+            }));
+            this._properties.push(Button.create("-", () => {
+                this.ledStripeColorProperty.set(RGBA.parse(this.ledStripeColorProperty.get())!.changeBrightness(-10).asString());
+            }));
+            
             this._properties.push(this.ledStripeColorProperty);
         }
         if (this.devParams['hasDS18B20'] === 'true') {

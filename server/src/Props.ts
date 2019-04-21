@@ -142,7 +142,7 @@ export class StringAndGoRendrer implements HTMLRederer<string> {
     }
 
     updateCode(prop: Property<string>): string {
-        return '';
+        return `document.getElementById('${prop.id}').value = val;`;
     }
 
     toHtmlVal(t: string): any { return t; }
@@ -230,7 +230,7 @@ export function newWritableProperty<T>(
     htmlRenderer: HTMLRederer<T> = voidHTMLRenderer(), 
     handlers: { 
         init?(_this: WritablePropertyImpl<T>): void;
-        onSet?(v:T): void;
+        onSet?(v:T, oldV:T): void;
         preSet?(v:T): T;
     } = {}): WritablePropertyImpl<T> {
 
@@ -246,9 +246,10 @@ export function newWritableProperty<T>(
             if (handlers.preSet) {
                 val = handlers.preSet(val);
             }
+            const oldVal = this.get();
             this.setInternal(val);
             if (handlers.onSet) { 
-                handlers.onSet(val);
+                handlers.onSet(val, oldVal);
             }
         }
     })();
