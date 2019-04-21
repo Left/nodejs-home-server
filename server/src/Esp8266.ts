@@ -46,6 +46,12 @@ interface RelayState extends Msg {
     value: boolean;
 }
 
+interface LedStripeState extends Msg {
+    type: 'ledstripeState';
+    value: string;
+}
+
+
 type DevParams = {
     "device.name": string,         // Device Name String("ESP_") + ESP.getChipId()
     "device.name.russian": string, // Device Name (russian)
@@ -79,7 +85,7 @@ interface IRKey extends Msg {
     key: string;
 }
 
-type AnyMessage = Log | Temp | Hello | IRKey | Weight | ButtonPressed | PingResult | RelayState;
+type AnyMessage = Log | Temp | Hello | IRKey | Weight | ButtonPressed | PingResult | RelayState | LedStripeState;
 
 export interface ClockControllerEvents {
     onDisconnect: () => void;
@@ -140,10 +146,13 @@ export class ClockController extends ClassWithId implements Controller {
     public screenEnabledProperty = newWritableProperty("Экран", false, new CheckboxHTMLRenderer(), 
         {
             onSet: (val: boolean) => {
-                if (this.devParams.hasScreen) {
+                if (this.hasScreen()) {
                     this.send({ type: 'screenEnable', value: val });
                 }
-                if (this.devParams.hasLedStripe) {
+                if (this.devParams["hasLedStripe"] === 'true') {
+                    // console.log(this.name);
+                    // console.log(this.ledStripeColorProperty.get());
+                    // console.trace();
                     this.send({ type: 'ledstripe', value: new Array(64).fill(val ? '000000FF' : '00000000').join('') });
                 }
             }
@@ -201,7 +210,7 @@ export class ClockController extends ClassWithId implements Controller {
         if (this.devParams['hasBME280'] === 'true') {
             this._properties.push(this.tempProperty, this.humidityProperty, this.pressureProperty);
         }
-        if (this.devParams["hasScreen"] === 'true') {
+        if (this.hasScreen()) {
             this.lcdInformer = {
                 runningLine: (str, totalMsToShow) => {
                     this.send({ type: 'show', totalMsToShow, text: str });
@@ -243,7 +252,11 @@ export class ClockController extends ClassWithId implements Controller {
             }
         }, 1500);
 
-        console.log('Connected ' + this.name);
+        console.log('Connected ' + this.name + ' (' + this.ip + ')');
+    }
+
+    public hasScreen() {
+        return this.devParams["hasScreen"] === 'true';
     }
 
     public get online() {
@@ -352,6 +365,9 @@ export class ClockController extends ClassWithId implements Controller {
             case 'relayState':
                 // console.log(this + " " + "relayState: ", objData.id, objData.value);
                 this.relays[objData.id].setInternal(objData.value);
+                break;
+            case 'ledstripeState':
+                this.ledStripeColorProperty.setInternal(objData.value.substr(0, 8));
                 break;
             default:
                 console.log(this + " UNKNOWN CMD: ", objData);

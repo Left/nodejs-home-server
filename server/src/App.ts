@@ -1605,7 +1605,9 @@ class App implements TabletHost {
                                 this.allInformers.set(ip, clockController.lcdInformer);
                             }
                             clockController.send({ type: "unixtime", value: Math.floor((new Date()).getTime() / 1000) });
-                            clockController.screenEnabledProperty.set(!this.isSleeping);
+                            if (clockController.hasScreen()) {
+                                clockController.screenEnabledProperty.set(!this.isSleeping);
+                            }
 
                             // this.allInformers.runningLine('Подключено ' + clockController.name, 3000);
 
