@@ -6,13 +6,13 @@
         {
             "label": "deploy",
             "type": "shell",
-            "command": "cd server;GLOBIGNORE='node_modules:dist:.vscode:.git'; rsync -avzh * root@192.168.121.38:/root/nodeserver",
+            "command": "cd server;GLOBIGNORE='node_modules:dist:.vscode:.git'; rsync -avzh * root@192.168.10.102:/root/nodeserver",
             "problemMatcher": []
         },
         {
             "label": "deploy by docker",
             "type": "shell",
-            "command": "docker build --rm -f \"server/Dockerfile\" -t left76/nodehomeserver:latest server;docker push left76/nodehomeserver:latest;ssh root@192.168.121.38 'docker pull left76/nodehomeserver:latest';ssh root@192.168.121.38 'docker restart left76/nodehomeserver:latest'",
+            "command": "docker build --rm -f \"server/Dockerfile\" -t left76/nodehomeserver:latest server;docker push left76/nodehomeserver:latest;ssh root@192.168.10.102 'docker pull left76/nodehomeserver:latest';ssh root@192.168.10.102 'docker restart left76/nodehomeserver:latest'",
             "problemMatcher": []
         },
         {

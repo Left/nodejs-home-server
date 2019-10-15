@@ -266,14 +266,7 @@ function compareChannels(c1: Channel, c2: Channel): number {
     return 0; // Should never happen
 }
 
-interface AceChannel {
-    name: string;
-    cat: string;
-    url: string;
-}
-
 type TimerProp = { val: Date | null, controller: Controller, fireInSeconds: (sec: number) => void };
-
 
 interface StartPlayingResponce {
     event_url: string,
@@ -284,30 +277,6 @@ interface StartPlayingResponce {
     is_encrypted: number,
     command_url: string,
     infohash: string 
-}
-
-interface StatusResponce { 
-    status: string,
-    uploaded: number,
-    speed_down: number,
-    speed_up: number,
-    downloaded: number,
-    playback_session_id: string,
-    time: number,
-    peers: number,
-    total_progress: number,
-    is_encrypted: number,
-    disk_cache_stats: { 
-        avail: number,
-        disk_cache_limit: number,
-        inactive_inuse: number,
-        active_inuse: number 
-    },
-    is_live: number,
-    progress: number,
-    infohash: string,
-    selected_stream_index: number,
-    selected_file_index: number 
 }
 
 class AceServerInfo {
@@ -353,8 +322,6 @@ class App implements TabletHost {
     public readonly wss: WebSocket.Server;
     public currentTemp?: number;
     public isSleeping: boolean = false;
-
-    public static readonly acestreamHost = "192.168.121.38:6878";
 
     private gpioRelays = util.newConfig({ relays: [false, false, false, false] }, "relays");
 
@@ -410,7 +377,7 @@ class App implements TabletHost {
 
     private readonly miLight = new MiLightBulb(this.miLightState);
 
-    private readonly kindle: Tablet = new Tablet('192.168.121.166:5556', 'Kindle', this, true);
+    private readonly kindle: Tablet = new Tablet('192.168.121.166:5555', 'Kindle', this, true);
     private readonly nexus7: Tablet = new Tablet('00eaadb6', 'Nexus', this, false);
     private readonly nexus7TCP: Tablet = new Tablet('192.168.121.172:5555', 'Nexus TCP', this, true);
 
@@ -666,6 +633,11 @@ class App implements TabletHost {
             blinkKitchenStripe(this.r3);
         }
 
+        const cr = this.findDynController('ClockNRemote');
+        if (cr) {
+            cr.playMp3(134);
+        }
+
         blinkMiLight();
     });
 
@@ -705,9 +677,10 @@ class App implements TabletHost {
             if (clock) {
                 const se = await clock.screenEnabledProperty.get();
                 if (!se) {
-                    clock.brightnessProperty.set(20);
+                    clock.brightnessProperty.set(10);
                     clock.screenEnabledProperty.set(true);
                 }
+                clock.playMp3(134);
             } 
 
             // await util.delay(3000);
@@ -719,22 +692,6 @@ class App implements TabletHost {
     });
 
     private aceInfo?: AceServerInfo;
-
-    private nowDecodedByAce = newWritableProperty<string>("", "", new SpanHTMLRenderer());
-    private statusString = newWritableProperty<string>("", "", new SpanHTMLRenderer());
-    private playingUrl = Button.createCopyToClipboardLambda("Copy URL", () => (this.aceInfo && this.aceInfo.resp ? this.aceInfo.resp.playback_url : ""));
-    private aceHostAlive = newWritableProperty<boolean>("", false, new SpanHTMLRenderer(v => v ? "Сервер включен" : "Сервер выключен"));
-
-    private ctrlAceDecoder = {
-        name: "AceStream",
-        properties: () => Array.prototype.concat([
-                this.aceHostAlive,
-            ], (!!this.aceInfo ? [
-                this.nowDecodedByAce,
-                this.playingUrl,
-                this.statusString
-            ] : []))
-    };
 
     private nowWeatherIcon = newWritableProperty<string>("", "", new ImgHTMLRenderer(40, 40));
     private nowWeather = newWritableProperty<string>("", "", new SpanHTMLRenderer());
@@ -774,9 +731,6 @@ class App implements TabletHost {
         properties: () => [
             Button.create("Reboot service", () => {
                 this.rebootService();
-            }),
-            Button.create("Reboot AceStream", () => {
-                this.rebootAceStream();
             }),
             Button.create("Reboot Orange Pi", () => util.runShell("reboot", [])),
             Button.createClientRedirect("TV Channels", "/tv.html"),
@@ -883,23 +837,6 @@ class App implements TabletHost {
                 ctrl.name ? [ newWritableProperty("", ctrl.name, new SpanHTMLRenderer()) ] : [], 
                 ctrl.properties());
         })],
-        ["ace", async () => this.acestreamHistoryConf.last().channels
-            .filter(h => h.cat 
-                && !h.cat.match(/18(_?)plus/) 
-                && !h.name.match(/Nuart/gi)
-                && !h.name.match(/Visit-X/gi))
-            .map((h, index) => {
-            return Array.prototype.concat(
-                [ newWritableProperty("", "" + index + ".", new SpanHTMLRenderer()) ], 
-                // newWritableProperty<string>("", "get_tv_logo?name=" + encodeURIComponent(h.name), new ImgHTMLRenderer(40, 40)),
-                [ newWritableProperty("", h.name, new SpanHTMLRenderer()) ],
-                this.makePlayButtonsForChannel(h.url, 
-                    (t) => {
-                        this.playAce(t, h);
-                        // that.playURL(t, h.url, h.name)
-                    })
-            );
-        })],
         ["iptv", async () => this.tvChannels.last().channels.map((h, index) => {
             return Array.prototype.concat(
                 [ newWritableProperty("", "" + index + ".", new SpanHTMLRenderer()) ], 
@@ -940,7 +877,6 @@ class App implements TabletHost {
                 this.wakeAt.controller,
                 this.timer.controller,
                 this.ctrlControlOther,
-                this.ctrlAceDecoder,
                 this.ctrlWeather,
                 this.miLight,
             ],
@@ -1063,16 +999,20 @@ class App implements TabletHost {
         const clock = this.findDynController('ClockNRemote');
         if (clock) {
             clock.screenEnabledProperty.set(true);
+
+            if (clock.lcdInformer) {
+                clock.lcdInformer.runningLine("Рассвет", 3000);
+            }
+
+            /*
             (async () => {
                 clock.brightnessProperty.set(10);
-                if (clock.lcdInformer) {
-                    clock.lcdInformer.runningLine("Рассвет", 3000);
-                }
                 for (let i = 0; i < 90; ++i) {
                     await util.delay(5*1000)
                     clock.brightnessProperty.set(clock.brightnessProperty.get() + 1);
                 }
             })();
+            */
         }
         const kr = this.findDynController('KitchenRelay');
         if (kr) {
@@ -1082,15 +1022,29 @@ class App implements TabletHost {
         this.miLight.brightness.set(50);
     }
 
+    private async switchLightOnWaitAndOff() {
+        this.miLight.switchOn.set(true);
+        await util.delay(300);
+        this.miLight.brightness.set(70);
+        await util.delay(300);
+        this.miLight.allWhite.set(true);
+        await util.delay(3*60*60*1000); // In 3 hours, switch the light off
+        this.miLight.switchOn.set(false);
+        console.log('Switch light off');    
+    }
+
     private dayEnds() {
         const clock = this.findDynController('ClockNRemote');
         if (clock) {
-            clock.brightnessProperty.set(40);
             if (clock.lcdInformer) {
                 clock.lcdInformer.runningLine("Закат", 3000);
             }
         }
-        // this.miLight.brightness.set(100);
+        (async () => {
+            // await util.delay(Math.random()*30*60*1000); // Wait [0..30] minutes
+            console.log('Switch light on');
+            await this.switchLightOnWaitAndOff();
+        })();
     }
 
     private modifyBrightnessMi(delta: number) {
@@ -1162,19 +1116,41 @@ class App implements TabletHost {
             }}
         ]),
         this.simpleCmd([['click']], "MiLight", (remoteId, keys) => {
+            const clock = this.findDynController('ClockNRemote');
+
             if (remoteId == 'encoder_right') {
                 const onNow = this.miLight.switchOn.get();
                 this.miLight.switchOn.switch(!onNow);
+                if (clock) {
+                    clock.playMp3(onNow ? 234 : 240);
+                }
             } else if (remoteId == 'encoder_middle') {
-                const ledStripe = this.findDynController('LedStripe');
-                if (ledStripe) {
-                    const onNow = ledStripe.screenEnabledProperty.get();
-                    ledStripe.screenEnabledProperty.set(!onNow);
+                const roomSwitch = this.findDynController('RoomSwitchers');
+                if (roomSwitch) {
+                    let onNow = false;
+                    const each = (fn: (r: Relay) => void) => {
+                        for (const i of [0, 1]) {
+                            const relay = roomSwitch.relays[i];
+                            fn(relay);
+                        }
+                    };
+                    each(r => onNow = onNow || r.get());
+                    each(r => r.set(!onNow));
+
+                    if (clock) {
+                        clock.playMp3(onNow ? 234 : 240);
+                    }
                 }
             } else if (remoteId == 'encoder_left') {
-                // this.kindle.screenIsOn.set(!this.kindle.screenIsOn.get());
-                //                
-                this.switchRelay(this.r4);
+                const roomSwitch = this.findDynController('RoomSwitchers');
+                if (roomSwitch) {
+                    const relay = roomSwitch.relays[2];
+                    const onNow = !relay.get();
+                    relay.set(onNow);
+                    if (clock) {
+                        clock.playMp3(onNow ? 234 : 240);
+                    }
+                }
             }
         }),
         this.makeUpDownKeys([
@@ -1231,21 +1207,6 @@ class App implements TabletHost {
                             }))
                             ,[])
                     }) as Menu)
-                },
-                {
-                    lbl: 'Каналы (Torrent)', 
-                    submenu: () => (this.acestreamHistoryConf.last().channels.map((c, i) => ({
-                        lbl: c.name,
-                        submenu: () => Array.prototype.concat(
-                            this.allOnlineTablets().map(t => ({
-                                lbl: "на " + t.shortName,
-                                action: () => {
-                                    this.playAce(t, c);
-                                    // this.playChannel(t, c);
-                                }
-                            }))
-                            ,[])
-                    }) as Menu))
                 },
                 {
                     lbl: 'Планшеты', 
@@ -1424,14 +1385,14 @@ class App implements TabletHost {
         // Load acestream channels
         this.acestreamHistoryConf.read().then(conf => {
             if ((new Date().getTime() - conf.lastUpdate) > 15*60*1000) {
-                this.reloadAceStream();
+                // this.reloadAceStream();
             }
             console.log("Read " + conf.channels.length + " ACE channels");
         });
 
         // Load TV channels from different m3u lists
         this.tvChannels.read().then(conf => {
-            if ((new Date().getTime() - conf.lastUpdate) / 1000 > 60*60) {
+            if ((new Date().getTime() - conf.lastUpdate) / 1000 > 10*60) {
                 this.reloadM3uPlaylists();
             }
             console.log("Read " + conf.channels.length + " M3U channels");
@@ -1463,26 +1424,9 @@ class App implements TabletHost {
 
         // Each hour reload our playlists
         setInterval(() => {
-            this.reloadAceStream();
+            // this.reloadAceStream();
             this.reloadM3uPlaylists();
         }, 1000*60*60);
-
-        const checkAceHost = async () => {
-            try {
-                const str = await curl.get("http://" + App.acestreamHost + "/webui/api/service?method=get_version&format=json");
-                const parsed = JSON.parse(str);
-                this.aceHostAlive.setInternal(parsed.error == null);
-                if (!!parsed.error && !!this.aceInfo) {
-                    this.aceInfo = undefined;
-                    this.reloadAllWebClients('web');
-                }
-            } catch (e) {
-                this.aceHostAlive.setInternal(false);
-            }
-            await util.delay(2000);
-            checkAceHost();
-        }
-        checkAceHost();
 
         this.expressApi = express();
 
@@ -1493,7 +1437,7 @@ class App implements TabletHost {
             const url = (request.url || '/').split('/').filter(p => !!p);
             // console.log("Connection from", request.connection.remoteAddress, request.url);
             const remoteAddress = request.connection.remoteAddress!;
-            const ip = util.parseOr(remoteAddress, /::ffff:(.*)/, remoteAddress);
+            const ip = request.connection.remoteFamily + "_" + util.parseOr(remoteAddress, /::ffff:(.*)/, remoteAddress) + ":" + request.connection.remotePort;
             ws.url = url[0];
 
             //connection is up, let's add a simple simple event
@@ -1547,6 +1491,13 @@ class App implements TabletHost {
                                 },
                                 onWeightReset: () => {
                                     this.allInformers.staticLine("Сброс");
+                                },
+                                onPotentiometer: (value) => {                                   
+                                    for (const ctrl of this.dynamicControllers.values()) {
+                                        if (ctrl.hasPWMOnD0()) {
+                                            ctrl.setPWMOnD0(Math.round(value));
+                                        }
+                                    }
                                 },
                                 onIRKey: (remoteId: string, keyId: string) => {
                                     var _irState;
@@ -1894,30 +1845,28 @@ class App implements TabletHost {
             .catch((err: Error) => {
                 console.error('Something went wrong:', err.stack)
             })
-
-        this.aceHostAlive.onChange(() => {
-            if (!this.aceHostAlive.get()) {
-                this.nowDecodedByAce.set("");
-                this.statusString.set("");
-            }   
-        })
    }
 
     private reloadM3uPlaylists() {
         this.parseM3Us([
+            "http://6cdcfb1d7608.beeline.fun/playlists/uplist/5c7b66f625525ec716ee9abf2ef7f3e7/playlist.m3u8"
             // "http://iptviptv.do.am/_ld/0/1_IPTV.m3u",
+            /*
             "http://tritel.net.ru/cp/files/Tritel-IPTV.m3u",
             "http://getsapp.ru/IPTV/Auto_IPTV.m3u",
             "https://webarmen.com/my/iptv/auto.nogrp.m3u",
             "https://smarttvnews.ru/apps/Channels.m3u"
+            */
         ]).then(channels => {
             this.tvChannels.change(conf => {
+                console.log('Parsed ' + channels.length + " IPTV channels");
                 conf.channels = channels;
                 conf.lastUpdate = new Date().getTime();
             });
         });
     }
 
+    /*
     private reloadAceStream() {
         curl.get("http://pomoyka.win/trash/ttv-list/as.json")
             .then(text => {
@@ -1930,6 +1879,7 @@ class App implements TabletHost {
             })
             .catch(e => console.log(e));
     }
+*/
 
     private async renderToHTML(idToReferesh: string): Promise<string> {
         const allProps = await this.allPropsFor.get(idToReferesh)!();
@@ -2077,11 +2027,8 @@ class App implements TabletHost {
 
     public playChannel(t: Tablet, c: Channel): Promise<void> {
         console.log("Playing " + JSON.stringify(c) + ' as ' + getType(c));
-        if (getType(c) == 'Ace') {
-            return this.playAce(t, c);
-        } else {
-            return this.playURL(t, c.url, c.name);
-        }
+
+        return this.playURL(t, c.url, c.name);
     }
 
     public async playURL(t: Tablet, _url: string, _name: string): Promise<void> {
@@ -2165,116 +2112,6 @@ class App implements TabletHost {
         });
     }
   
-    public async playAce(t: Tablet, c: Channel): Promise<void> {
-        const newFromHistory = this.acestreamHistoryConf.last().channels.find(c2 => c.name.localeCompare(c2.name) === 0);
-        if (newFromHistory) {
-            if (newFromHistory.url != c.url) {
-                c.url = newFromHistory.url;
-                console.log("Got new AceHash", c.url, newFromHistory.name, newFromHistory.cat);
-            } else {
-                console.log("AceHash is the same");
-            }
-        } else {
-            console.log("Not found in history");
-        }
-
-        if (this.aceInfo) {
-            if (this.aceInfo.aceId === c.url && this.aceInfo.resp && this.aceInfo.resp.playback_url) {
-                // We're already playing this url
-                this.playSimpleUrl(t, this.aceInfo.resp.playback_url, c.name);
-                return;
-            }
-
-            if (this.aceInfo.resp && this.aceInfo.resp.command_url) {
-                // There is a control URL, so we're already playing. let's stop
-                curl.get(this.aceInfo.resp.command_url + "?method=stop");
-            }
-        }
-
-        this.aceInfo = new AceServerInfo(c.url);
-        this.nowDecodedByAce.set(c.name);
-        this.statusString.set("");
-
-        this.allInformers.runningLine("Загружаем " + c.name + "...", 3000);
-        const res = await curl.get("http://" + App.acestreamHost + 
-            "/hls/manifest.m3u8?" +
-                [
-                    "id=" + c.url, 
-                    "format=json", 
-                    "use_api_events=1",
-                    "use_stop_notifications=1",
-                    "hlc=1",
-                    "spv=0",
-                    "transcode_audio=0",
-                    "transcode_mp3=0",
-                    "transcode_ac3=0",
-                    "preferred_audio_language=ru"
-                ].join("&"));
-        const reso = JSON.parse(res);
-        let sessionStopped = false;
-        let playing = false;
-        if (!reso.error) {
-            console.log(c.url, c.name, reso.response);
-            const resolvedAt = new Date();
-            this.aceInfo.resp = reso.response;
-            // if (reso.response.is_live != 1) {
-            //     this.allInformers.runningLine(name + " не транслируется");
-            //     return;
-            // }
-
-            const eventsPoll = async () => {
-                const ev = await curl.get(reso.response.event_url);
-                const evo = JSON.parse(ev);
-                console.log(c.name, evo);
-                if (evo.error === 'unknown playback session id') {
-                    sessionStopped = true;
-                }
-                if (!sessionStopped) {
-                    eventsPoll();
-                }
-            }
-            eventsPoll();
-
-            const statsPoll = async () => {
-                const ev = await curl.get(reso.response.stat_url);
-                if (!sessionStopped) {
-                    const evo = JSON.parse(ev);
-                    if (!evo.error) {
-                        const resp = evo.response as StatusResponce;
-
-                        this.statusString.set([
-                            "Status:", resp.status,
-                            "Downloaded:", util.kbmbgb(resp.downloaded),
-                            "Download speed:", util.kbmbgb(resp.speed_down*1000) + "/sec",
-                            "Peers:", resp.peers
-                        ].join(" "));
-                    
-                        const timePassed = (new Date()).getTime() - resolvedAt.getTime();
-                        if (!playing) {
-                            // Wait while 2Mb of data is loaded and then start playback
-                            if (resp.downloaded > 2000000 || (resp.peers >= 1 && timePassed > 3000)) {
-                                playing = true;
-                                // this.allInformers.runningLine("Включаем " + c.name + "...");
-                                this.playSimpleUrl(t, reso.response.playback_url, c.name);
-                                this.justStartedToPlayChannel(c);
-                            }
-                        }
-                    }
-
-                    await util.delay(500);
-                    statsPoll();
-                }
-            }
-            statsPoll();
-        } else {
-            this.allInformers.runningLine("Ошибка загрузки " + c.name + ": " + reso.error, 3000);
-            throw new Error(reso.error);
-        }
-        // 
-        // console.log("wanna play ", h.url);
-
-    }
-
     public async playSimpleUrl(t: Tablet, url: string, name: string) {
         if (!t.screenIsOn.get()) {
             await t.screenIsOn.set(true);
