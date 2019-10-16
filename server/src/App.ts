@@ -398,14 +398,19 @@ class App implements TabletHost {
 
     private createTimer(name: string, 
         confName: string, 
-        onFired: ((d: Date) => void)): TimerProp {
+        onFired: ((d: Date, soundNo: number, vol: number) => void)): TimerProp {
         interface Conf {
             val: string | null;
+            soundNo?: number;
+            soundVol?: number;
         }
 
         const conf = util.newConfig({ val: null } as Conf, confName);
         conf.read().then(conf => {
+            // Prop was read, let's set props
             setNewValue(conf.val ? new Date(conf.val) : null);
+            soundNoProp.setInternal(conf.soundNo || 105);
+            volProp.setInternal(conf.soundVol || 60);
         })
 
         const onDateChanged = () => {
@@ -495,7 +500,7 @@ class App implements TabletHost {
                     const tt = that.val;
                     // Let's setup timer
                     timers.push(setTimeout(() => {
-                        onFired(tt);
+                        onFired(tt, soundNoProp.get() + 1, volProp.get());
                         setNewValue(null);
                     }, msBefore));
                     [45, 30, 20, 15, 10, 5, 4, 3, 2, 1].forEach(m => {
@@ -523,13 +528,29 @@ class App implements TabletHost {
             }
         }
 
+        const soundNoProp = newWritableProperty("Sound no", 
+            0, 
+            new SelectHTMLRenderer<number>(Array.from({ length: ClockController.mp3Names.length }, ((v, k) => k)), i => i + ". " + ClockController.mp3Names[i]), 
+            {
+                onSet: (val) => {
+                    conf.change(t => t.soundNo = +val);
+                }
+            });
+        const volProp = newWritableProperty("Vol", 
+            60,
+            new SliderHTMLRenderer(), 
+            {
+                onSet: (val: number) => {
+                    conf.change(t => t.soundVol = val);
+                }
+            });
 
         const that = {
             val: null as Date | null,
             controller: {
                 name: name,
                 properties: () => [
-                    hourProp, minProp, secProp, orBeforeProp, inProp
+                    hourProp, minProp, secProp, orBeforeProp, inProp, soundNoProp, volProp
                 ]
             },
             fireInSeconds: (sec: number) => {
@@ -551,7 +572,7 @@ class App implements TabletHost {
         }
     }
 
-    public sleepAt = this.createTimer("Выкл", "off", async d => {
+    public sleepAt = this.createTimer("Выкл", "off", async (d, soundNo, vol) => {
         this.isSleeping = true;
         console.log("SLEEP", d);
         //this.kindle.screenIsOn.set(false);
@@ -581,41 +602,10 @@ class App implements TabletHost {
         this.relaysState.wasOnIds = wasOnIds;
     });
 
-    public timer = this.createTimer("Таймер", "timer", d => {
+    public timer = this.createTimer("Таймер", "timer", (d, soundNo, vol) => {
         console.log("Timer!");
-        const ml = this.miLight;
-        const oldOn = ml.switchOn.get();
-        const oldAllWhite = ml.allWhite.get();
-        const oldBright = ml.brightness.get();
-        const oldHue = ml.hue.get();
 
         this.allInformers.staticLine("Время!");
-
-        async function blinkMiLight() {
-            await util.delay(300);
-            await ml.switchOn.switch(true);
-            await util.delay(200);
-            ml.brightness.set(100);
-            await util.delay(200);
-            ml.hue.set(69); // reasonable red
-            await util.delay(200);
-            for (var i = 0; i < 5; ++i) {
-                ml.brightness.set(100);
-                await util.delay(500);
-                ml.brightness.set(20);
-                await util.delay(500);
-            }
-            await util.delay(200);
-            if (oldAllWhite) {
-                ml.allWhite.set(oldAllWhite);
-            } else {
-                ml.hue.set(oldHue);
-            }
-            await util.delay(200);
-            ml.brightness.set(oldBright);
-            await util.delay(200);
-            ml.switchOn.set(oldOn);
-        }
 
         const kr = this.findDynController('KitchenRelay');
         if (kr) {
@@ -635,13 +625,12 @@ class App implements TabletHost {
 
         const cr = this.findDynController('ClockNRemote');
         if (cr) {
-            cr.playMp3(134);
+            cr.setVol(vol);
+            cr.playMp3(soundNo);
         }
-
-        blinkMiLight();
     });
 
-    public wakeAt = this.createTimer("Вкл", "on", d => {
+    public wakeAt = this.createTimer("Вкл", "on", (d, soundNo, vol) => {
         console.log("WAKE", d);
         this.isSleeping = false;
         //this.nexus7.screenIsOn.set(true);
@@ -680,7 +669,8 @@ class App implements TabletHost {
                     clock.brightnessProperty.set(10);
                     clock.screenEnabledProperty.set(true);
                 }
-                clock.playMp3(134);
+                clock.setVol(vol);
+                clock.playMp3(soundNo);
             } 
 
             // await util.delay(3000);

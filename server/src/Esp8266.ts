@@ -274,22 +274,7 @@ export class ClockController extends ClassWithId implements Controller {
             this._properties.push(Button.create("Weight reset", () => this.tare()));
         }
         if (this.devParams['hasDFPlayer'] === 'true') {
-            this._properties.push(newWritableProperty("Sound no", 0, 
-                new SelectHTMLRenderer<number>(Array.from({ length: ClockController.mp3Names.length }, ((v, k) => k)), i => i + ". " + ClockController.mp3Names[i]), 
-                {
-                    onSet: (val) => {
-                        this.playMp3(+val + 1);
-                    }
-                }));
-            const vol = newWritableProperty("Vol", 
-                0,
-                new SliderHTMLRenderer(), 
-                {
-                    onSet: (val: number) => {
-                        this.setVol(val);
-                    }
-                });
-            this._properties.push(vol);
+            // Nothing ATM
         }
         if (this.devParams['hasLedStripe'] === 'true') {
             this._properties.push(this.screenEnabledProperty);
