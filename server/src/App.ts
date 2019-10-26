@@ -238,6 +238,7 @@ interface Channel {
     name: string;
     cat?: string;
     url: string;
+    source?: string;
     channel?: number;
 }
 
@@ -328,7 +329,7 @@ class App implements TabletHost {
     private r1 = new GPIORelay("Лампа на шкафу", 38, this.gpioRelays, 0);
     private r2 = new GPIORelay("Колонки", 40, this.gpioRelays, 1);
     private r3 = new GPIORelay("Коридор", 36, this.gpioRelays, 2);
-    private r4 = new GPIORelay("Потолок", 32, this.gpioRelays, 3);
+    // private r4 = new GPIORelay("Потолок", 32, this.gpioRelays, 3);
     // private r5 = new GPIORelay("R5", 37, this.gpioRelays, 4);
     // private r6 = new GPIORelay("R6", 35, this.gpioRelays, 5);
     // private r7 = new GPIORelay("R7", 33, this.gpioRelays, 6);
@@ -338,7 +339,7 @@ class App implements TabletHost {
 
     private ctrlGPIO = {
         name: "Комната",
-        properties: () => [this.r1, this.r2, this.r3, this.r4/*, this.r5, this.r6, this.r7, this.r8 */ ]
+        properties: () => [this.r1, this.r2, this.r3 /*, this.r4, this.r5, this.r6, this.r7, this.r8 */ ]
     }
 
     private dynamicControllers: Map<string, ClockController> = new Map();
@@ -607,7 +608,7 @@ class App implements TabletHost {
 
         this.allInformers.staticLine("Время!");
 
-        const kr = this.findDynController('KitchenRelay');
+        const kr = this.findDynController('RelayOnKitchen');
         if (kr) {
             async function blinkKitchenStripe(stripeRelay: Relay) {
                 const wasOn = stripeRelay.get();
@@ -710,7 +711,6 @@ class App implements TabletHost {
                     startedRebooting = true;
                     this.allInformers.runningLine('Перегружаем сервис - осталось совсем мало памяти', 3000);
                     util.delay(2000).then(() => this.rebootService());
-                    this.rebootAceStream();
                 }
             }, 5000);
         }
@@ -724,7 +724,6 @@ class App implements TabletHost {
             }),
             Button.create("Reboot Orange Pi", () => util.runShell("reboot", [])),
             Button.createClientRedirect("TV Channels", "/tv.html"),
-            Button.createClientRedirect("AceStream Channels", "/torrent_tv.html"),
             Button.createClientRedirect("Settings", "/settings.html"),
             newWritableProperty<boolean>("Allow renames", this.allowRenames, new CheckboxHTMLRenderer(), { onSet: (val: boolean) => {
                 this.allowRenames = val;
@@ -734,11 +733,10 @@ class App implements TabletHost {
         ]
     }
 
-    // We're using dockerized acestream from https://github.com/lucabelluccini/acestream-engine-armv7-docker
-    private acestreamHistoryConf = util.newConfig({ channels: [] as Channel[], lastUpdate: 0 }, "acestream_tv_channels");
     private tvChannels = util.newConfig({ channels: [] as Channel[], lastUpdate: 0 }, "m3u_tv_channels");
     private channelsHistoryConf = util.newConfig({ channels: [] as Channel[] }, "tv_channels");
     private keysSettings = util.newConfig({ weatherApiKey: "" }, "keys");
+    // private actions = util.newConfig({ actions: [] as PerformedAction[] }, "actions");
 
     private channelAsController(h: Channel, 
         additionalPropsBefore: Property<any>[] = [],
@@ -830,7 +828,7 @@ class App implements TabletHost {
         ["iptv", async () => this.tvChannels.last().channels.map((h, index) => {
             return Array.prototype.concat(
                 [ newWritableProperty("", "" + index + ".", new SpanHTMLRenderer()) ], 
-                [ newWritableProperty("", h.name, new SpanHTMLRenderer()) ],
+                [ newWritableProperty("", [h.name, h.source ? ('(' + h.source + ')') : undefined].filter(x => !!x).join(" "), new SpanHTMLRenderer()) ],
                 this.makePlayButtonsForChannel(h.url, t => this.playURL(t, h.url, h.name))
             );
         })],
@@ -845,6 +843,10 @@ class App implements TabletHost {
                     }})
                 ];
             });
+        }],
+        ["actions", async () => {
+            // const actions = await this.actions.read();
+            return [];
         }]
     ]);
 
@@ -859,8 +861,6 @@ class App implements TabletHost {
     private get controllers(): Controller[] {
         const dynPropsArray = Array.from(this.dynamicControllers.values());
         dynPropsArray.sort((a, b) => a.ip == b.ip ? 0 : (a.ip < b.ip ? -1 : 1));
-
-        // console.log("Ace channels: ", this.acestreamHistoryConf.last().channels.length);
 
         return Array.prototype.concat([
                 this.sleepAt.controller,
@@ -1076,10 +1076,10 @@ class App implements TabletHost {
             this.r4.switch(!this.r4.get());
         }),
         this.simpleCmd([['av_source'], ['mts']], "Потолок на кухне", () => {
-            this.toggleRelay('KitchenRelay', 0);
+            this.toggleRelay('RelayOnKitchen', 0);
         }),
         this.simpleCmd([['clear'], ['min']], "Лента на кухне", () => {
-            this.toggleRelay('KitchenRelay', 1);
+            this.toggleRelay('RelayOnKitchen', 1);
         }),
         this.simpleCmd([['mute']], "Тихо", () => {
             if (this.savedVolumeForMute === undefined) {
@@ -1112,6 +1112,7 @@ class App implements TabletHost {
                 const onNow = this.miLight.switchOn.get();
                 this.miLight.switchOn.switch(!onNow);
                 if (clock) {
+                    clock.setVol(30);
                     clock.playMp3(onNow ? 234 : 240);
                 }
             } else if (remoteId == 'encoder_middle') {
@@ -1128,6 +1129,7 @@ class App implements TabletHost {
                     each(r => r.set(!onNow));
 
                     if (clock) {
+                        clock.setVol(30);
                         clock.playMp3(onNow ? 234 : 240);
                     }
                 }
@@ -1138,6 +1140,7 @@ class App implements TabletHost {
                     const onNow = !relay.get();
                     relay.set(onNow);
                     if (clock) {
+                        clock.setVol(30);
                         clock.playMp3(onNow ? 234 : 240);
                     }
                 }
@@ -1174,10 +1177,10 @@ class App implements TabletHost {
                     ]},
                     { lbl: "Кухня", submenu: () => [
                         { lbl: "Потолок", action: () => {
-                            this.toggleRelay('KitchenRelay', 0);
+                            this.toggleRelay('RelayOnKitchen', 0);
                         } },
                         { lbl: "Лента", action: () => {
-                            this.toggleRelay('KitchenRelay', 1);
+                            this.toggleRelay('RelayOnKitchen', 1);
                         } }
                     ]},
                     { lbl: "Коридор", action: () => {
@@ -1372,15 +1375,8 @@ class App implements TabletHost {
         
         this.channelsHistoryConf.read();        
 
-        // Load acestream channels
-        this.acestreamHistoryConf.read().then(conf => {
-            if ((new Date().getTime() - conf.lastUpdate) > 15*60*1000) {
-                // this.reloadAceStream();
-            }
-            console.log("Read " + conf.channels.length + " ACE channels");
-        });
-
         // Load TV channels from different m3u lists
+
         this.tvChannels.read().then(conf => {
             if ((new Date().getTime() - conf.lastUpdate) / 1000 > 10*60) {
                 this.reloadM3uPlaylists();
@@ -1795,10 +1791,6 @@ class App implements TabletHost {
             res.contentType('html');
             res.send(await this.renderToHTML("web"));
         });
-        router.get('/torrent_tv.html', async (req, res) => {
-            res.contentType('html');
-            res.send(await this.renderToHTML("ace"));
-        });
         router.get('/tv.html', async (req, res) => {
             res.contentType('html');
             res.send(await this.renderToHTML("iptv"));
@@ -1806,6 +1798,10 @@ class App implements TabletHost {
         router.get('/settings.html', async (req, res) => {
             res.contentType('html');
             res.send(await this.renderToHTML('settings'));
+        });
+        router.get('/actions.html', async (req, res) => {
+            res.contentType('html');
+            res.send(await this.renderToHTML('actions'));
         });
 
         this.expressApi.use('/', router);
@@ -1839,7 +1835,8 @@ class App implements TabletHost {
 
     private reloadM3uPlaylists() {
         this.parseM3Us([
-            "http://6cdcfb1d7608.beeline.fun/playlists/uplist/5c7b66f625525ec716ee9abf2ef7f3e7/playlist.m3u8"
+            { url: "http://6cdcfb1d7608.beeline.fun/playlists/uplist/5c7b66f625525ec716ee9abf2ef7f3e7/playlist.m3u8", source: "edem" },
+            { url: "http://triolan.tv/getPlaylist.ashx", source: "triolan"},
             // "http://iptviptv.do.am/_ld/0/1_IPTV.m3u",
             /*
             "http://tritel.net.ru/cp/files/Tritel-IPTV.m3u",
@@ -1855,21 +1852,6 @@ class App implements TabletHost {
             });
         });
     }
-
-    /*
-    private reloadAceStream() {
-        curl.get("http://pomoyka.win/trash/ttv-list/as.json")
-            .then(text => {
-                const aceChannels = JSON.parse(text).channels as AceChannel[];
-                console.log("Downloaded " + aceChannels.length + " channels");
-                this.acestreamHistoryConf.change(conf => {
-                    conf.channels = aceChannels;
-                    conf.lastUpdate = new Date().getTime();
-                });
-            })
-            .catch(e => console.log(e));
-    }
-*/
 
     private async renderToHTML(idToReferesh: string): Promise<string> {
         const allProps = await this.allPropsFor.get(idToReferesh)!();
@@ -2002,13 +1984,6 @@ class App implements TabletHost {
                 if (f2) {
                     return Promise.resolve(f2.name + " (TV)");
                 }
-                if (this.aceInfo && this.aceInfo.resp && this.aceInfo.resp.playback_url === url) {
-                    const aceHash = this.aceInfo.aceId;
-                    const f3 = this.acestreamHistoryConf.last().channels.find(x => aceHash === x.url);
-                    if (f3) {
-                        return Promise.resolve(f3.name);
-                    }
-                }
 
                 return getYoutubeInfo(url)
                     .then(u => u.title);
@@ -2062,9 +2037,9 @@ class App implements TabletHost {
         ;
     }
 
-    private parseM3Us(urls: string[]): Promise<Channel[]> {
+    private parseM3Us(urls: { url: string, source: string}[]): Promise<Channel[]> {
         return Promise.all(urls.map(_url => {
-            return curl.get(_url).then(text => {
+            return curl.get(_url.url).then(text => {
                 const lines = util.splitLines(text);
                 if (lines[0].match(/^.?#EXTM3U/)) {
                     lines.splice(0, 1);
@@ -2080,6 +2055,7 @@ class App implements TabletHost {
                             return prev;
                         } else if (val) {
                             prev.url = val;
+                            prev.source = _url.source;
                             if (!prev.name) {
                                 console.log(prev);
                             }
@@ -2123,38 +2099,28 @@ class App implements TabletHost {
         util.runShell("/bin/systemctl", ["restart", "nodeserver"]);
     }
 
-    private async rebootAceStream() {
-        console.log('Before reboot');
-        const dockerPs = await util.runShell("/usr/bin/docker", ["ps"]);
-        const line = util.splitLines(dockerPs).find(s => !!s.match(/left76\/ace:vadim-acestream/gi));
-        console.log("Got line", line);
-        if (line) {
-            const containerId = line.split(' ')[0];
-            console.log("Got id", containerId);
-            await util.runShell("/usr/bin/docker", ["restart", containerId]);
-        }   
-        await util.delay(1000);
-    };
-
     private async getMemInfo(): Promise<MemInfo> {
         return new Promise((accept, reject) => {
-            fs.readFile('/proc/meminfo', 'utf8', function(err, contents) {
-                if (err) {
-                    reject(err);
-                } else {
-                    const res = {} as MemInfo;
-                    const lines = util.splitLines(contents);
-                    lines.forEach(l => {
-                        const splitl = l.split(/:?\s+/).map(s => s.trim());
-                        const name = splitl[0];
-                        const val = +(splitl[1]);
-                        res[name] = val;                    
-                    });
-                    
-                    accept(res);
+            fs.exists('/proc/meminfo', (exists) => {
+                if (exists) {
+                    fs.readFile('/proc/meminfo', 'utf8', function(err, contents) {
+                        if (err) {
+                            reject(err);
+                        } else {
+                            const res = {} as MemInfo;
+                            const lines = util.splitLines(contents);
+                            lines.forEach(l => {
+                                const splitl = l.split(/:?\s+/).map(s => s.trim());
+                                const name = splitl[0];
+                                const val = +(splitl[1]);
+                                res[name] = val;                    
+                            });
+                            
+                            accept(res);
+                        }
+                    });        
                 }
-            });
-    
+            });    
         });
         
     }

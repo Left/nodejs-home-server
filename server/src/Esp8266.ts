@@ -1,4 +1,4 @@
-import { Relay, Controller, Property, ClassWithId, PropertyImpl, SpanHTMLRenderer, Button, newWritableProperty, SliderHTMLRenderer, StringAndGoRendrer, CheckboxHTMLRenderer, SelectHTMLRenderer } from "./Props";
+import { Relay, Controller, Property, ClassWithId, PropertyImpl, SpanHTMLRenderer, Button, newWritableProperty, SliderHTMLRenderer, StringAndGoRendrer, CheckboxHTMLRenderer } from "./Props";
 import { LcdInformer } from './Informer';
 import { delay, toFixedPoint } from './Util';
 import * as WebSocket from 'ws';
