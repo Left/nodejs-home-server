@@ -12,7 +12,7 @@ import * as querystring from 'querystring';
 import * as curl from "./Curl";
 import * as util from "./Util";
 import { getYoutubeInfo, parseYoutubeUrl, getYoutubeInfoById } from "./Youtube";
-import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer, ImgHTMLRenderer, Disposable } from "./Props";
+import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer, ImgHTMLRenderer, Disposable, OnOff } from "./Props";
 import { TabletHost, Tablet, adbClient, Tracker, Device } from "./Tablet";
 import { CompositeLcdInformer } from './Informer';
 import { ClockController, Hello, ClockControllerEvents, RGBA } from './Esp8266';
@@ -137,7 +137,7 @@ class MiLightBulb implements Controller {
     public readonly switchOn = new (class MiLightBulbRelay extends Relay {
         constructor(
             readonly pThis: MiLightBulb) {
-            super("On/off");
+            super("MiLight");
         }
 
         public switch(on: boolean): Promise<void> {
@@ -225,11 +225,11 @@ interface IRKeysHandler {
     /**
      * This method should check array and return milliseconds before accepting
      */
-    partial(remoteId: string, arr: string[], final: boolean): number | null;
+    partial(remoteId: string, arr: string[], final: boolean, timestamps: number[]): number | null;
     /**
      * Accept the command
      */
-    complete(remoteId: string, arr: string[]): void;
+    complete(remoteId: string, arr: string[], timestamps: number[]): void;
 }
 
 type ChannelType = 'Url' | 'Youtube' | 'Ace';
@@ -607,7 +607,7 @@ class App implements TabletHost {
         console.log("Timer!");
 
         this.allInformers.staticLine("Время!");
-
+/*
         const kr = this.findDynController('RelayOnKitchen');
         if (kr) {
             async function blinkKitchenStripe(stripeRelay: Relay) {
@@ -623,11 +623,13 @@ class App implements TabletHost {
             blinkKitchenStripe(kr.relays[1]);
             blinkKitchenStripe(this.r3);
         }
-
-        const cr = this.findDynController('ClockNRemote');
-        if (cr) {
-            cr.setVol(vol);
-            cr.playMp3(soundNo);
+*/
+        for (const c of ['ClockNRemote', 'KitchenRelay']) {
+            const cr = this.findDynController(c);
+            if (cr) {
+                cr.setVol(vol);
+                cr.playMp3(soundNo);
+            }
         }
     });
 
@@ -1053,6 +1055,28 @@ class App implements TabletHost {
         }
     }
 
+    private lights(): { name: string, click: ()=>void}[] {
+        const dynSwitchers = ['RoomSwitchers', 'RelayOnKitchen']
+                    .map(name => {
+                        const dc = this.findDynController(name);
+                        return (dc ? dc.relays : []) as OnOff[];
+                    });
+
+        return ([
+                this.miLight.switchOn,
+                this.r1,
+                this.r3,
+            ] as OnOff[]).concat(...dynSwitchers)
+            .filter(v => v.name)
+            .map(
+                (v: OnOff) => ({ 
+                    name : (v.get() ? "+" : "-") + v.name, 
+                    click: () => {  
+                        v.switch(!v.get());
+                    }})
+            );
+    }
+
     private savedVolumeForMute?: number;
 
     private irKeyHandlers: IRKeysHandler[] = [
@@ -1071,9 +1095,6 @@ class App implements TabletHost {
         }),
         this.simpleCmd([['stop']], "Коридор", () => {
             this.r3.switch(!this.r3.get());
-        }),
-        this.simpleCmd([['time_shift']], "Потолок", () => {
-            this.r4.switch(!this.r4.get());
         }),
         this.simpleCmd([['av_source'], ['mts']], "Потолок на кухне", () => {
             this.toggleRelay('RelayOnKitchen', 0);
@@ -1108,14 +1129,14 @@ class App implements TabletHost {
         this.simpleCmd([['click']], "MiLight", (remoteId, keys) => {
             const clock = this.findDynController('ClockNRemote');
 
-            if (remoteId == 'encoder_right') {
+            if (remoteId == 'encoder_middle') {
                 const onNow = this.miLight.switchOn.get();
                 this.miLight.switchOn.switch(!onNow);
                 if (clock) {
                     clock.setVol(30);
                     clock.playMp3(onNow ? 234 : 240);
                 }
-            } else if (remoteId == 'encoder_middle') {
+            } else if (remoteId == 'encoder_left') {
                 const roomSwitch = this.findDynController('RoomSwitchers');
                 if (roomSwitch) {
                     let onNow = false;
@@ -1133,17 +1154,6 @@ class App implements TabletHost {
                         clock.playMp3(onNow ? 234 : 240);
                     }
                 }
-            } else if (remoteId == 'encoder_left') {
-                const roomSwitch = this.findDynController('RoomSwitchers');
-                if (roomSwitch) {
-                    const relay = roomSwitch.relays[2];
-                    const onNow = !relay.get();
-                    relay.set(onNow);
-                    if (clock) {
-                        clock.setVol(30);
-                        clock.playMp3(onNow ? 234 : 240);
-                    }
-                }
             }
         }),
         this.makeUpDownKeys([
@@ -1155,38 +1165,79 @@ class App implements TabletHost {
                     }
                     this.kindle.volume.set(this.kindle.volume.get() + sign * 100 / 15);
                 } else if (remote === 'encoder_middle') {
-                    this.modifyBrightnessLed(sign * 7);
-                } else if (remote === 'encoder_right') {
                     this.modifyBrightnessMi(sign * 10);
                 }
             }}
         ], 10),
+        new (class LightMenu implements IRKeysHandler {
+            constructor(private _app: App) {
+            }
+
+            public partial(remoteId: string, arr: string[], final: boolean, timestamps: number[]): number | null {
+                if (remoteId === 'encoder_right') {
+                    /*
+                    console.log(arr.map(function(e, i) {
+                        return [e, timestamps[i]];
+                    }));
+                    */
+
+                    if (arr.length == 0) {
+                        return null;
+                    }
+
+                    if (arr.length == 1 && arr[arr.length - 1] === 'click') {
+                        return null; // single click is probably jitter, let's ignore
+                    }
+
+                    if (arr.length >= 2 && arr[arr.length - 1] === 'click') {
+                        return 200; // we've done with menu
+                    }
+
+                    const val = this.getCurrent(arr, timestamps);
+
+                    this._app.allInformers.runningLine(val.name, 2000);
+
+                    return 3000;
+                }
+
+                return null;
+            }
+
+            private getCurrent(arr: string[], timestamps: number[]) {
+                const ind: number = arr.reduce((prevVal: number, val, index) => {
+                    if (index > 0 && (timestamps[index] - timestamps[index - 1]) < 20) {
+                        return prevVal; // JITTER
+                    }
+
+                    if (val === 'rotate_cw') {
+                        return prevVal + 1;
+                    }
+                    else if (val === 'rotate_ccw') {
+                        return prevVal - 1;
+                    }
+                    return prevVal; // just ignore
+                }, 0);
+                const ll = this._app.lights();
+                const val = ll[((ind % ll.length) + ll.length) % ll.length];
+                return val;
+            }
+
+            public complete(remoteId: string, arr: string[], timestamps: number[]): void {
+                if (arr.length >= 2 && arr[arr.length - 1] === 'click') {
+                    const val = this.getCurrent(arr, timestamps);
+                    val.click();
+                    this._app.allInformers.runningLine('Нажат ' + val.name, 3000);
+                }
+            }
+        })(this),
         this.makeMainMenu(menuKeys, {
             lbl: '', submenu: () => [
-                { lbl: 'Свет', submenu: () => [
-                    { lbl: "Комната", submenu: () => [
-                        { lbl: "Потолок", action: () => {
-                            this.switchRelay(this.r4);
-                        } },
-                        { lbl: "Шкаф", action: () => {
-                            this.switchRelay(this.r1);
-                        } },
-                        { lbl: "MiLight", action: () => {
-                            this.miLight.switchOn.set(!this.miLight.switchOn.get());
-                        } },
-                    ]},
-                    { lbl: "Кухня", submenu: () => [
-                        { lbl: "Потолок", action: () => {
-                            this.toggleRelay('RelayOnKitchen', 0);
-                        } },
-                        { lbl: "Лента", action: () => {
-                            this.toggleRelay('RelayOnKitchen', 1);
-                        } }
-                    ]},
-                    { lbl: "Коридор", action: () => {
-                        this.switchRelay(this.r3);
-                    }}
-                ]},
+                { lbl: 'Свет', submenu: () =>
+                    this.lights().map(x => ({
+                            lbl: x.name,
+                            action: () => x.click()
+                        }))
+                },
                 {
                     lbl: 'Каналы', 
                     submenu: () => this.channelsHistoryConf.last().channels.map((c, i) => ({
@@ -1449,7 +1500,8 @@ class App implements TabletHost {
                                 lastRemote: number,
                                 seq: string[],
                                 handler?: IRKeysHandler,
-                                wait: number
+                                wait: number,
+                                timestamps: number[]
                             }>();
 
                             const clockController = new ClockController(ws, ip, hello, {
@@ -1488,7 +1540,7 @@ class App implements TabletHost {
                                 onIRKey: (remoteId: string, keyId: string) => {
                                     var _irState;
                                     if (!mapIRs.has(remoteId)) {
-                                        _irState = { lastRemote: 0, seq: [], wait: 1500 };
+                                        _irState = { lastRemote: 0, seq: [], wait: 1500, timestamps: [] };
                                         mapIRs.set(remoteId, _irState);
                                     } else {
                                         _irState = mapIRs.get(remoteId);
@@ -1496,37 +1548,37 @@ class App implements TabletHost {
 
                                     const irState = _irState!;
                                     const now = new Date().getTime();
-                                    if ((now - irState.lastRemote > 200) || remoteId.startsWith('encoder_')) {
-                                        console.log(remoteId, keyId);
-                                        irState.seq.push(keyId);
-                                        var toHandle;
-                                        for (const handler of this.irKeyHandlers) {
-                                            const toWait = handler.partial(remoteId, irState.seq, false);
-                                            if (toWait != null) {
-                                                toHandle = handler;
-                                                irState.wait = toWait;
-                                            }
-                                        }
-                                        if (toHandle) {
-                                            irState.handler = toHandle;
-                                        } else {
-                                            console.log('Ignored ' + irState.seq.join(",") + ' on ' + remoteId);
-                                            irState.seq = [];
-                                        }
 
-                                        util.delay(irState.wait).then(() => {
-                                            const now = new Date().getTime();
-                                            if ((now - irState.lastRemote) >= irState.wait) {
-                                                // Go!
-                                                if (irState.handler && irState.handler.partial(remoteId, irState.seq, true) !== null) {
-                                                    irState.handler.complete(remoteId, irState.seq);
-                                                }
-
-                                                irState.seq = [];
-                                                irState.lastRemote = now;
-                                            }
-                                        });
+                                    irState.seq.push(keyId);
+                                    irState.timestamps.push(now);
+                                    var toHandle;
+                                    for (const handler of this.irKeyHandlers) {
+                                        const toWait = handler.partial(remoteId, irState.seq, false, irState.timestamps);
+                                        if (toWait != null) {
+                                            toHandle = handler;
+                                            irState.wait = toWait;
+                                        }
                                     }
+                                    if (toHandle) {
+                                        irState.handler = toHandle;
+                                    } else {
+                                        console.log('Ignored ' + irState.seq.join(",") + ' on ' + remoteId);
+                                        irState.seq = [];
+                                    }
+
+                                    util.delay(irState.wait).then(() => {
+                                        const now = new Date().getTime();
+                                        if ((now - irState.lastRemote) >= irState.wait) {
+                                            // Go!
+                                            if (irState.handler && irState.handler.partial(remoteId, irState.seq, true, irState.timestamps) !== null) {
+                                                irState.handler.complete(remoteId, irState.seq, irState.timestamps);
+                                            }
+
+                                            irState.seq = [];
+                                            irState.lastRemote = now;
+                                        }
+                                    });
+
                                     irState.lastRemote = now;
                                 }
                             } as ClockControllerEvents);

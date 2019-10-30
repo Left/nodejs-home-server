@@ -151,7 +151,7 @@ export function numArrToVal(arr: string[], limitSize: number = 3): number {
     }, 0)
 }
 
-export function arraysAreEqual(a1: string[], a2: string[]) {
+export function arraysAreEqual<T>(a1: T[], a2: T[]) {
     return a1.length == a2.length && a1.every((el, ind) => el === a2[ind]);
 }
 

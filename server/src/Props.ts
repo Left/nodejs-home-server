@@ -283,6 +283,12 @@ export class Button extends WritablePropertyImpl<void> {
     }
 }
 
+export interface OnOff {
+    readonly name: string;
+    get(): boolean;
+    switch(on: boolean): Promise<void>;
+}
+
 export abstract class Relay extends WritablePropertyImpl<boolean> {
     constructor(readonly name: string) {
         super(name, new CheckboxHTMLRenderer(), false);
