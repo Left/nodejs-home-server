@@ -108,8 +108,9 @@ class ControllerRelay extends Relay {
     constructor(
         private readonly controller: ClockController,
         private readonly index: number,
-        readonly name: string) {
-        super(name);
+        readonly name: string,
+        location: string) {
+        super(name, location);
     }
 
     switch(on: boolean): Promise<void> {
@@ -194,7 +195,7 @@ export class ClockController extends ClassWithId implements Controller {
 
     public tempProperty = new PropertyImpl<number|undefined>(
         "Температура", 
-        new SpanHTMLRenderer(v => v === undefined ? "Нет данных" : ((v > 0 ? "+" : "-") + v + "&#8451;")), 
+        new SpanHTMLRenderer(v => (v === undefined ? "Нет данных" : ((v > 0 ? "+" : "-") + v + "&#8451;"))), 
         undefined);
     public humidityProperty = new PropertyImpl<number|undefined>(
         "Влажность", 
@@ -335,7 +336,7 @@ export class ClockController extends ClassWithId implements Controller {
             hello.devParams['relay.names']
                 .split(';')
                 .forEach((rn, index) => {
-                    const relay = new ControllerRelay(this, index, rn);
+                    const relay = new ControllerRelay(this, index, rn, this.name);
                     this.relays.push(relay);
                     this._properties.push(relay);
                 });

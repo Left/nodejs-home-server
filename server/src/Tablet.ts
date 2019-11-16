@@ -181,7 +181,7 @@ export class Tablet implements Controller {
 
     public screenIsOn = new (class TabletOnOffRelay extends Relay {
         constructor(private readonly tbl: Tablet) {
-            super("Screen on");
+            super("Screen on", "Комната");
         }
 
         public switch(on: boolean): Promise<void> {

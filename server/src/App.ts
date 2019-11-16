@@ -12,10 +12,10 @@ import * as querystring from 'querystring';
 import * as curl from "./Curl";
 import * as util from "./Util";
 import { getYoutubeInfo, parseYoutubeUrl, getYoutubeInfoById } from "./Youtube";
-import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer, ImgHTMLRenderer, Disposable, OnOff } from "./Props";
+import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer, ImgHTMLRenderer, Disposable, OnOff, HTMLRederer } from "./Props";
 import { TabletHost, Tablet, adbClient, Tracker, Device } from "./Tablet";
 import { CompositeLcdInformer } from './Informer';
-import { ClockController, Hello, ClockControllerEvents, RGBA } from './Esp8266';
+import { ClockController, Hello, ClockControllerEvents } from './Esp8266';
 // import { parse } from 'url';
 
 class GPIORelay extends Relay {
@@ -23,8 +23,8 @@ class GPIORelay extends Relay {
     private _modeWasSet: boolean = false;
     static readonly gpioCmd = "/root/WiringOP/gpio/gpio";
 
-    constructor(readonly name: string, public readonly pin: number, private readonly conf: util.Config<{ relays: boolean[] }>, private readonly index: number) {
-        super(name);
+    constructor(readonly name: string, public readonly pin: number, private readonly conf: util.Config<{ relays: boolean[] }>, private readonly index: number, location: string) {
+        super(name, location);
 
         this.conf.read().then(conf => this.setInternal(conf.relays[this.index]));
 
@@ -137,7 +137,7 @@ class MiLightBulb implements Controller {
     public readonly switchOn = new (class MiLightBulbRelay extends Relay {
         constructor(
             readonly pThis: MiLightBulb) {
-            super("MiLight");
+            super("MiLight", "Комната");
         }
 
         public switch(on: boolean): Promise<void> {
@@ -269,24 +269,6 @@ function compareChannels(c1: Channel, c2: Channel): number {
 
 type TimerProp = { val: Date | null, controller: Controller, fireInSeconds: (sec: number) => void };
 
-interface StartPlayingResponce {
-    event_url: string,
-    stat_url: string,
-    playback_session_id: string,
-    is_live: number,
-    playback_url: string,
-    is_encrypted: number,
-    command_url: string,
-    infohash: string 
-}
-
-class AceServerInfo {
-    public resp?: StartPlayingResponce;
-
-    constructor(public aceId: string) {
-    }
-}
-
 type Labeled = {
     lbl: string;
 };
@@ -314,6 +296,16 @@ const menuKeys = {
 
 interface KeysSettings {
     weatherApiKey: string;
+    simulateSomeoneIsHome: boolean;
+}
+
+function clrFromName(name: string) {
+    const x = crypto.createHash('md5').update(name).digest("hex").substr(0, 6);
+    return "#" + x.split(/(.{2})/).filter(O=>O).map(x => {
+        // console.log(x, (Number.parseInt(x, 16));
+        const xx = '00' + (255 - Math.trunc(Number.parseInt(x, 16) / 2)).toString(16);
+        return xx.slice(xx.length - 2);
+    }).join('');
 }
 
 
@@ -326,10 +318,10 @@ class App implements TabletHost {
 
     private gpioRelays = util.newConfig({ relays: [false, false, false, false] }, "relays");
 
-    private r1 = new GPIORelay("Лампа на шкафу", 38, this.gpioRelays, 0);
-    private r2 = new GPIORelay("Колонки", 40, this.gpioRelays, 1);
-    private r3 = new GPIORelay("Коридор", 36, this.gpioRelays, 2);
-    // private r4 = new GPIORelay("Потолок", 32, this.gpioRelays, 3);
+    private r1 = new GPIORelay("Лента на шкафу", 38, this.gpioRelays, 0, "Комната");
+    // private r2 = new GPIORelay("Розетка 0", 40, this.gpioRelays, 1, "Комната");
+    private r3 = new GPIORelay("Коридор", 36, this.gpioRelays, 2, "Коридор");
+    private r4 = new GPIORelay("Лампа на шкафу", 32, this.gpioRelays, 3, "Комната");
     // private r5 = new GPIORelay("R5", 37, this.gpioRelays, 4);
     // private r6 = new GPIORelay("R6", 35, this.gpioRelays, 5);
     // private r7 = new GPIORelay("R7", 33, this.gpioRelays, 6);
@@ -339,7 +331,7 @@ class App implements TabletHost {
 
     private ctrlGPIO = {
         name: "Комната",
-        properties: () => [this.r1, this.r2, this.r3 /*, this.r4, this.r5, this.r6, this.r7, this.r8 */ ]
+        properties: () => [this.r1, /*this.r2,*/ this.r4, this.r3, /*this.r5, this.r6, this.r7, this.r8 */ ]
     }
 
     private dynamicControllers: Map<string, ClockController> = new Map();
@@ -684,8 +676,6 @@ class App implements TabletHost {
         wake();
     });
 
-    private aceInfo?: AceServerInfo;
-
     private nowWeatherIcon = newWritableProperty<string>("", "", new ImgHTMLRenderer(40, 40));
     private nowWeather = newWritableProperty<string>("", "", new SpanHTMLRenderer());
     private ctrlWeather = {
@@ -726,6 +716,7 @@ class App implements TabletHost {
             }),
             Button.create("Reboot Orange Pi", () => util.runShell("reboot", [])),
             Button.createClientRedirect("TV Channels", "/tv.html"),
+            Button.createClientRedirect("Lights", "/lights.html"),
             Button.createClientRedirect("Settings", "/settings.html"),
             newWritableProperty<boolean>("Allow renames", this.allowRenames, new CheckboxHTMLRenderer(), { onSet: (val: boolean) => {
                 this.allowRenames = val;
@@ -737,7 +728,10 @@ class App implements TabletHost {
 
     private tvChannels = util.newConfig({ channels: [] as Channel[], lastUpdate: 0 }, "m3u_tv_channels");
     private channelsHistoryConf = util.newConfig({ channels: [] as Channel[] }, "tv_channels");
-    private keysSettings = util.newConfig({ weatherApiKey: "" }, "keys");
+    private keysSettings = util.newConfig({ 
+        weatherApiKey: "",
+        simulateSomeoneIsHome: false
+    }, "keys");
     // private actions = util.newConfig({ actions: [] as PerformedAction[] }, "actions");
 
     private channelAsController(h: Channel, 
@@ -834,17 +828,40 @@ class App implements TabletHost {
                 this.makePlayButtonsForChannel(h.url, t => this.playURL(t, h.url, h.name))
             );
         })],
+        ["lights", async () => {
+            const s: Map<string, OnOff[]> = new Map();
+            return Array.from(this.lights().reduce((prev, curr) => {
+                const loc = curr.location || "";
+                if (!prev.has(loc)) {
+                    prev.set(loc, []);
+                }
+                prev.get(loc)!.push(curr);
+                return s;
+            }, s).values());
+        }],
         ["settings", async () => {
-            const keys = await this.keysSettings.read();
-            return Object.getOwnPropertyNames(keys).map((kn2) => {
+            const keys: KeysSettings = await this.keysSettings.read();
+            return ["weatherApiKey", "simulateSomeoneIsHome"].map((kn2) => {
                 const kn = kn2 as (keyof KeysSettings);
-                return [
-                    newWritableProperty(kn, keys[kn], new StringAndGoRendrer("Change"), { onSet: val => {
+                const v = keys[kn];
+                let ret;
+                if (typeof (v) === 'string') {
+                    ret = newWritableProperty(kn, keys[kn], new StringAndGoRendrer("Change"), { onSet: val => {
                         keys[kn] = val;
                         this.keysSettings.change(c => c[kn] = val);
-                    }})
-                ];
-            });
+                    }});
+                } else if (typeof (v) === 'boolean') {
+                    ret = newWritableProperty<boolean>(kn, keys[kn] as boolean, new CheckboxHTMLRenderer());
+                } else {
+                    return [] as Property<any>[];
+                }
+   
+                return [ ret ] as Property<any>[];
+            }).concat([
+                    [ Button.create("Change", () => {
+                        
+                    })]
+            ]);
         }],
         ["actions", async () => {
             // const actions = await this.actions.read();
@@ -1032,10 +1049,14 @@ class App implements TabletHost {
                 clock.lcdInformer.runningLine("Закат", 3000);
             }
         }
+
         (async () => {
-            // await util.delay(Math.random()*30*60*1000); // Wait [0..30] minutes
-            console.log('Switch light on');
-            await this.switchLightOnWaitAndOff();
+            const keys = await this.keysSettings.read();
+            if (keys.simulateSomeoneIsHome) {
+                // await util.delay(Math.random()*30*60*1000); // Wait [0..30] minutes
+                console.log('Switch light on');
+                await this.switchLightOnWaitAndOff();
+            }
         })();
     }
 
@@ -1044,18 +1065,7 @@ class App implements TabletHost {
         this.miLight.brightness.set(brNow);
     }
 
-    private modifyBrightnessLed(delta: number) {
-        const ledStripe = this.findDynController('LedStripe');
-        if (ledStripe) {
-            const now = RGBA.parse(ledStripe.ledStripeColorProperty.get());
-            if (now) {
-                const res = now.changeBrightness(delta);
-                ledStripe.ledStripeColorProperty.set(res.asString());
-            }
-        }
-    }
-
-    private lights(): { name: string, click: ()=>void}[] {
+    private lights(): OnOff[] {
         const dynSwitchers = ['RoomSwitchers', 'RelayOnKitchen']
                     .map(name => {
                         const dc = this.findDynController(name);
@@ -1066,15 +1076,9 @@ class App implements TabletHost {
                 this.miLight.switchOn,
                 this.r1,
                 this.r3,
+                this.r4,
             ] as OnOff[]).concat(...dynSwitchers)
-            .filter(v => v.name)
-            .map(
-                (v: OnOff) => ({ 
-                    name : (v.get() ? "+" : "-") + v.name, 
-                    click: () => {  
-                        v.switch(!v.get());
-                    }})
-            );
+            .filter(v => v.name);
     }
 
     private savedVolumeForMute?: number;
@@ -1225,7 +1229,7 @@ class App implements TabletHost {
             public complete(remoteId: string, arr: string[], timestamps: number[]): void {
                 if (arr.length >= 2 && arr[arr.length - 1] === 'click') {
                     const val = this.getCurrent(arr, timestamps);
-                    val.click();
+                    val.switch(!val.get());
                     this._app.allInformers.runningLine('Нажат ' + val.name, 3000);
                 }
             }
@@ -1235,7 +1239,9 @@ class App implements TabletHost {
                 { lbl: 'Свет', submenu: () =>
                     this.lights().map(x => ({
                             lbl: x.name,
-                            action: () => x.click()
+                            action: () => {
+                                x.switch(!x.get());
+                            }
                         }))
                 },
                 {
@@ -1843,6 +1849,16 @@ class App implements TabletHost {
             res.contentType('html');
             res.send(await this.renderToHTML("web"));
         });
+        router.get('/lights.html', async (req, res) => {
+            res.contentType('html');
+            res.send(await this.renderToHTML("lights", (renderer, prop) => {
+                return renderer.body(prop, {
+                    bgColor: clrFromName(prop.name),
+                    padding: "6px",
+                    margin: "5px"
+                });
+            }));
+        });
         router.get('/tv.html', async (req, res) => {
             res.contentType('html');
             res.send(await this.renderToHTML("iptv"));
@@ -1905,7 +1921,7 @@ class App implements TabletHost {
         });
     }
 
-    private async renderToHTML(idToReferesh: string): Promise<string> {
+    private async renderToHTML(idToReferesh: string, getBody: (renderer: HTMLRederer<any>, prop: Property<any>) => string = (renderer, prop) => renderer.body(prop)): Promise<string> {
         const allProps = await this.allPropsFor.get(idToReferesh)!();
         const propChangedMap = allProps.map((props, ctrlIndex) => {
             return props.map((prop: Property<any>, prIndex: number): string => {
@@ -1985,7 +2001,7 @@ class App implements TabletHost {
                 return "<div style='margin-top: 6px; margin-bottom: 3px; border-top: 1px solid grey;'>" + ctrl.map((prop: Property<any>): string => {
                     let res = "";
 
-                    res = prop.htmlRenderer.body(prop);
+                    res = getBody(prop.htmlRenderer, prop);
 
                     return res;
                 }).join("&nbsp;\n") + "</div>";
@@ -2135,16 +2151,12 @@ class App implements TabletHost {
             await t.screenIsOn.set(true);
         }
 
-        this.r2.switch(true);
+        // this.r2.switch(true);
 
         this.allInformers.runningLine("Включаем " + name + " на " + t.shortName, 3000);
         
         console.log('playSimpleUrl', url);
         t.playURL(url);
-    }
-
-    private switchRelay(relay: GPIORelay): any {
-        relay.switch(!relay.get());
     }
 
     private rebootService(): void {

@@ -6,10 +6,18 @@ export interface Property<T> {
     get(): T;
     onChange(fn: () => void): Disposable;
     readonly htmlRenderer: HTMLRederer<T>;
+
+    readonly location?: string;
 }
 
+export type HTMRenderOptions = {
+    bgColor?: string;
+    padding?: string;
+    margin?: string;
+};
+
 export interface HTMLRederer<T> {
-    body(prop: Property<T>): string;
+    body(prop: Property<T>, options?: HTMRenderOptions): string;
     updateCode(prop: Property<T>): string;
     toHtmlVal(t: T): any;
 }
@@ -23,8 +31,12 @@ export function voidHTMLRenderer<T>(): HTMLRederer<T> {
 }
 
 export class CheckboxHTMLRenderer implements HTMLRederer<boolean> {
-    body(prop: Property<boolean>): string {
-        return `<label><input type="checkbox" id=${prop.id} 
+    body(prop: Property<boolean>, options: HTMRenderOptions = {}): string {
+        return `<label style="${ [
+                ["background-color", options.bgColor],
+                ["padding", options.padding],
+                ["margin", options.margin],
+            ].filter(x => x[1]).map(x => x[0] + ":" + x[1]).join(';') }"><input type="checkbox" id=${prop.id} 
             ${prop.get() ? "checked" : ""}
             onclick="sendVal('${prop.id}', '${prop.name}', document.getElementById('${prop.id}').checked)"/>${prop.name}</label>`;
     }    
@@ -66,7 +78,11 @@ export class SliderHTMLRenderer implements HTMLRederer<number> {
     toHtmlVal(t: number): any { return t; }
 }
 
-export class SelectHTMLRenderer<T> implements HTMLRederer<T> {
+export interface ToString {
+    toString(): string;
+}
+
+export class SelectHTMLRenderer<T extends ToString> implements HTMLRederer<T> {
     constructor(
         public readonly choices: T[], 
         public readonly valToText: (t:T) => string = (x => x.toString())
@@ -109,7 +125,7 @@ export class ImgHTMLRenderer implements HTMLRederer<string> {
 }
 
 export class SpanHTMLRenderer<T> implements HTMLRederer<T> {
-    constructor(private tostr: (t:T) => string = (t) => t.toString()) {
+    constructor(private tostr: (t:T) => string = (t) => (t as ToString).toString()) {
     }
 
     toHtmlVal(val: T) {
@@ -283,14 +299,14 @@ export class Button extends WritablePropertyImpl<void> {
     }
 }
 
-export interface OnOff {
+export interface OnOff extends Property<boolean> {
     readonly name: string;
     get(): boolean;
     switch(on: boolean): Promise<void>;
 }
 
 export abstract class Relay extends WritablePropertyImpl<boolean> {
-    constructor(readonly name: string) {
+    constructor(readonly name: string, public readonly location: string) {
         super(name, new CheckboxHTMLRenderer(), false);
     }
 
