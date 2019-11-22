@@ -235,17 +235,7 @@ export class ClockController extends ClassWithId implements Controller {
             if (!rgbNow || !rgbTo) {
                 // ?
             } else if (rgbTo.compare(rgbNow) !== 0) {
-                (async () => {
-                    for (var p = 0; p <= 255; p+=2) {
-                        await delay(30);
-                        if (val != this.ledStripeColorProperty.get()) {
-                            // Color has changed. stop all flickering!
-                            return;
-                        }
-                        const s = rgbNow.transformTo(rgbTo, p).asString();
-                        this.send({ type: 'ledstripe', value: new Array(64).fill(s).join('') });
-                    }
-                })();
+                this.send({ type: 'ledstripe', value: new Array(64).fill(rgbTo.asString()).join(''), period: 800 });
             }
         }});
     public potentiometerProperty = newWritableProperty('Potentiometer', 0, new SpanHTMLRenderer(x => x.toString(10)));
@@ -276,6 +266,10 @@ export class ClockController extends ClassWithId implements Controller {
         }
         if (this.devParams['hasDFPlayer'] === 'true') {
             // Nothing ATM
+        }
+        if (this.devParams['hasPWMOnD0'] === 'true') {
+            this._properties.push(this.createPWMProp("D3"));
+            this._properties.push(this.createPWMProp("D4"));
         }
         if (this.devParams['hasLedStripe'] === 'true') {
             this._properties.push(this.screenEnabledProperty);
@@ -361,12 +355,8 @@ export class ClockController extends ClassWithId implements Controller {
         return this.devParams["hasScreen"] === 'true';
     }
 
-    public hasPWMOnD0() {
+    public hasPWM() {
         return this.devParams["hasPWMOnD0"] === 'true';
-    }
-
-    public setPWMOnD0(val: number) {
-        this.send({ type: 'pwm', value: val});
     }
 
     public get online() {
@@ -507,6 +497,13 @@ export class ClockController extends ClassWithId implements Controller {
             delay(300 - now - this.lastVolChange).then(send);
         }
         
+    }
+
+    private createPWMProp(pin: string): Property<number> {
+        return newWritableProperty<number>(pin, 50, new SliderHTMLRenderer(), {
+            onSet: (val: number) => {
+                this.send({ type: 'pwm', value: val, pin});
+            }})
     }
 
     public static readonly mp3Names: string[] = [

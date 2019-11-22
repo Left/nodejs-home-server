@@ -1072,12 +1072,22 @@ class App implements TabletHost {
                         return (dc ? dc.relays : []) as OnOff[];
                     });
 
+        const ledStripe = this.findDynController('LedStripe');
+
         return ([
                 this.miLight.switchOn,
                 this.r1,
                 this.r3,
                 this.r4,
-            ] as OnOff[]).concat(...dynSwitchers)
+            ] as OnOff[])
+            .concat(...dynSwitchers)
+            .concat(...(ledStripe ? [ 
+                new (class R extends Relay {
+                    public switch(on: boolean): Promise<void> {
+                        ledStripe.ledStripeColorProperty.set(on ? '000000FF' : '00000000');
+                        return Promise.resolve(void 0);
+                    }
+                })('Лента на двери', 'Комната')] : []))
             .filter(v => v.name);
     }
 
@@ -1537,11 +1547,13 @@ class App implements TabletHost {
                                     this.allInformers.staticLine("Сброс");
                                 },
                                 onPotentiometer: (value) => {                                   
+                                    /*
                                     for (const ctrl of this.dynamicControllers.values()) {
                                         if (ctrl.hasPWMOnD0()) {
                                             ctrl.setPWMOnD0(Math.round(value));
                                         }
                                     }
+                                    */
                                 },
                                 onIRKey: (remoteId: string, keyId: string) => {
                                     var _irState;
