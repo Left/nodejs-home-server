@@ -1,4 +1,4 @@
-import { Relay, Controller, Property, ClassWithId, PropertyImpl, SpanHTMLRenderer, Button, newWritableProperty, SliderHTMLRenderer, StringAndGoRendrer, CheckboxHTMLRenderer } from "./Props";
+import { Relay, Controller, Property, ClassWithId, PropertyImpl, SpanHTMLRenderer, Button, newWritableProperty, SliderHTMLRenderer, StringAndGoRendrer, CheckboxHTMLRenderer, WritableProperty } from "./Props";
 import { LcdInformer } from './Informer';
 import { delay, toFixedPoint } from './Util';
 import * as WebSocket from 'ws';
@@ -218,6 +218,17 @@ export class ClockController extends ClassWithId implements Controller {
                 if (this.devParams["hasLedStripe"] === 'true') {
                     this.ledStripeColorProperty.set(val ? '000000FF' : '00000000');
                 }
+                if (this.devParams["hasPWMOnD0"] === 'true') {
+                    if (this.d3PWM && this.d4PWM) {
+                        if (val) {
+                            this.d3PWM.set(5);
+                            this.d4PWM.set(5);
+                        } else {
+                            this.d3PWM.set(0);
+                            this.d4PWM.set(0);
+                        }
+                    }
+                }
             }
         });
     public brightnessProperty = newWritableProperty("Яркость", 
@@ -239,6 +250,9 @@ export class ClockController extends ClassWithId implements Controller {
             }
         }});
     public potentiometerProperty = newWritableProperty('Potentiometer', 0, new SpanHTMLRenderer(x => x.toString(10)));
+    public readonly d3PWM?: WritableProperty<number>;
+    public readonly d4PWM?: WritableProperty<number>;
+
     private static baseW: Map<string, number> = new Map();
     private baseWeight?: number;
     private lastWeight?: number;
@@ -253,7 +267,7 @@ export class ClockController extends ClassWithId implements Controller {
 
         this.internalName = hello.devParams['device.name'];
 
-        this._name = hello.devParams['device.name.russian'] || this.internalName;
+        this._name = (hello.devParams['device.name.russian'] || this.internalName);
         this.baseWeight = ClockController.baseW.get(this._name);
         this.lastResponse = Date.now();
 
@@ -268,8 +282,12 @@ export class ClockController extends ClassWithId implements Controller {
             // Nothing ATM
         }
         if (this.devParams['hasPWMOnD0'] === 'true') {
-            this._properties.push(this.createPWMProp("D3"));
-            this._properties.push(this.createPWMProp("D4"));
+            this._properties.push(this.screenEnabledProperty);
+            this.d3PWM = this.createPWMProp("D3");
+            this.d4PWM = this.createPWMProp("D4");
+    
+            this._properties.push(this.d3PWM);
+            this._properties.push(this.d4PWM);
         }
         if (this.devParams['hasLedStripe'] === 'true') {
             this._properties.push(this.screenEnabledProperty);
@@ -337,6 +355,10 @@ export class ClockController extends ClassWithId implements Controller {
         }
 
         this._properties.push(Button.create("Restart", () => this.reboot()));
+        const ipA = this.ip.match(/(\d*\.\d*\.\d*\.\d*)/);
+        if (ipA) {
+            this._properties.push(Button.createClientRedirect("Open settings", "http://" + ipA[0]));
+        }
 
         this.intervalId = setInterval(() => {
             // console.log(this.name, "wasRecentlyContacted", this.wasRecentlyContacted());
@@ -499,7 +521,7 @@ export class ClockController extends ClassWithId implements Controller {
         
     }
 
-    private createPWMProp(pin: string): Property<number> {
+    private createPWMProp(pin: string): WritableProperty<number> {
         return newWritableProperty<number>(pin, 50, new SliderHTMLRenderer(), {
             onSet: (val: number) => {
                 this.send({ type: 'pwm', value: val, pin});

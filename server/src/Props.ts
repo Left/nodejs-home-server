@@ -286,8 +286,8 @@ export class Button extends WritablePropertyImpl<void> {
         return new Button(name, action);
     }
 
-    static createClientRedirect(name: string, url: string): Button {
-        return new Button(name, () => {}, new ButtonRendrer(() => "location = ('" + url + "')"));
+    static createClientRedirect(name: string, url: string, newWindow?: boolean): Button {
+        return new Button(name, () => {}, new ButtonRendrer(() => `window.open('${url}'${newWindow ? ", '_blank'" : ""})`));
     }
 
     static createCopyToClipboard(name: string, value: string): Button {

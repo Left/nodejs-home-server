@@ -591,6 +591,10 @@ class App implements TabletHost {
         if (ledStripe) {
             ledStripe.screenEnabledProperty.set(false);
         }
+        const ledController1 = this.findDynController('LedController1');
+        if (ledController1) {
+            ledController1.screenEnabledProperty.set(false);
+        }
 
         this.relaysState.wasOnIds = wasOnIds;
     });
@@ -1073,6 +1077,7 @@ class App implements TabletHost {
                     });
 
         const ledStripe = this.findDynController('LedStripe');
+        const ledController1 = this.findDynController('LedController1');
 
         return ([
                 this.miLight.switchOn,
@@ -1083,11 +1088,24 @@ class App implements TabletHost {
             .concat(...dynSwitchers)
             .concat(...(ledStripe ? [ 
                 new (class R extends Relay {
+                    public get(): boolean {
+                        return ledStripe.ledStripeColorProperty.get() !== '00000000';
+                    }
                     public switch(on: boolean): Promise<void> {
                         ledStripe.ledStripeColorProperty.set(on ? '000000FF' : '00000000');
                         return Promise.resolve(void 0);
                     }
                 })('Лента на двери', 'Комната')] : []))
+            .concat(...(ledController1 ? [ 
+                new (class R extends Relay {
+                    public get(): boolean {
+                        return ledController1.screenEnabledProperty.get();
+                    }
+                    public switch(on: boolean): Promise<void> {
+                        ledController1.screenEnabledProperty.set(on);
+                        return Promise.resolve(void 0);
+                    }
+                })('Лента на столе', 'Комната')] : []))
             .filter(v => v.name);
     }
 
@@ -1101,19 +1119,36 @@ class App implements TabletHost {
         ]),
         this.makeSwitchChannelIrSeq('ent'),
         this.makeSwitchChannelIrSeq('reset'),
-        this.simpleCmd([['fullscreen']], "MiLight", () => {
-            this.miLight.switchOn.switch(!this.miLight.switchOn.get());
+        this.simpleCmd([['fullscreen']], "", () => {
+            
         }),
-        this.simpleCmd([["record"]], "Лампа на шкафу", () => {
+        this.simpleCmd([["record"]], "Лента на шкафу", () => {
             this.r1.switch(!this.r1.get());
         }),
         this.simpleCmd([['stop']], "Коридор", () => {
             this.r3.switch(!this.r3.get());
         }),
-        this.simpleCmd([['av_source'], ['mts']], "Потолок на кухне", () => {
+        this.simpleCmd([['time_shift']], "Потолок в комнате", () => {
+            const roomSwitch = this.findDynController('RoomSwitchers');
+            if (roomSwitch) {
+                roomSwitch.relays[2].switch(!roomSwitch.relays[2].get());
+            }
+        }),
+        this.simpleCmd([['av_source']], "Лента на двери", () => {
+            const ledStripe = this.findDynController('LedStripe');
+            if (ledStripe) {
+                const prop = ledStripe.ledStripeColorProperty;
+                prop.set(prop.get() === '00000000' ? '000000FF' : '00000000');
+            }
+        }),
+        this.simpleCmd([['clear']], "MiLight", () => {
+            this.miLight.switchOn.switch(!this.miLight.switchOn.get());
+        }),
+
+        this.simpleCmd([['mts']], "Потолок на кухне", () => {
             this.toggleRelay('RelayOnKitchen', 0);
         }),
-        this.simpleCmd([['clear'], ['min']], "Лента на кухне", () => {
+        this.simpleCmd([['min']], "Лента на кухне", () => {
             this.toggleRelay('RelayOnKitchen', 1);
         }),
         this.simpleCmd([['mute']], "Тихо", () => {
@@ -1189,12 +1224,6 @@ class App implements TabletHost {
 
             public partial(remoteId: string, arr: string[], final: boolean, timestamps: number[]): number | null {
                 if (remoteId === 'encoder_right') {
-                    /*
-                    console.log(arr.map(function(e, i) {
-                        return [e, timestamps[i]];
-                    }));
-                    */
-
                     if (arr.length == 0) {
                         return null;
                     }
