@@ -9,14 +9,13 @@ import * as dgram from "dgram";
 import * as crypto from 'crypto';
 import * as querystring from 'querystring';
 
-import * as curl from "./Curl";
-import * as util from "./Util";
-import { getYoutubeInfo, parseYoutubeUrl, getYoutubeInfoById } from "./Youtube";
-import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer, ImgHTMLRenderer, Disposable, OnOff, HTMLRederer } from "./Props";
-import { TabletHost, Tablet, adbClient, Tracker, Device } from "./Tablet";
-import { CompositeLcdInformer } from './Informer';
-import { ClockController, Hello, ClockControllerEvents } from './Esp8266';
-// import { parse } from 'url';
+import * as curl from "./curl";
+import * as util from "./util";
+import { getYoutubeInfo, parseYoutubeUrl, getYoutubeInfoById } from "./youtube";
+import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer, ImgHTMLRenderer, Disposable, OnOff, HTMLRederer } from "./props";
+import { TabletHost, Tablet, adbClient, Tracker, Device } from "./tablet";
+import { CompositeLcdInformer } from './informer';
+import { ClockController, Hello, ClockControllerEvents } from './esp8266';
 
 class GPIORelay extends Relay {
     private _init: Promise<void>;
@@ -391,7 +390,8 @@ class App implements TabletHost {
 
     private createTimer(name: string, 
         confName: string, 
-        onFired: ((d: Date, soundNo: number, vol: number) => void)): TimerProp {
+        onFired: ((d: Date, soundNo: number, vol: number) => void),
+        noSound: boolean): TimerProp {
         interface Conf {
             val: string | null;
             soundNo?: number;
@@ -543,8 +543,8 @@ class App implements TabletHost {
             controller: {
                 name: name,
                 properties: () => [
-                    hourProp, minProp, secProp, orBeforeProp, inProp, soundNoProp, volProp
-                ]
+                    hourProp, minProp, secProp, orBeforeProp, inProp
+                ].concat(noSound ? [] : [ soundNoProp, volProp ])
             },
             fireInSeconds: (sec: number) => {
                 const d = new Date();
@@ -568,7 +568,6 @@ class App implements TabletHost {
     public sleepAt = this.createTimer("Выкл", "off", async (d, soundNo, vol) => {
         this.isSleeping = true;
         console.log("SLEEP", d);
-        //this.kindle.screenIsOn.set(false);
         const wasOnIds = [];
         for (const ctrl of this.controllers) {
             for (const prop of ctrl.properties()) {
@@ -597,7 +596,7 @@ class App implements TabletHost {
         }
 
         this.relaysState.wasOnIds = wasOnIds;
-    });
+    }, true);
 
     public timer = this.createTimer("Таймер", "timer", (d, soundNo, vol) => {
         console.log("Timer!");
@@ -627,7 +626,7 @@ class App implements TabletHost {
                 cr.playMp3(soundNo);
             }
         }
-    });
+    }, false);
 
     public wakeAt = this.createTimer("Вкл", "on", (d, soundNo, vol) => {
         console.log("WAKE", d);
@@ -678,7 +677,7 @@ class App implements TabletHost {
             // this.miLight.brightness.set(80);
         }
         wake();
-    });
+    }, false);
 
     private nowWeatherIcon = newWritableProperty<string>("", "", new ImgHTMLRenderer(40, 40));
     private nowWeather = newWritableProperty<string>("", "", new SpanHTMLRenderer());
@@ -1064,9 +1063,10 @@ class App implements TabletHost {
         })();
     }
 
-    private modifyBrightnessMi(delta: number) {
+    private modifyBrightnessMi(delta: number): number {
         const brNow = this.miLight.brightness.get() + delta;
         this.miLight.brightness.set(brNow);
+        return this.miLight.brightness.get();
     }
 
     private lights(): OnOff[] {
@@ -1181,6 +1181,12 @@ class App implements TabletHost {
             if (remoteId == 'encoder_middle') {
                 const onNow = this.miLight.switchOn.get();
                 this.miLight.switchOn.switch(!onNow);
+
+                const ledController1 = this.findDynController('LedController1');
+                if (ledController1) {
+                    ledController1.screenEnabledProperty.set(!onNow);
+                }
+        
                 if (clock) {
                     clock.setVol(30);
                     clock.playMp3(onNow ? 234 : 240);
@@ -1214,7 +1220,12 @@ class App implements TabletHost {
                     }
                     this.kindle.volume.set(this.kindle.volume.get() + sign * 100 / 15);
                 } else if (remote === 'encoder_middle') {
-                    this.modifyBrightnessMi(sign * 10);
+                    const nowBr = this.modifyBrightnessMi(sign * 10);
+                    const ledController1 = this.findDynController('LedController1');
+                    if (ledController1) {
+                        ledController1.d3PWM!.set(nowBr);
+                        ledController1.d4PWM!.set(nowBr);
+                    }            
                 }
             }}
         ], 10),

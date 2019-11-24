@@ -1,6 +1,6 @@
-import { Relay, Controller, Property, ClassWithId, PropertyImpl, SpanHTMLRenderer, Button, newWritableProperty, SliderHTMLRenderer, StringAndGoRendrer, CheckboxHTMLRenderer, WritableProperty } from "./Props";
-import { LcdInformer } from './Informer';
-import { delay, toFixedPoint } from './Util';
+import { Relay, Controller, Property, ClassWithId, PropertyImpl, SpanHTMLRenderer, Button, newWritableProperty, SliderHTMLRenderer, StringAndGoRendrer, CheckboxHTMLRenderer, WritableProperty } from "./props";
+import { LcdInformer } from './informer';
+import { delay, toFixedPoint } from './util';
 import * as WebSocket from 'ws';
 
 interface PingResult {
@@ -221,8 +221,8 @@ export class ClockController extends ClassWithId implements Controller {
                 if (this.devParams["hasPWMOnD0"] === 'true') {
                     if (this.d3PWM && this.d4PWM) {
                         if (val) {
-                            this.d3PWM.set(5);
-                            this.d4PWM.set(5);
+                            this.d3PWM.set(7);
+                            this.d4PWM.set(7);
                         } else {
                             this.d3PWM.set(0);
                             this.d4PWM.set(0);
@@ -522,9 +522,9 @@ export class ClockController extends ClassWithId implements Controller {
     }
 
     private createPWMProp(pin: string): WritableProperty<number> {
-        return newWritableProperty<number>(pin, 50, new SliderHTMLRenderer(), {
+        return newWritableProperty<number>(pin, 0, new SliderHTMLRenderer(), {
             onSet: (val: number) => {
-                this.send({ type: 'pwm', value: val, pin});
+                this.send({ type: 'pwm', value: val, pin, period: 500 });
             }})
     }
 
