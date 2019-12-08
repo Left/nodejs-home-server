@@ -9,13 +9,13 @@ import * as dgram from "dgram";
 import * as crypto from 'crypto';
 import * as querystring from 'querystring';
 
-import * as curl from "./curl";
-import * as util from "./util";
-import { getYoutubeInfo, parseYoutubeUrl, getYoutubeInfoById } from "./youtube";
-import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer, ImgHTMLRenderer, Disposable, OnOff, HTMLRederer } from "./props";
-import { TabletHost, Tablet, adbClient, Tracker, Device } from "./tablet";
-import { CompositeLcdInformer } from './informer';
-import { ClockController, Hello, ClockControllerEvents } from './esp8266';
+import * as curl from "./http.util";
+import * as util from "./common.utils";
+import { getYoutubeInfo, parseYoutubeUrl, getYoutubeInfoById } from "./youtube.utils";
+import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer, ImgHTMLRenderer, Disposable, OnOff, HTMLRederer } from "./properties";
+import { TabletHost, Tablet, adbClient, Tracker, Device } from "./android.tablet";
+import { CompositeLcdInformer } from './informer.api';
+import { ClockController, Hello, ClockControllerEvents } from './esp8266.controller';
 
 class GPIORelay extends Relay {
     private _init: Promise<void>;
@@ -61,7 +61,7 @@ class GPIORelay extends Relay {
             return util.runShell(GPIORelay.gpioCmd, ["-1", "write", "" + this.pin, on ? "0" : "1"])
                 .then(() => {
                     this.setInternal(on);
-                    return this.conf.change(d => d.relays[this.index] = on);
+                    return this.conf.change(d => { d.relays[this.index] = on });
                 })
                 .catch(err => console.log(err.errno));
         });
@@ -298,6 +298,7 @@ interface KeysSettings {
     simulateSomeoneIsHome: boolean;
 }
 
+
 function clrFromName(name: string) {
     const x = crypto.createHash('md5').update(name).digest("hex").substr(0, 6);
     return "#" + x.split(/(.{2})/).filter(O=>O).map(x => {
@@ -506,7 +507,7 @@ class App implements TabletHost {
                             }, msB));
                         }
                     });
-                    conf.change(t => t.val = that.val!.toJSON());
+                    conf.change({ val: that.val!.toJSON() });
                 } else {
                     // Dropped timer
                     // hourProp.setInternal(0);
@@ -516,7 +517,7 @@ class App implements TabletHost {
                     minProp.setInternal(0);
                     secProp.setInternal(0);
                     orBeforeProp.setInternal(0);
-                    conf.change(t => t.val = null);
+                    conf.change({ val: null });
                 }
             }
         }
@@ -582,7 +583,6 @@ class App implements TabletHost {
         }
         const clock = this.findDynController('ClockNRemote');
         if (clock) {
-            clock.brightnessProperty.set(5);
             await util.delay(500);
             clock.screenEnabledProperty.set(false);
         }
@@ -664,7 +664,6 @@ class App implements TabletHost {
             if (clock) {
                 const se = await clock.screenEnabledProperty.get();
                 if (!se) {
-                    clock.brightnessProperty.set(10);
                     clock.screenEnabledProperty.set(true);
                 }
                 clock.setVol(vol);
@@ -719,6 +718,7 @@ class App implements TabletHost {
             }),
             Button.create("Reboot Orange Pi", () => util.runShell("reboot", [])),
             Button.createClientRedirect("TV Channels", "/tv.html"),
+            Button.create("Reload TV channels", () => this.reloadM3uPlaylists()),
             Button.createClientRedirect("Lights", "/lights.html"),
             Button.createClientRedirect("Settings", "/settings.html"),
             newWritableProperty<boolean>("Allow renames", this.allowRenames, new CheckboxHTMLRenderer(), { onSet: (val: boolean) => {
@@ -781,7 +781,7 @@ class App implements TabletHost {
 
         // channelsProto contains all channels that are not used yet
         const channelsProto = Array.from({ length: 99 }, (e, i) => i).filter(ch => !chToHist.has(ch));
-        return this.channelsHistoryConf.last().channels.map((h, index) => {
+        return this.channelsHistoryConf.last().channels.filter(h => h).map((h, index) => {
             // If needed, add own channel
             const channels = Array.prototype.concat(h.channel ? [h.channel] : [], channelsProto) as number[];
             // Sort!
@@ -824,7 +824,7 @@ class App implements TabletHost {
                 ctrl.name ? [ newWritableProperty("", ctrl.name, new SpanHTMLRenderer()) ] : [], 
                 ctrl.properties());
         })],
-        ["iptv", async () => this.tvChannels.last().channels.map((h, index) => {
+        ["iptv", async () => this.tvChannels.last().channels.filter(h => h).map((h, index) => {
             return Array.prototype.concat(
                 [ newWritableProperty("", "" + index + ".", new SpanHTMLRenderer()) ], 
                 [ newWritableProperty("", [h.name, h.source ? ('(' + h.source + ')') : undefined].filter(x => !!x).join(" "), new SpanHTMLRenderer()) ],
@@ -844,14 +844,18 @@ class App implements TabletHost {
         }],
         ["settings", async () => {
             const keys: KeysSettings = await this.keysSettings.read();
+            const changedKeys : Partial<KeysSettings> = {};
             return ["weatherApiKey", "simulateSomeoneIsHome"].map((kn2) => {
                 const kn = kn2 as (keyof KeysSettings);
                 const v = keys[kn];
                 let ret;
                 if (typeof (v) === 'string') {
-                    ret = newWritableProperty(kn, keys[kn], new StringAndGoRendrer("Change"), { onSet: val => {
-                        keys[kn] = val;
-                        this.keysSettings.change(c => c[kn] = val);
+                    // const strings: Extract<KeysSettings, string> = keys;
+                    ret = newWritableProperty(kn, keys[kn], new StringAndGoRendrer("Change"), { onSet: (val: string) => {
+                        const keyss = keys as util.FilterFlags<KeysSettings, string>;
+                        const kns = kn as (keyof typeof keyss);
+
+                        changedKeys[kns] = val;
                     }});
                 } else if (typeof (v) === 'boolean') {
                     ret = newWritableProperty<boolean>(kn, keys[kn] as boolean, new CheckboxHTMLRenderer());
@@ -862,7 +866,7 @@ class App implements TabletHost {
                 return [ ret ] as Property<any>[];
             }).concat([
                     [ Button.create("Change", () => {
-                        
+                        this.keysSettings.change(changedKeys);
                     })]
             ]);
         }],
@@ -1015,16 +1019,6 @@ class App implements TabletHost {
             if (clock.lcdInformer) {
                 clock.lcdInformer.runningLine("Рассвет", 3000);
             }
-
-            /*
-            (async () => {
-                clock.brightnessProperty.set(10);
-                for (let i = 0; i < 90; ++i) {
-                    await util.delay(5*1000)
-                    clock.brightnessProperty.set(clock.brightnessProperty.get() + 1);
-                }
-            })();
-            */
         }
         const kr = this.findDynController('KitchenRelay');
         if (kr) {
@@ -1586,14 +1580,13 @@ class App implements TabletHost {
                                 onWeightReset: () => {
                                     this.allInformers.staticLine("Сброс");
                                 },
-                                onPotentiometer: (value) => {                                   
-                                    /*
-                                    for (const ctrl of this.dynamicControllers.values()) {
-                                        if (ctrl.hasPWMOnD0()) {
-                                            ctrl.setPWMOnD0(Math.round(value));
-                                        }
+                                onPotentiometer: (value: number) => {                                   
+                                    if (clockController.hasScreen()) {
+                                        // Let's tune screen brightness
+                                        // adc value is from 0 (nuke bright) to 1024 (absolutely dark)
+                                        // 
+                                        clockController.brightnessProperty.set(Math.floor((1024 - value) / 18));
                                     }
-                                    */
                                 },
                                 onIRKey: (remoteId: string, keyId: string) => {
                                     var _irState;
@@ -1955,8 +1948,9 @@ class App implements TabletHost {
 
     private reloadM3uPlaylists() {
         this.parseM3Us([
-            { url: "http://6cdcfb1d7608.beeline.fun/playlists/uplist/5c7b66f625525ec716ee9abf2ef7f3e7/playlist.m3u8", source: "edem" },
-            { url: "http://triolan.tv/getPlaylist.ashx", source: "triolan"},
+            // { url: "http://e24e61d73751.iedem.com/playlists/uplist/f46e5a9ade8748f3b7a6908e8bc1c146/playlist.m3u8", source: "edem" },
+            // { url: "http://triolan.tv/getPlaylist.ashx", source: "triolan"},
+            { url: "https://smarttvapp.ru/app/iptvfull.m3u", source: "smarttvapp"},
             // "http://iptviptv.do.am/_ld/0/1_IPTV.m3u",
             /*
             "http://tritel.net.ru/cp/files/Tritel-IPTV.m3u",
@@ -2100,7 +2094,7 @@ class App implements TabletHost {
                 if (f) {
                     return Promise.resolve(f.name);
                 }
-                const f2 = this.tvChannels.last().channels.find(x => x.url === url && x.name != x.url);
+                const f2 = this.tvChannels.last().channels.find(x => x && x.url === url && x.name !== x.url);
                 if (f2) {
                     return Promise.resolve(f2.name + " (TV)");
                 }
@@ -2173,7 +2167,7 @@ class App implements TabletHost {
                         } else if (val.match(/^#EXTGRP:/)) {
                             prev.cat = (val.match(/^#EXTGRP:(.*)$/) || ["", ""])[1].trim();
                             return prev;
-                        } else if (val) {
+                        } else if (val.match(/^http/)) {
                             prev.url = val;
                             prev.source = _url.source;
                             if (!prev.name) {
@@ -2185,7 +2179,8 @@ class App implements TabletHost {
                         return prev;
                     }, {} as Channel);
 
-                    return res as Channel[];
+                    return (res as Channel[]).filter(v => v && v.url);
+
                 } else {
                     throw new Error('Invalid format for ' + _url);
                 }

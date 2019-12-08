@@ -1,4 +1,4 @@
-import * as curl from "./Curl";
+import * as curl from "./http.util";
 import * as url from "url";
 
 interface YoutubeTrack {
@@ -59,6 +59,8 @@ export function getYoutubeInfoById(ytbId: string): Promise<YoutubeTrack> {
                 tracksCache.set(ytbId, ret);
                 accept(ret);
             })
-            .catch((err) => decline(err));
+            .catch((err) => {
+                return decline(err);
+            });
     });
 }

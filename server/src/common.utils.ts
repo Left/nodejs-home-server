@@ -200,7 +200,8 @@ export function tempAsString(temp: number) {
 
 export interface Config<T> {
     read(): Promise<T>;
-    change(changer: (t: T) => void): Promise<void>;
+    change(mod: (t: T) => void): Promise<void>;
+    change(props: Partial<T>): Promise<void>;
     last(): T
 }
 
@@ -266,11 +267,16 @@ export function newConfig<T extends Object>(initial: T, fileName: string): Confi
             }); 
         }
 
-        change(changer: (t: T) => void): Promise<void> {
-            return this.read().then(data => {
-                changer(data);
-                return this.writeFileAsync();
-            });
+        public change(props: ((t: T) => void)): Promise<void>;
+        public change(props: Partial<T>): Promise<void>;
+        async change(props: any): Promise<void> {
+            let t = await this.read();
+            if (typeof props == 'function') {
+                t = props(t);
+            } else {
+                t = { ...t, props};
+            }
+            return this.writeFileAsync();
         }
 
         writeFileAsync() : Promise<void> {
@@ -289,3 +295,11 @@ export function newConfig<T extends Object>(initial: T, fileName: string): Confi
 
     })();
 }
+
+/**
+ * Allows to filter all props of expected type
+ */
+export type FilterFlags<Base, Condition> = {
+    [Key in keyof Base]: 
+        Base[Key] extends Condition ? Key : never
+};

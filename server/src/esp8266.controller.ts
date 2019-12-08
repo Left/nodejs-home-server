@@ -1,6 +1,6 @@
-import { Relay, Controller, Property, ClassWithId, PropertyImpl, SpanHTMLRenderer, Button, newWritableProperty, SliderHTMLRenderer, StringAndGoRendrer, CheckboxHTMLRenderer, WritableProperty } from "./props";
-import { LcdInformer } from './informer';
-import { delay, toFixedPoint } from './util';
+import { Relay, Controller, Property, ClassWithId, PropertyImpl, SpanHTMLRenderer, Button, newWritableProperty, SliderHTMLRenderer, StringAndGoRendrer, CheckboxHTMLRenderer, WritableProperty } from "./properties";
+import { LcdInformer } from './informer.api';
+import { delay, toFixedPoint } from './common.utils';
 import * as WebSocket from 'ws';
 
 interface PingResult {
@@ -316,7 +316,12 @@ export class ClockController extends ClassWithId implements Controller {
             this._properties.push(this.ledStripeColorProperty);
         }
         if (this.devParams['hasPotenciometer'] === 'true') {
-            this._properties.push(this.potentiometerProperty);
+            if (this.devParams['hasScreen'] === 'false') {
+                // Potentiometer is connected
+                this._properties.push(this.potentiometerProperty);
+            } else {
+                // Light sensor is connected
+            }
         }
         if (this.devParams['hasDS18B20'] === 'true') {
             this._properties.push(this.tempProperty);

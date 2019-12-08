@@ -1,6 +1,6 @@
-import { Relay, WritablePropertyImpl, SliderHTMLRenderer, Controller, newWritableProperty, StringAndGoRendrer, Button, SpanHTMLRenderer, PropertyImpl } from "./Props";
-import * as util from "./Util";
-import { LcdInformer } from './Informer';
+import { Relay, WritablePropertyImpl, SliderHTMLRenderer, Controller, newWritableProperty, StringAndGoRendrer, Button, SpanHTMLRenderer, PropertyImpl } from "./properties";
+import * as util from "./common.utils";
+import { LcdInformer } from './informer.api';
 
 import * as stream from 'stream';
 import * as querystring from 'querystring';
