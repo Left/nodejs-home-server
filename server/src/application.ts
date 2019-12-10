@@ -1515,6 +1515,21 @@ class App implements TabletHost {
             this.reloadM3uPlaylists();
         }, 1000*60*60);
 
+        const udpServer = dgram.createSocket("udp4");
+        udpServer.on('error', err => {
+            console.error(err);
+            udpServer.close();
+        });
+        udpServer.on('message', (msg, rinfo) => {
+            console.log('Got UDP message (' + msg.length + ` bytes) from ${rinfo.address}:${rinfo.port}`);
+            // console.log(`server got: ${msg} from ${rinfo.address}:${rinfo.port}`);
+        });
+        udpServer.on('listening', () => {
+            const address = udpServer.address();
+            console.log(`server listening ${address.address}:${address.port}`);
+        });
+        udpServer.bind(8081);
+
         this.expressApi = express();
 
         this.server = http.createServer(this.expressApi);
@@ -1948,7 +1963,7 @@ class App implements TabletHost {
 
     private reloadM3uPlaylists() {
         this.parseM3Us([
-            // { url: "http://e24e61d73751.iedem.com/playlists/uplist/f46e5a9ade8748f3b7a6908e8bc1c146/playlist.m3u8", source: "edem" },
+            { url: "http://e24e61d73751.iedem.com/playlists/uplist/f46e5a9ade8748f3b7a6908e8bc1c146/playlist.m3u8", source: "edem" },
             // { url: "http://triolan.tv/getPlaylist.ashx", source: "triolan"},
             { url: "https://smarttvapp.ru/app/iptvfull.m3u", source: "smarttvapp"},
             // "http://iptviptv.do.am/_ld/0/1_IPTV.m3u",

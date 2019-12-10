@@ -10,12 +10,6 @@
             "problemMatcher": []
         },
         {
-            "label": "deploy by docker",
-            "type": "shell",
-            "command": "docker build --rm -f \"server/Dockerfile\" -t left76/nodehomeserver:latest server;docker push left76/nodehomeserver:latest;ssh root@192.168.121.38 'docker pull left76/nodehomeserver:latest';ssh root@192.168.10.102 'docker restart left76/nodehomeserver:latest'",
-            "problemMatcher": []
-        },
-        {
             "label": "Build web client",
             "type": "shell",
             "command": "cd client;ng build --watch --base-href=/static/ --output-path=../server/web/production",
@@ -26,6 +20,24 @@
             "type": "shell",
             "command": "cd server;npm run dev",
             "problemMatcher": []
+        },
+        {
+            "type": "shell",
+            "label": "compile protobuf (native)",
+            "command": "protoc",
+            "args": [ "--nanopb_out=${workspaceFolder}/../BluePillTest/src", "protocol/protocol.proto" ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+        },
+        {
+            "type": "shell",
+            "label": "compile protobuf (nodejs)",
+            "command": "protoc",
+            "args": [ "--nanopb_out=.", "protocol.proto" ],
+            "options": {
+                "cwd": "${workspaceFolder}/src"
+            },
         }
     ]
 }
