@@ -223,6 +223,7 @@ export function tempAsString(temp: number) {
 }
 
 export interface Config<T> {
+    readonly def: T;
     read(): Promise<T>;
     change(mod: (t: T) => void): Promise<void>;
     change(props: Partial<T>): Promise<void>;
@@ -242,6 +243,7 @@ export function newConfig<T extends Object>(initial: T, fileName: string): Confi
     return new (class C implements Config<T> {
         private _read: boolean = false;
         private _data?: T;
+        public def = initial;
 
         private fullConfFilePath(): string {
             return os.homedir() + `/${fileName}.conf.json`;
@@ -272,6 +274,13 @@ export function newConfig<T extends Object>(initial: T, fileName: string): Confi
                                     const parsed = JSON.parse(data.toString()) as T;
                                     this._data = parsed;
                                     this._read = true;
+                                    for (const pn of Object.getOwnPropertyNames(initial)) {
+                                        const kn = pn as (keyof T);
+                                        if (!(pn in this._data)) {
+                                            this._data[kn] = initial[kn];
+                                        }
+                                    } 
+                                    
                                     accept(this._data);
                                 } catch (e) {
                                     console.log('Bad file ', this.fullConfFilePath(), data.toString(), e); 

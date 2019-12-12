@@ -295,7 +295,8 @@ const menuKeys = {
 
 interface KeysSettings {
     weatherApiKey: string;
-    simulateSomeoneIsHome: boolean;
+    youtubeApiKey: string;
+    simulateSomeoneIsAtHome: string;
 }
 
 function clrFromName(name: string) {
@@ -732,7 +733,8 @@ class App implements TabletHost {
     private channelsHistoryConf = util.newConfig({ channels: [] as Channel[] }, "tv_channels");
     private keysSettings = util.newConfig({ 
         weatherApiKey: "",
-        simulateSomeoneIsHome: false
+        youtubeApiKey: "",
+        simulateSomeoneIsAtHome: ""
     }, "keys");
     // private actions = util.newConfig({ actions: [] as PerformedAction[] }, "actions");
 
@@ -843,31 +845,23 @@ class App implements TabletHost {
         }],
         ["settings", async () => {
             const keys: KeysSettings = await this.keysSettings.read();
-            const changedKeys : Partial<KeysSettings> = {};
-            return ["weatherApiKey", "simulateSomeoneIsHome"].map((kn2) => {
+            return Object.getOwnPropertyNames(this.keysSettings.def).map((kn2) => {
                 const kn = kn2 as (keyof KeysSettings);
                 const v = keys[kn];
                 let ret;
                 if (typeof (v) === 'string') {
                     // const strings: Extract<KeysSettings, string> = keys;
                     ret = newWritableProperty(kn, keys[kn], new StringAndGoRendrer("Change"), { onSet: (val: string) => {
-                        const keyss = keys as util.FilterFlags<KeysSettings, string>;
-                        const kns = kn as (keyof typeof keyss);
-
-                        changedKeys[kns] = val;
+                        keys[kn] = val;
+                        this.keysSettings.change(keys);
                     }});
-                } else if (typeof (v) === 'boolean') {
-                    ret = newWritableProperty<boolean>(kn, keys[kn] as boolean, new CheckboxHTMLRenderer());
                 } else {
+                    console.log("Property " + kn + " has unsupported type" + typeof(v));
                     return [] as Property<any>[];
                 }
    
                 return [ ret ] as Property<any>[];
-            }).concat([
-                    [ Button.create("Change", () => {
-                        this.keysSettings.change(changedKeys);
-                    })]
-            ]);
+            });
         }],
         ["actions", async () => {
             // const actions = await this.actions.read();
@@ -1045,7 +1039,7 @@ class App implements TabletHost {
 
         (async () => {
             const keys = await this.keysSettings.read();
-            if (keys.simulateSomeoneIsHome) {
+            if (keys.simulateSomeoneIsAtHome === 'true') {
                 // await util.delay(Math.random()*30*60*1000); // Wait [0..30] minutes
                 console.log('Switch light on');
                 await this.switchLightOnWaitAndOff();
@@ -1792,7 +1786,7 @@ class App implements TabletHost {
         });
 
         let nologoBuffer: Buffer; // Cache 'nologo' because it will be used often
-        router.get('/get_tv_logo', (req, res) => {
+        router.get('/get_tv_logo', async (req, res) => {
             const n: string = req.query['name'];
             const ytb: string = req.query['ytb'];
             if (n) {
@@ -1851,7 +1845,7 @@ class App implements TabletHost {
                         }
                     });
             } else if (!!ytb) {
-                getYoutubeInfoById(ytb)
+                getYoutubeInfoById(ytb, (await this.keysSettings.read()).youtubeApiKey)
                     .then(resInfo => {
                         res.redirect(resInfo.thumbnailUrl);
                     })
@@ -2116,7 +2110,7 @@ class App implements TabletHost {
 
     public nameFromUrl(url: string): Promise<string> {
         return this.channelsHistoryConf.read()
-            .then(c => {
+            .then(async c => {
                 const f = c.channels.find(x => x.url === url && x.name != x.url);
                 if (f) {
                     return Promise.resolve(f.name);
@@ -2126,7 +2120,7 @@ class App implements TabletHost {
                     return Promise.resolve(f2.name + " (TV)");
                 }
 
-                return getYoutubeInfo(url)
+                return getYoutubeInfo(url, (await this.keysSettings.read()).youtubeApiKey)
                     .then(u => u.title);
             });
     }

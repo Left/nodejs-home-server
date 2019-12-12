@@ -29,11 +29,11 @@ export function parseYoutubeUrl(_url: string): UrlsInfo|undefined {
     return undefined;
 }
 
-export function getYoutubeInfo(_url: string): Promise<YoutubeTrack> {
+export function getYoutubeInfo(_url: string, youtubeApiKey: string): Promise<YoutubeTrack> {
     const ytbInfo = parseYoutubeUrl(_url);
 
     if (ytbInfo) {
-        return getYoutubeInfoById(ytbInfo.id);
+        return getYoutubeInfoById(ytbInfo.id, youtubeApiKey);
     } else {
         return Promise.reject(new Error("Invalid (non-youtube) URL: " + _url));
     }
@@ -41,14 +41,13 @@ export function getYoutubeInfo(_url: string): Promise<YoutubeTrack> {
 
 const tracksCache: Map<string, YoutubeTrack> = new Map();
 
-export function getYoutubeInfoById(ytbId: string): Promise<YoutubeTrack> {
+export function getYoutubeInfoById(ytbId: string, youtubeApiKey: string): Promise<YoutubeTrack> {
     if (tracksCache.has(ytbId)) {
         return Promise.resolve(tracksCache.get(ytbId)!);
     }
 
     return new Promise<YoutubeTrack>((accept, decline) => {
-        const k = Buffer.from("aHVNQUl6YVN5QlRCbnVqNktWMVRnUWhnMk1ZcVpyQjFFUWRtUzl5aHVN", 'base64').toString().substr(3);
-        curl.get("https://www.googleapis.com/youtube/v3/videos?part=id%2C+snippet&key=" + k + "&id=" + ytbId)
+        curl.get("https://www.googleapis.com/youtube/v3/videos?part=id%2C+snippet&key=" + youtubeApiKey + "&id=" + ytbId)
             .then(text => {
                 const dd = JSON.parse(text);
                 const snippet = dd.items[0]["snippet"];
