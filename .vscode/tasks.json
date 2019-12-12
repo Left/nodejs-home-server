@@ -6,7 +6,7 @@
         {
             "label": "deploy",
             "type": "shell",
-            "command": "cd server;GLOBIGNORE='node_modules:dist:.vscode:.git'; rsync -avzh * root@192.168.121.38:/root/nodeserver",
+            "command": "cd server;GLOBIGNORE='node_modules:dist:.vscode:.git'; rsync --exclude 'node_modules' --exclude 'dist' -avzh * root@192.168.121.38:/root/nodeserver",
             "problemMatcher": []
         },
         {
@@ -25,18 +25,22 @@
             "type": "shell",
             "label": "compile protobuf (native)",
             "command": "protoc",
-            "args": [ "--nanopb_out=${workspaceFolder}/../BluePillTest/src", "protocol/protocol.proto" ],
+            "args": [ "--nanopb_out=${workspaceFolder}/../BluePillTest/src", "protocol.proto" ],
             "options": {
-                "cwd": "${workspaceFolder}"
+                "cwd": "${workspaceFolder}/protocol"
             },
         },
         {
             "type": "shell",
             "label": "compile protobuf (nodejs)",
             "command": "protoc",
-            "args": [ "--nanopb_out=.", "protocol.proto" ],
+            "args": [ 
+                "--plugin=\"protoc-gen-ts=./../server/node_modules/.bin/protoc-gen-ts\"", 
+                "--js_out=\"import_style=commonjs,binary:./../server/src\"",
+                "--ts_out=\"./../server/src\"",
+                "protocol.proto" ],
             "options": {
-                "cwd": "${workspaceFolder}/src"
+                "cwd": "${workspaceFolder}/protocol"
             },
         }
     ]

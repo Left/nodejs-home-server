@@ -341,11 +341,12 @@ export class ClockController extends ClassWithId implements Controller {
                     this.send({ type: 'additional-info', text: str });
                 }
             } as LcdInformer;
+
             this.brightnessProperty.setInternal(+hello.devParams.brightness);
             this.screenEnabledProperty.setInternal(hello.screenEnabled || true);
             this._properties.push(this.screenEnabledProperty);
             // this._properties.push(this.brightnessProperty);
-            this._properties.push(newWritableProperty("Go play", "", new StringAndGoRendrer("Play"), {
+            this._properties.push(newWritableProperty("Бегущая строка", "", new StringAndGoRendrer("Play"), {
                 onSet: (val) => this.send({ type: 'show', text: val })
             }));
         }

@@ -122,10 +122,34 @@ export function nextTimeAt(hour: number, min: number, sec: number): Date {
     return then;
 }
 
-export function delay(time: number): Promise<void> {
-    return new Promise<void>(function(resolve) { 
-        setTimeout(resolve, time);
-    });
+type CancellablePromise<T> = Promise<T> & { cancel: () => void };
+
+export function delay(time: number): CancellablePromise<void> {
+    let to: number | undefined;
+    const ret = new Promise<void>(function(resolve) { 
+        to = setTimeout(resolve, time);
+    }) as CancellablePromise<void>;
+    ret.cancel = () => {
+        if (to) {
+            clearTimeout(to);
+        }
+    };
+
+    return ret;
+}
+
+
+export function doWithTimeout<T>(action: () => Promise<T>, defVal: () => T, timeoutMs: number): Promise<T> {
+    const timeout = delay(timeoutMs);
+    return Promise.race([
+        action().then(x => { 
+            timeout.cancel(); 
+            return x; 
+        }),
+        timeout.then(() => {
+            return defVal();
+        })
+    ])
 }
 
 export function trace<T>(x: T): T {

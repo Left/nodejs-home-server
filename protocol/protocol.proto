@@ -8,5 +8,5 @@ message SimpleMessage {
     required int32 num = 2;
     required string str = 3;
     required int32 num2 = 4;
-    required int32 num3 = 5;
+    required int32 num3_add = 5;
 }

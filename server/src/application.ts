@@ -17,6 +17,9 @@ import { TabletHost, Tablet, adbClient, Tracker, Device } from "./android.tablet
 import { CompositeLcdInformer } from './informer.api';
 import { ClockController, Hello, ClockControllerEvents } from './esp8266.controller';
 
+import * as protocol from "./protocol_pb";
+import { doWithTimeout } from './common.utils';
+
 class GPIORelay extends Relay {
     private _init: Promise<void>;
     private _modeWasSet: boolean = false;
@@ -231,7 +234,7 @@ interface IRKeysHandler {
     complete(remoteId: string, arr: string[], timestamps: number[]): void;
 }
 
-type ChannelType = 'Url' | 'Youtube' | 'Ace';
+type ChannelType = 'Url' | 'Youtube';
 
 interface Channel {
     name: string;
@@ -242,14 +245,11 @@ interface Channel {
 }
 
 function getType(c: Channel): ChannelType{
-    if (c.url.match(/^[a-f0-9]+$/i)) {
-        return 'Ace';
-    } else {
-        const ytbInfo = parseYoutubeUrl(c.url);
-        if (ytbInfo) {
-            return 'Youtube';
-        }
+    const ytbInfo = parseYoutubeUrl(c.url);
+    if (ytbInfo) {
+        return 'Youtube';
     }
+
     return 'Url';
 }
 
@@ -260,8 +260,8 @@ function compareChannels(c1: Channel, c2: Channel): number {
         return t1.localeCompare(t2);
     } else if (t1 === "Url") {
         return c1.url.localeCompare(c2.url);
-    } else if (t1 === "Ace") {
-        return c1.name.localeCompare(c2.name);
+    } else if (t1 === "Youtube") {
+        return c1.url.localeCompare(c2.url);
     }
     return 0; // Should never happen
 }
@@ -297,7 +297,6 @@ interface KeysSettings {
     weatherApiKey: string;
     simulateSomeoneIsHome: boolean;
 }
-
 
 function clrFromName(name: string) {
     const x = crypto.createHash('md5').update(name).digest("hex").substr(0, 6);
@@ -746,11 +745,10 @@ class App implements TabletHost {
             public properties(): Property<any>[] {
                 return Array.prototype.concat(
                     additionalPropsBefore,
-                    newWritableProperty<string>("", "get_tv_logo?" + 
+                    newWritableProperty<string>("", 
                         {
-                            'Ace': () => "name=" + encodeURIComponent(h.name),
-                            'Youtube': () => "ytb=" + parseYoutubeUrl(h.url)!.id,
-                            'Url': () => "name=" + encodeURIComponent(h.name)
+                            'Youtube': () => "get_tv_logo?" + "ytb=" + parseYoutubeUrl(h.url)!.id,
+                            'Url': () => "https://github.com/AlexELEC/channel-logos/blob/master/logos/" + encodeURIComponent(h.name) + ".png?raw=true"
                         }[getType(h)](), new ImgHTMLRenderer(40, 40)),                     
                     newWritableProperty<string>("", h.name, new SpanHTMLRenderer()),
                     that.makePlayButtonsForChannel(h.url, t => that.playChannel(t, h)), 
@@ -828,6 +826,7 @@ class App implements TabletHost {
             return Array.prototype.concat(
                 [ newWritableProperty("", "" + index + ".", new SpanHTMLRenderer()) ], 
                 [ newWritableProperty("", [h.name, h.source ? ('(' + h.source + ')') : undefined].filter(x => !!x).join(" "), new SpanHTMLRenderer()) ],
+                [ newWritableProperty("", h.cat, new SpanHTMLRenderer()) ], 
                 this.makePlayButtonsForChannel(h.url, t => this.playURL(t, h.url, h.name))
             );
         })],
@@ -880,9 +879,6 @@ class App implements TabletHost {
         this.broadcastToWebClients({ type: "reloadProps", value: val });
     }
 
-    // private toAceUrl(aceCode: string): string {
-    //     return "http://192.168.121.38:6878/ace/getstream?id=" + aceCode +"&hlc=1&spv=0&transcode_audio=0&transcode_mp3=0&transcode_ac3=0&preferred_audio_language=ru";
-    // }
 
     private get controllers(): Controller[] {
         const dynPropsArray = Array.from(this.dynamicControllers.values());
@@ -1071,8 +1067,7 @@ class App implements TabletHost {
                     });
 
         const ledStripe = this.findDynController('LedStripe');
-        const ledController1 = this.findDynController('LedController1');
-
+        
         return ([
                 this.miLight.switchOn,
                 this.r1,
@@ -1090,16 +1085,25 @@ class App implements TabletHost {
                         return Promise.resolve(void 0);
                     }
                 })('Лента на двери', 'Комната')] : []))
-            .concat(...(ledController1 ? [ 
-                new (class R extends Relay {
-                    public get(): boolean {
-                        return ledController1.screenEnabledProperty.get();
-                    }
-                    public switch(on: boolean): Promise<void> {
-                        ledController1.screenEnabledProperty.set(on);
-                        return Promise.resolve(void 0);
-                    }
-                })('Лента на столе', 'Комната')] : []))
+            .concat(...([
+                    ['LedController1', 'Лента на столе', 'Комната'], 
+                    ['SmallLamp', 'Маленькая лампа на столе', 'Комната']
+                ]
+                .filter(([id]) => {
+                    return this.findDynController(id);
+                })
+                .map(([id, name, location]) => {
+                    const ledController1 = this.findDynController(id);
+                    return new (class R extends Relay {
+                        public get(): boolean {
+                            return ledController1!.screenEnabledProperty.get();
+                        }
+                        public switch(on: boolean): Promise<void> {
+                            ledController1!.screenEnabledProperty.set(on);
+                            return Promise.resolve(void 0);
+                        }
+                    })(name, location)
+                }))
             .filter(v => v.name);
     }
 
@@ -1511,7 +1515,6 @@ class App implements TabletHost {
 
         // Each hour reload our playlists
         setInterval(() => {
-            // this.reloadAceStream();
             this.reloadM3uPlaylists();
         }, 1000*60*60);
 
@@ -1521,7 +1524,13 @@ class App implements TabletHost {
             udpServer.close();
         });
         udpServer.on('message', (msg, rinfo) => {
-            console.log('Got UDP message (' + msg.length + ` bytes) from ${rinfo.address}:${rinfo.port}`);
+            try {
+                const newLocal = protocol.SimpleMessage.deserializeBinary(msg);
+                const typedMessage = newLocal.toObject();
+                console.log(JSON.stringify(typedMessage, undefined, ' '));
+            } catch (e) {
+                // console.log()
+            }
             // console.log(`server got: ${msg} from ${rinfo.address}:${rinfo.port}`);
         });
         udpServer.on('listening', () => {
@@ -1604,6 +1613,7 @@ class App implements TabletHost {
                                     }
                                 },
                                 onIRKey: (remoteId: string, keyId: string) => {
+                                    // console.log(remoteId, keyId);
                                     var _irState;
                                     if (!mapIRs.has(remoteId)) {
                                         _irState = { lastRemote: 0, seq: [], wait: 1500, timestamps: [] };
@@ -1963,10 +1973,12 @@ class App implements TabletHost {
 
     private reloadM3uPlaylists() {
         this.parseM3Us([
-            { url: "http://e24e61d73751.iedem.com/playlists/uplist/f46e5a9ade8748f3b7a6908e8bc1c146/playlist.m3u8", source: "edem" },
+            { url: "http://694510ce6a8d.akciatv.org/playlists/uplist/2391b94070dca2a446bcca8c0f152226/playlist.m3u8", source: "edem" },
             // { url: "http://triolan.tv/getPlaylist.ashx", source: "triolan"},
-            { url: "https://smarttvapp.ru/app/iptvfull.m3u", source: "smarttvapp"},
-            // "http://iptviptv.do.am/_ld/0/1_IPTV.m3u",
+            // { url: "https://smarttvapp.ru/app/iptvfull.m3u", source: "smarttvapp"},
+            // { url: "https://iptv-org.github.io/iptv/languages/uk.m3u", source: "iptv Ukraine"},
+            // { url: "https://iptv-org.github.io/iptv/languages/ru.m3u", source: "iptv Russian"},
+            // { url: "http://getsapp.ru/IPTV/Auto_IPTV.m3u", source: "Auto IPTV"},
             /*
             "http://tritel.net.ru/cp/files/Tritel-IPTV.m3u",
             "http://getsapp.ru/IPTV/Auto_IPTV.m3u",
@@ -2127,23 +2139,19 @@ class App implements TabletHost {
 
     public async playURL(t: Tablet, _url: string, _name: string): Promise<void> {
         const url = _url.trim();
-        const gotName = (name: string) => {
-            // update history
-            this.justStartedToPlayChannel({
-                url, 
-                name
-            });
 
-            this.playSimpleUrl(t, url, _name);
-        };
         if (!_name) {
-            return Promise.race([
-                this.nameFromUrl(url).catch(() => url),
-                util.delay(15000).then(() => { console.log('Timeout getting name from ' + url); return url; })
-            ]).then(gotName);
-        } else {
-            return gotName(_name);
-        }
+             _name = await doWithTimeout(() => this.nameFromUrl(url).catch(() => url),
+                () => { console.log('Timeout getting name from ' + url); return url; },
+                15000);
+        } 
+
+        this.justStartedToPlayChannel({
+            url, 
+            name: _name
+        });
+
+        return this.playSimpleUrl(t, url, _name);
     }
 
     private justStartedToPlayChannel(ch: Channel) {
@@ -2154,9 +2162,7 @@ class App implements TabletHost {
             } else {
                 // Move channel to the first place
                 const c = hist.channels[index];
-                if (getType(c) === "Ace") {
-                    c.url = ch.url; // Update ACE URL
-                }
+
                 hist.channels.splice(index, 1);
                 hist.channels.splice(0, 0, c);
             }

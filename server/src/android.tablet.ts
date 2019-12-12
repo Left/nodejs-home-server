@@ -204,9 +204,9 @@ export class Tablet implements Controller {
         return Array.prototype.concat([
             this.screenIsOn,
             this.volume,
-            this.battery,
+            // this.battery,
             // this.orientation,
-            this.playingUrl,
+            // this.playingUrl,
             newWritableProperty("Go play", "", new StringAndGoRendrer("Play"), { onSet: (val) => {
                 this.app.playURL(this, val, "");
             }}),
