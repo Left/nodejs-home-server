@@ -18,7 +18,7 @@ import { CompositeLcdInformer } from './informer.api';
 import { ClockController, Hello, ClockControllerEvents } from './esp8266.controller';
 
 import * as protocol from "./protocol_pb";
-import { doWithTimeout } from './common.utils';
+import { doWithTimeout, delay } from './common.utils';
 
 class GPIORelay extends Relay {
     private _init: Promise<void>;
@@ -222,16 +222,21 @@ interface SunrizeDate extends SunrizeRes {
     };
 }
 
+type RemoteEnd = {
+    controller: ClockController;
+    remoteId: string;
+}
+
 interface IRKeysHandler {
     remote?: string;
     /**
      * This method should check array and return milliseconds before accepting
      */
-    partial(remoteId: string, arr: string[], final: boolean, timestamps: number[]): number | null;
+    partial(from: RemoteEnd, arr: string[], final: boolean, timestamps: number[]): number | null;
     /**
      * Accept the command
      */
-    complete(remoteId: string, arr: string[], timestamps: number[]): void;
+    complete(from: RemoteEnd, arr: string[], timestamps: number[]): void;
 }
 
 type ChannelType = 'Url' | 'Youtube';
@@ -249,7 +254,6 @@ function getType(c: Channel): ChannelType{
     if (ytbInfo) {
         return 'Youtube';
     }
-
     return 'Url';
 }
 
@@ -272,7 +276,7 @@ type Labeled = {
     lbl: string;
 };
 type Action = Labeled & {
-    action: () => {};
+    action: ((from: RemoteEnd) => void) | (() => void);
 };
 type SubMenu = Labeled & {
     submenu: () => Menu[];
@@ -577,13 +581,13 @@ class App implements TabletHost {
                         wasOnIds.push(prop.id);
                     }
                     prop.set(false);
-                    await util.delay(1000);
+                    await delay(1000);
                 }
             }
         }
         const clock = this.findDynController('ClockNRemote');
         if (clock) {
-            await util.delay(500);
+            await delay(500);
             clock.screenEnabledProperty.set(false);
         }
         const ledStripe = this.findDynController('LedStripe');
@@ -598,7 +602,7 @@ class App implements TabletHost {
         this.relaysState.wasOnIds = wasOnIds;
     }, true);
 
-    public timer = this.createTimer("Таймер", "timer", (d, soundNo, vol) => {
+    public timer = this.createTimer("Таймер", "timer", async (d, soundNo, vol) => {
         console.log("Timer!");
 
         this.allInformers.staticLine("Время!");
@@ -609,9 +613,9 @@ class App implements TabletHost {
                 const wasOn = stripeRelay.get();
                 for (var i = 0; i < 3; ++i) {
                     stripeRelay.set(false);
-                    await util.delay(600);
+                    await delay(600);
                     stripeRelay.set(true);
-                    await util.delay(600);
+                    await delay(600);
                 }
                 stripeRelay.set(wasOn);
             }
@@ -622,8 +626,7 @@ class App implements TabletHost {
         for (const c of ['ClockNRemote', 'KitchenRelay']) {
             const cr = this.findDynController(c);
             if (cr) {
-                cr.setVol(vol);
-                cr.playMp3(soundNo);
+                cr.play(vol, soundNo);
             }
         }
     }, false);
@@ -638,17 +641,17 @@ class App implements TabletHost {
         const wake = async () => {
             this.allInformers.runningLine("Просыпаемся...", 10000);
 
-            // await util.delay(2000);
+            // await delay(2000);
             // this.miLight.brightness.set(10);
-            // await util.delay(100);
+            // await delay(100);
             // this.miLight.allWhite.set(true);
-            // await util.delay(100);
+            // await delay(100);
             // this.miLight.switchOn.set(true);
 
             this.kindle.screenIsOn.set(true);
-            await util.delay(100)
+            await delay(100)
             this.kindle.volume.set(20);
-            await util.delay(100)
+            await delay(100)
             const chan = (await this.channelsHistoryConf.read()).channels.find(c => c.channel === 1);
             if (chan) {
                 await this.playChannel(this.kindle, chan);
@@ -666,11 +669,10 @@ class App implements TabletHost {
                 if (!se) {
                     clock.screenEnabledProperty.set(true);
                 }
-                clock.setVol(vol);
-                clock.playMp3(soundNo);
+                clock.play(vol, soundNo);
             } 
 
-            // await util.delay(3000);
+            // await delay(3000);
             // this.r1.switch(true);
 
             // this.miLight.brightness.set(80);
@@ -704,7 +706,7 @@ class App implements TabletHost {
                 if (freeMem < 8 && !startedRebooting) {
                     startedRebooting = true;
                     this.allInformers.runningLine('Перегружаем сервис - осталось совсем мало памяти', 3000);
-                    util.delay(2000).then(() => this.rebootService());
+                    delay(2000).then(() => this.rebootService());
                 }
             }, 5000);
         }
@@ -893,7 +895,7 @@ class App implements TabletHost {
         );
     }
 
-    private simpleCmd(prefixes: string[][], showName: string, action: (remoteId: string, keys: string[]) => void): IRKeysHandler {
+    private simpleCmd(prefixes: string[][], showName: string, action: (from: RemoteEnd, keys: string[]) => void): IRKeysHandler {
         return {
             partial: (remoteId, arr, finalCheck) => {
                 if (prefixes.some(prefix => util.arraysAreEqual(prefix, arr))) {
@@ -905,9 +907,9 @@ class App implements TabletHost {
                 }
                 return null;
             },
-            complete: (remoteId, arr) => {
+            complete: (from, arr) => {
                 this.allInformers.runningLine(showName, 2000);
-                action(remoteId, arr);
+                action(from, arr);
             }
         } as IRKeysHandler;
     }
@@ -948,7 +950,7 @@ class App implements TabletHost {
             name: string,
             timer: { val: Date | null, fireInSeconds: (sec: number) => void}): void {
         timer.fireInSeconds(val);
-        util.delay(3000).then(() => 
+        delay(3000).then(() => 
             this.allInformers.runningLine(name + " в " + util.toHMS(timer.val!), 3000) );
     }
 
@@ -970,18 +972,18 @@ class App implements TabletHost {
             })).slice());
     }
 
-    private makeUpDownKeys(keys: {keys: string[], remoteId?: string, action: (remoteId: string, key: string) => void}[], delay: number = 2500): IRKeysHandler {
+    private makeUpDownKeys(keys: {keys: string[], remoteId?: string, action: (from: RemoteEnd, key: string) => void}[], delay: number = 2500): IRKeysHandler {
         return {
-            partial: (remoteId, arr, final) => {
+            partial: (from, arr, final) => {
                 const allAreVolControls = arr.length > 0 && arr.every(k => keys.some(kk => kk.keys.indexOf(k) !== -1));
                 if (allAreVolControls) {
                     if (!final) {
                         const last = arr[arr.length - 1];
                         const kk2 = keys.find(kk => 
                             (kk.keys.indexOf(last) !== -1) && 
-                            (!kk.remoteId || kk.remoteId == remoteId));
+                            (!kk.remoteId || kk.remoteId == from.remoteId));
                         if (kk2) {
-                            kk2.action(remoteId, last)
+                            kk2.action(from, last)
                         }
                     }
 
@@ -1005,26 +1007,16 @@ class App implements TabletHost {
         const clock = this.findDynController('ClockNRemote');
         if (clock) {
             clock.screenEnabledProperty.set(true);
-
-            if (clock.lcdInformer) {
-                clock.lcdInformer.runningLine("Рассвет", 3000);
-            }
         }
-        const kr = this.findDynController('KitchenRelay');
-        if (kr) {
-            kr.screenEnabledProperty.set(true);
-        }
-        
-        this.miLight.brightness.set(50);
     }
 
     private async switchLightOnWaitAndOff() {
         this.miLight.switchOn.set(true);
-        await util.delay(300);
+        await delay(300);
         this.miLight.brightness.set(70);
-        await util.delay(300);
+        await delay(300);
         this.miLight.allWhite.set(true);
-        await util.delay(3*60*60*1000); // In 3 hours, switch the light off
+        await delay(3*60*60*1000); // In 3 hours, switch the light off
         this.miLight.switchOn.set(false);
         console.log('Switch light off');    
     }
@@ -1040,7 +1032,7 @@ class App implements TabletHost {
         (async () => {
             const keys = await this.keysSettings.read();
             if (keys.simulateSomeoneIsAtHome === 'true') {
-                // await util.delay(Math.random()*30*60*1000); // Wait [0..30] minutes
+                // await delay(Math.random()*30*60*1000); // Wait [0..30] minutes
                 console.log('Switch light on');
                 await this.switchLightOnWaitAndOff();
             }
@@ -1098,7 +1090,7 @@ class App implements TabletHost {
                         }
                     })(name, location)
                 }))
-            .filter(v => v.name);
+            .filter(v => v.name));
     }
 
     private savedVolumeForMute?: number;
@@ -1114,33 +1106,40 @@ class App implements TabletHost {
         this.simpleCmd([['fullscreen']], "", () => {
             
         }),
-        this.simpleCmd([["record"]], "Лента на шкафу", () => {
+        this.simpleCmd([["record"]], "Лента на шкафу", (from) => {
+            from.controller.boom();
             this.r1.switch(!this.r1.get());
         }),
-        this.simpleCmd([['stop']], "Коридор", () => {
+        this.simpleCmd([['stop']], "Коридор", (from) => {
+            from.controller.boom();
             this.r3.switch(!this.r3.get());
         }),
-        this.simpleCmd([['time_shift']], "Потолок в комнате", () => {
+        this.simpleCmd([['time_shift']], "Потолок в комнате", (from) => {
             const roomSwitch = this.findDynController('RoomSwitchers');
             if (roomSwitch) {
+                from.controller.boom();
                 roomSwitch.relays[2].switch(!roomSwitch.relays[2].get());
             }
         }),
-        this.simpleCmd([['av_source']], "Лента на двери", () => {
+        this.simpleCmd([['av_source']], "Лента на двери", (from) => {
             const ledStripe = this.findDynController('LedStripe');
             if (ledStripe) {
                 const prop = ledStripe.ledStripeColorProperty;
                 prop.set(prop.get() === '00000000' ? '000000FF' : '00000000');
+                from.controller.boom();
             }
         }),
-        this.simpleCmd([['clear']], "MiLight", () => {
+        this.simpleCmd([['clear']], "MiLight", (from) => {
+            from.controller.boom();
             this.miLight.switchOn.switch(!this.miLight.switchOn.get());
         }),
 
-        this.simpleCmd([['mts']], "Потолок на кухне", () => {
+        this.simpleCmd([['mts']], "Потолок на кухне", (from) => {
+            from.controller.boom();
             this.toggleRelay('RelayOnKitchen', 0);
         }),
-        this.simpleCmd([['min']], "Лента на кухне", () => {
+        this.simpleCmd([['min']], "Лента на кухне", (from) => {
+            from.controller.boom();
             this.toggleRelay('RelayOnKitchen', 1);
         }),
         this.simpleCmd([['mute']], "Тихо", () => {
@@ -1158,7 +1157,7 @@ class App implements TabletHost {
         this.makeUpDownKeys([
             { keys: ['volume_up', 'volume_down'], action: (remote, key) => { 
                 let tablet = this.kindle;
-                if (remote === 'tvtuner') {
+                if (remote.remoteId === 'tvtuner') {
                     tablet = this.nexus7TCP;
                 }
                 if (!tablet.screenIsOn.get()) {
@@ -1167,10 +1166,10 @@ class App implements TabletHost {
                 tablet.volume.set(tablet.volume.get() + (key === 'volume_up' ? +1 : -1) * 100 / 15)
             }}
         ]),
-        this.simpleCmd([['click']], "MiLight", (remoteId, keys) => {
+        this.simpleCmd([['click']], "MiLight", (from, keys) => {
             const clock = this.findDynController('ClockNRemote');
 
-            if (remoteId == 'encoder_middle') {
+            if (from.remoteId == 'encoder_middle') {
                 const onNow = this.miLight.switchOn.get();
                 this.miLight.switchOn.switch(!onNow);
 
@@ -1180,10 +1179,9 @@ class App implements TabletHost {
                 }
         
                 if (clock) {
-                    clock.setVol(30);
-                    clock.playMp3(onNow ? 234 : 240);
+                    clock.boom();
                 }
-            } else if (remoteId == 'encoder_left') {
+            } else if (from.remoteId == 'encoder_left') {
                 const roomSwitch = this.findDynController('RoomSwitchers');
                 if (roomSwitch) {
                     let onNow = false;
@@ -1197,21 +1195,20 @@ class App implements TabletHost {
                     each(r => r.set(!onNow));
 
                     if (clock) {
-                        clock.setVol(30);
-                        clock.playMp3(onNow ? 234 : 240);
+                        clock.play(30, onNow ? 234 : 240);
                     }
                 }
             }
         }),
         this.makeUpDownKeys([
-            { keys: ['rotate_cw', 'rotate_ccw'], action: (remote, key) => {
+            { keys: ['rotate_cw', 'rotate_ccw'], action: (from, key) => {
                 const sign = (key === 'rotate_cw' ? +1 : -1);
-                if (remote === 'encoder_left') {
+                if (from.remoteId === 'encoder_left') {
                     if (!this.kindle.screenIsOn.get()) {
                         this.kindle.screenIsOn.set(true);
                     }
                     this.kindle.volume.set(this.kindle.volume.get() + sign * 100 / 15);
-                } else if (remote === 'encoder_middle') {
+                } else if (from.remoteId === 'encoder_middle') {
                     const nowBr = this.modifyBrightnessMi(sign * 10);
                     const ledController1 = this.findDynController('LedController1');
                     if (ledController1) {
@@ -1225,8 +1222,8 @@ class App implements TabletHost {
             constructor(private _app: App) {
             }
 
-            public partial(remoteId: string, arr: string[], final: boolean, timestamps: number[]): number | null {
-                if (remoteId === 'encoder_right') {
+            public partial(from: RemoteEnd, arr: string[], final: boolean, timestamps: number[]): number | null {
+                if (from.remoteId === 'encoder_right') {
                     if (arr.length == 0) {
                         return null;
                     }
@@ -1268,11 +1265,12 @@ class App implements TabletHost {
                 return val;
             }
 
-            public complete(remoteId: string, arr: string[], timestamps: number[]): void {
+            public complete(from: RemoteEnd, arr: string[], timestamps: number[]): void {
                 if (arr.length >= 2 && arr[arr.length - 1] === 'click') {
                     const val = this.getCurrent(arr, timestamps);
-                    val.switch(!val.get());
+                    val.switch(!val.get());   
                     this._app.allInformers.runningLine('Нажат ' + val.name, 3000);
+                    from.controller.boom();
                 }
             }
         })(this),
@@ -1281,8 +1279,9 @@ class App implements TabletHost {
                 { lbl: 'Свет', submenu: () =>
                     this.lights().map(x => ({
                             lbl: x.name,
-                            action: () => {
+                            action: (from) => {
                                 x.switch(!x.get());
+                                from.controller.boom();
                             }
                         }))
                 },
@@ -1321,8 +1320,8 @@ class App implements TabletHost {
 
     private makeMainMenu(menuKeys: MenuKeysType, menu: Menu): IRKeysHandler {
         return {
-            partial: (remoteId, arr, final) => {
-                const keyset = menuKeys[remoteId];
+            partial: (from, arr, final) => {
+                const keyset = menuKeys[from.remoteId];
                 // console.log(arr.slice(0, 1), [ keyset.menu ]);
                 if (!!keyset && util.arraysAreEqual(arr.slice(0, 1), [keyset.menu])) {
                     const ind = [0];
@@ -1361,7 +1360,7 @@ class App implements TabletHost {
                     if (res) {
                         if (('action' in res[0]) && res[1]) {
                             if (final) {
-                                res[0].action(); // Go ahead!
+                                res[0].action(from); // Go ahead!
                             } else {
                                 return 0;
                             }
@@ -1464,10 +1463,10 @@ class App implements TabletHost {
                             49152, "192.168.121.170", (err, bytes) => {
                             // console.log(err, bytes);
                         });
-                        await util.delay(0);
+                        await delay(0);
                     }
                 }
-                await util.delay(10);
+                await delay(10);
             }
         }, 3000);
         */
@@ -1490,7 +1489,12 @@ class App implements TabletHost {
                 .then(resStr => {
                     const res = JSON.parse(resStr) as SunrizeError | SunrizeDate;
                     if (res.status === 'OK') {
-                        const twilightBegin = new Date(res.results.civil_twilight_begin);
+                        let twilightBegin = new Date(res.results.civil_twilight_begin);
+                        const at7_00 = new Date(twilightBegin.getFullYear(), twilightBegin.getMonth(), twilightBegin.getDate(), 7, 0, 0, 0);
+                        if (twilightBegin.getTime() > at7_00.getTime()) {
+                            // If it's too dark at 7:00 - switch screen on anyway
+                            twilightBegin = at7_00;
+                        }
                         const twilightEnd = new Date(res.results.civil_twilight_end)
 
                         console.log('sunrise is at ' + twilightBegin.toLocaleString());
@@ -1618,12 +1622,13 @@ class App implements TabletHost {
 
                                     const irState = _irState!;
                                     const now = new Date().getTime();
+                                    const remoteEnd = { remoteId, controller: clockController };
 
                                     irState.seq.push(keyId);
                                     irState.timestamps.push(now);
                                     var toHandle;
                                     for (const handler of this.irKeyHandlers) {
-                                        const toWait = handler.partial(remoteId, irState.seq, false, irState.timestamps);
+                                        const toWait = handler.partial(remoteEnd, irState.seq, false, irState.timestamps);
                                         if (toWait != null) {
                                             toHandle = handler;
                                             irState.wait = toWait;
@@ -1636,12 +1641,12 @@ class App implements TabletHost {
                                         irState.seq = [];
                                     }
 
-                                    util.delay(irState.wait).then(() => {
+                                    delay(irState.wait).then(() => {
                                         const now = new Date().getTime();
                                         if ((now - irState.lastRemote) >= irState.wait) {
                                             // Go!
-                                            if (irState.handler && irState.handler.partial(remoteId, irState.seq, true, irState.timestamps) !== null) {
-                                                irState.handler.complete(remoteId, irState.seq, irState.timestamps);
+                                            if (irState.handler && irState.handler.partial(remoteEnd, irState.seq, true, irState.timestamps) !== null) {
+                                                irState.handler.complete(remoteEnd, irState.seq, irState.timestamps);
                                             }
 
                                             irState.seq = [];
@@ -2079,7 +2084,7 @@ class App implements TabletHost {
     private processDevice(device: Device): void {
         // Wait some time for device to auth...
         if (device.type !== 'offline') {
-            util.delay(1000).then(() => {
+            delay(1000).then(() => {
                 const table = this.tablets.get(device.id);
                 if (table) {
                     console.log('device - INIT', device);

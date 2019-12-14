@@ -14,19 +14,23 @@ export function parseYoutubeUrl(_url: string): UrlsInfo|undefined {
         return idsCache.get(_url);
     }
 
-    const u = new url.URL(_url);
-    var ytbId: string|null|undefined;
-    if (u.hostname === 'www.youtube.com') {
-        ytbId = u.searchParams.get('v');
-    } else if (u.hostname === 'youtu.be') {
-        ytbId = u.pathname.split('/').filter(x => !!x)[0];
+    try {
+        const u = new url.URL(_url);
+        var ytbId: string|null|undefined;
+        if (u.hostname === 'www.youtube.com') {
+            ytbId = u.searchParams.get('v');
+        } else if (u.hostname === 'youtu.be') {
+            ytbId = u.pathname.split('/').filter(x => !!x)[0];
+        }
+        if (!!ytbId) {
+            const toRet = { id: ytbId };
+            idsCache.set(_url, toRet);
+            return toRet;
+        }
+        return undefined;    
+    } catch (e) {
+        return undefined;
     }
-    if (!!ytbId) {
-        const toRet = { id: ytbId };
-        idsCache.set(_url, toRet);
-        return toRet;
-    }
-    return undefined;
 }
 
 export function getYoutubeInfo(_url: string, youtubeApiKey: string): Promise<YoutubeTrack> {
