@@ -297,11 +297,24 @@ const menuKeys = {
     'tvtuner': { menu: 'n5', up: 'n2', down: 'n8', left: 'n4', right: 'n6' },
 } as MenuKeysType;
 
-interface KeysSettings {
+type SoundType = 'lightOn' | 'lightOff' | 'alarmClock' | 'timerClock';
+
+type SoundAction = {
+    index: number;
+    volume: number;
+};
+
+function isSoundAction(x: any): x is SoundAction {
+    return typeof(x) === 'object' && 'index' in x && 'volume' in x;
+}
+
+type KeysSettings = {
     weatherApiKey: string;
     youtubeApiKey: string;
-    simulateSomeoneIsAtHome: string;
-}
+    simulateHostAtHome: boolean;
+} & {
+    [P in SoundType]: SoundAction|null;
+};
 
 function clrFromName(name: string) {
     const x = crypto.createHash('md5').update(name).digest("hex").substr(0, 6);
@@ -395,20 +408,16 @@ class App implements TabletHost {
 
     private createTimer(name: string, 
         confName: string, 
-        onFired: ((d: Date, soundNo: number, vol: number) => void),
-        noSound: boolean): TimerProp {
+        onFired: ((d: Date, sound?: SoundType) => void),
+        sound?: SoundType): TimerProp {
         interface Conf {
             val: string | null;
-            soundNo?: number;
-            soundVol?: number;
         }
 
         const conf = util.newConfig({ val: null } as Conf, confName);
         conf.read().then(conf => {
             // Prop was read, let's set props
             setNewValue(conf.val ? new Date(conf.val) : null);
-            soundNoProp.setInternal(conf.soundNo || 105);
-            volProp.setInternal(conf.soundVol || 60);
         })
 
         const onDateChanged = () => {
@@ -498,7 +507,7 @@ class App implements TabletHost {
                     const tt = that.val;
                     // Let's setup timer
                     timers.push(setTimeout(() => {
-                        onFired(tt, soundNoProp.get() + 1, volProp.get());
+                        onFired(tt, sound);
                         setNewValue(null);
                     }, msBefore));
                     [45, 30, 20, 15, 10, 5, 4, 3, 2, 1].forEach(m => {
@@ -526,30 +535,13 @@ class App implements TabletHost {
             }
         }
 
-        const soundNoProp = newWritableProperty("Sound no", 
-            0, 
-            new SelectHTMLRenderer<number>(Array.from({ length: ClockController.mp3Names.length }, ((v, k) => k)), i => i + ". " + ClockController.mp3Names[i]), 
-            {
-                onSet: (val) => {
-                    conf.change(t => t.soundNo = +val);
-                }
-            });
-        const volProp = newWritableProperty("Vol", 
-            60,
-            new SliderHTMLRenderer(), 
-            {
-                onSet: (val: number) => {
-                    conf.change(t => t.soundVol = val);
-                }
-            });
-
         const that = {
             val: null as Date | null,
             controller: {
                 name: name,
                 properties: () => [
                     hourProp, minProp, secProp, orBeforeProp, inProp
-                ].concat(noSound ? [] : [ soundNoProp, volProp ])
+                ]
             },
             fireInSeconds: (sec: number) => {
                 const d = new Date();
@@ -570,7 +562,7 @@ class App implements TabletHost {
         }
     }
 
-    public sleepAt = this.createTimer("Выкл", "off", async (d, soundNo, vol) => {
+    public sleepAt = this.createTimer("Выкл", "off", async (d) => {
         this.isSleeping = true;
         console.log("SLEEP", d);
         const wasOnIds = [];
@@ -600,9 +592,9 @@ class App implements TabletHost {
         }
 
         this.relaysState.wasOnIds = wasOnIds;
-    }, true);
+    });
 
-    public timer = this.createTimer("Таймер", "timer", async (d, soundNo, vol) => {
+    public timer = this.createTimer("Таймер", "timer", async (d, sound) => {
         console.log("Timer!");
 
         this.allInformers.staticLine("Время!");
@@ -625,13 +617,13 @@ class App implements TabletHost {
 */
         for (const c of ['ClockNRemote', 'KitchenRelay']) {
             const cr = this.findDynController(c);
-            if (cr) {
-                cr.play(vol, soundNo);
+            if (cr && sound) {
+                this.sound(cr, sound);
             }
         }
-    }, false);
+    }, 'timerClock');
 
-    public wakeAt = this.createTimer("Вкл", "on", (d, soundNo, vol) => {
+    public wakeAt = this.createTimer("Вкл", "on", (d, sound) => {
         console.log("WAKE", d);
         this.isSleeping = false;
         //this.nexus7.screenIsOn.set(true);
@@ -669,7 +661,9 @@ class App implements TabletHost {
                 if (!se) {
                     clock.screenEnabledProperty.set(true);
                 }
-                clock.play(vol, soundNo);
+                if (sound) {
+                    this.sound(clock, sound);
+                }
             } 
 
             // await delay(3000);
@@ -678,7 +672,7 @@ class App implements TabletHost {
             // this.miLight.brightness.set(80);
         }
         wake();
-    }, false);
+    }, 'alarmClock');
 
     private nowWeatherIcon = newWritableProperty<string>("", "", new ImgHTMLRenderer(40, 40));
     private nowWeather = newWritableProperty<string>("", "", new SpanHTMLRenderer());
@@ -733,10 +727,14 @@ class App implements TabletHost {
 
     private tvChannels = util.newConfig({ channels: [] as Channel[], lastUpdate: 0 }, "m3u_tv_channels");
     private channelsHistoryConf = util.newConfig({ channels: [] as Channel[] }, "tv_channels");
-    private keysSettings = util.newConfig({ 
+    private keysSettings = util.newConfig<KeysSettings>({ 
         weatherApiKey: "",
         youtubeApiKey: "",
-        simulateSomeoneIsAtHome: ""
+        simulateHostAtHome: false,
+        lightOn: { index: 0, volume: 50 },
+        lightOff: { index: 0, volume: 50 },
+        alarmClock: { index: 0, volume: 50 },
+        timerClock: { index: 0, volume: 50 }
     }, "keys");
     // private actions = util.newConfig({ actions: [] as PerformedAction[] }, "actions");
 
@@ -782,7 +780,7 @@ class App implements TabletHost {
         });
 
         // channelsProto contains all channels that are not used yet
-        const channelsProto = Array.from({ length: 99 }, (e, i) => i).filter(ch => !chToHist.has(ch));
+        const channelsProto = Array.from({ length: 20 }, (e, i) => i).filter(ch => !chToHist.has(ch));
         return this.channelsHistoryConf.last().channels.filter(h => h).map((h, index) => {
             // If needed, add own channel
             const channels = Array.prototype.concat(h.channel ? [h.channel] : [], channelsProto) as number[];
@@ -852,17 +850,50 @@ class App implements TabletHost {
                 const v = keys[kn];
                 let ret;
                 if (typeof (v) === 'string') {
-                    // const strings: Extract<KeysSettings, string> = keys;
-                    ret = newWritableProperty(kn, keys[kn], new StringAndGoRendrer("Change"), { onSet: (val: string) => {
-                        keys[kn] = val;
-                        this.keysSettings.change(keys);
-                    }});
+                    ret = [newWritableProperty(kn, keys[kn], new StringAndGoRendrer("Change"), { 
+                        onSet: (val: string) => {
+                            (keys as any)[kn] = val;
+                            this.keysSettings.change(keys);
+                        }})];
+                } else if (typeof (v) === 'boolean') {
+                    ret = [newWritableProperty<boolean>(kn, v, new CheckboxHTMLRenderer(), { 
+                        onSet: (val: boolean) => {
+                            (keys as any)[kn] = val;
+                            this.keysSettings.change(keys);
+                        }})];
+                } else if (isSoundAction(v)) {
+                    ret = [
+                        newWritableProperty<number>(kn, v.index, 
+                            new SelectHTMLRenderer<number>(Array.from(ClockController.mp3Names.keys()), 
+                                v => {
+                                    const item = ClockController.mp3Names.get(v);
+                                    if (item) {
+                                        return v + '. ' + item[0] + ' (' + util.toFixedPoint(item[1], 1) + 'с)'
+                                    } else {
+                                        return "";
+                                    }
+                                }), 
+                            {
+                                onSet: (val: number) => {
+                                    v.index = val;
+                                    this.keysSettings.change(keys);
+                                }
+                            }),
+                        newWritableProperty("Volume", v.volume,
+                            new SliderHTMLRenderer(), 
+                            {
+                                onSet: (val: number) => {
+                                    v.volume = val;
+                                    this.keysSettings.change(keys);
+                                }
+                            })
+                    ];
                 } else {
                     console.log("Property " + kn + " has unsupported type" + typeof(v));
                     return [] as Property<any>[];
                 }
    
-                return [ ret ] as Property<any>[];
+                return ret as Property<any>[];
             });
         }],
         ["actions", async () => {
@@ -1107,17 +1138,17 @@ class App implements TabletHost {
             
         }),
         this.simpleCmd([["record"]], "Лента на шкафу", (from) => {
-            from.controller.boom();
+            this.sound(from.controller, this.r1.get() ? 'lightOff' : 'lightOn');
             this.r1.switch(!this.r1.get());
         }),
         this.simpleCmd([['stop']], "Коридор", (from) => {
-            from.controller.boom();
+            this.sound(from.controller, this.r3.get() ? 'lightOff' : 'lightOn');
             this.r3.switch(!this.r3.get());
         }),
         this.simpleCmd([['time_shift']], "Потолок в комнате", (from) => {
             const roomSwitch = this.findDynController('RoomSwitchers');
             if (roomSwitch) {
-                from.controller.boom();
+                this.sound(from.controller, roomSwitch.relays[2].get() ? 'lightOff' : 'lightOn');
                 roomSwitch.relays[2].switch(!roomSwitch.relays[2].get());
             }
         }),
@@ -1125,22 +1156,20 @@ class App implements TabletHost {
             const ledStripe = this.findDynController('LedStripe');
             if (ledStripe) {
                 const prop = ledStripe.ledStripeColorProperty;
+                this.sound(from.controller, prop.get() === '00000000' ? 'lightOn' : 'lightOff');
                 prop.set(prop.get() === '00000000' ? '000000FF' : '00000000');
-                from.controller.boom();
             }
         }),
         this.simpleCmd([['clear']], "MiLight", (from) => {
-            from.controller.boom();
+            this.sound(from.controller, this.miLight.switchOn.get() ? 'lightOff' : 'lightOn');
             this.miLight.switchOn.switch(!this.miLight.switchOn.get());
         }),
 
         this.simpleCmd([['mts']], "Потолок на кухне", (from) => {
-            from.controller.boom();
-            this.toggleRelay('RelayOnKitchen', 0);
+            this.toggleRelay(from.controller, 'RelayOnKitchen', 0);
         }),
         this.simpleCmd([['min']], "Лента на кухне", (from) => {
-            from.controller.boom();
-            this.toggleRelay('RelayOnKitchen', 1);
+            this.toggleRelay(from.controller, 'RelayOnKitchen', 1);
         }),
         this.simpleCmd([['mute']], "Тихо", () => {
             if (this.savedVolumeForMute === undefined) {
@@ -1179,7 +1208,7 @@ class App implements TabletHost {
                 }
         
                 if (clock) {
-                    clock.boom();
+                    this.sound(clock, onNow ? 'lightOff' : 'lightOn');
                 }
             } else if (from.remoteId == 'encoder_left') {
                 const roomSwitch = this.findDynController('RoomSwitchers');
@@ -1195,7 +1224,7 @@ class App implements TabletHost {
                     each(r => r.set(!onNow));
 
                     if (clock) {
-                        clock.play(30, onNow ? 234 : 240);
+                        this.sound(clock, onNow ? 'lightOff' : 'lightOn');
                     }
                 }
             }
@@ -1270,7 +1299,7 @@ class App implements TabletHost {
                     const val = this.getCurrent(arr, timestamps);
                     val.switch(!val.get());   
                     this._app.allInformers.runningLine('Нажат ' + val.name, 3000);
-                    from.controller.boom();
+                    this._app.sound(from.controller, val.get() ? 'lightOff' : 'lightOn');
                 }
             }
         })(this),
@@ -1281,7 +1310,7 @@ class App implements TabletHost {
                             lbl: x.name,
                             action: (from) => {
                                 x.switch(!x.get());
-                                from.controller.boom();
+                                this.sound(from.controller, x.get() ? 'lightOff' : 'lightOn');
                             }
                         }))
                 },
@@ -1399,9 +1428,11 @@ class App implements TabletHost {
         return inArr[(newIndex + inArr.length) % inArr.length];
     }
 
-    public toggleRelay(internalName: string, index: number): void {
-        const kitchenRelay = this.findDynController(internalName);
+    public toggleRelay(remote: ClockController, relayName: string, index: number): void {
+        const kitchenRelay = this.findDynController(relayName);
         if (kitchenRelay) {
+            this.sound(remote, kitchenRelay.relays[index].get() ? 'lightOff' : 'lightOn');
+    
             kitchenRelay.relays[index].switch(!kitchenRelay.relays[index].get());
         }
     }
@@ -1850,11 +1881,13 @@ class App implements TabletHost {
                         }
                     });
             } else if (!!ytb) {
-                getYoutubeInfoById(ytb, (await this.keysSettings.read()).youtubeApiKey)
-                    .then(resInfo => {
-                        res.redirect(resInfo.thumbnailUrl);
-                    })
-                    .catch(e => console.error(e));
+                try {
+                    const resInfo = await getYoutubeInfoById(ytb, (await this.keysSettings.read()).youtubeApiKey);
+                    res.redirect(resInfo.thumbnailUrl);
+                } catch (e) {
+                    console.error(ytb);
+                    console.error(e);
+                }
             }
         });
         router.get('/tablet_screen', (req, res) => {
@@ -2254,6 +2287,15 @@ class App implements TabletHost {
             });    
         });
         
+    }
+
+    async sound(controller: ClockController, type: SoundType): Promise<void> {
+        const snd = (await this.keysSettings.read())[type];
+        if (snd !== null) {
+            controller.play(snd.volume, snd.index);
+        } else {
+            console.log('No sound set for', type);
+        }
     }
 }
 
