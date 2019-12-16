@@ -263,6 +263,8 @@ export class ClockController extends ClassWithId implements Controller {
     public readonly d3PWM?: WritableProperty<number>;
     public readonly d4PWM?: WritableProperty<number>;
     public readonly d7PWM?: WritableProperty<number>;
+    public readonly d6PWM?: WritableProperty<number>;
+    public readonly d5PWM?: WritableProperty<number>;
 
     private static baseW: Map<string, number> = new Map();
     private baseWeight?: number;
@@ -297,10 +299,14 @@ export class ClockController extends ClassWithId implements Controller {
             this.d3PWM = this.createPWMProp("D3");
             this.d4PWM = this.createPWMProp("D4");
             this.d7PWM = this.createPWMProp("D7");
+            // this.d6PWM = this.createPWMProp("D6");
+            // this.d5PWM = this.createPWMProp("D5");
     
             this._properties.push(this.d3PWM);
             this._properties.push(this.d4PWM);
             this._properties.push(this.d7PWM);
+            // this._properties.push(this.d6PWM);
+            // this._properties.push(this.d5PWM);
         }
         if (this.devParams['hasATXPowerSupply'] === 'true') {
             this._properties.push(this.atxEnabledProperty);

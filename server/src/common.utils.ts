@@ -276,7 +276,7 @@ export function newConfig<T extends Object>(initial: T, fileName: string): Confi
                                     this._read = true;
                                     for (const pn of Object.getOwnPropertyNames(initial)) {
                                         const kn = pn as (keyof T);
-                                        if (!(pn in this._data)) {
+                                        if (!(pn in this._data) || this._data[kn] === null) {
                                             this._data[kn] = initial[kn];
                                         }
                                     } 

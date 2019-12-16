@@ -12,7 +12,7 @@ import * as querystring from 'querystring';
 import * as curl from "./http.util";
 import * as util from "./common.utils";
 import { getYoutubeInfo, parseYoutubeUrl, getYoutubeInfoById } from "./youtube.utils";
-import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer, ImgHTMLRenderer, Disposable, OnOff, HTMLRederer } from "./properties";
+import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer, ImgHTMLRenderer, Disposable, OnOff, HTMLRederer, HourMin, isHourMin, HourMinHTMLRenderer, nowHourMin, hourMinCompare } from "./properties";
 import { TabletHost, Tablet, adbClient, Tracker, Device } from "./android.tablet";
 import { CompositeLcdInformer } from './informer.api';
 import { ClockController, Hello, ClockControllerEvents } from './esp8266.controller';
@@ -312,9 +312,23 @@ type KeysSettings = {
     weatherApiKey: string;
     youtubeApiKey: string;
     simulateHostAtHome: boolean;
+    dayBeginsAt: HourMin,
+    dayEndsAt: HourMin
 } & {
     [P in SoundType]: SoundAction|null;
 };
+
+const defKeysSettings: KeysSettings = { 
+    weatherApiKey: "",
+    youtubeApiKey: "",
+    simulateHostAtHome: false,
+    lightOn: { index: 0, volume: 50 },
+    lightOff: { index: 0, volume: 50 },
+    alarmClock: { index: 0, volume: 50 },
+    timerClock: { index: 0, volume: 50 },
+    dayBeginsAt: { h: 7,  m: 0},
+    dayEndsAt: { h: 22, m: 30}
+}
 
 function clrFromName(name: string) {
     const x = crypto.createHash('md5').update(name).digest("hex").substr(0, 6);
@@ -727,15 +741,7 @@ class App implements TabletHost {
 
     private tvChannels = util.newConfig({ channels: [] as Channel[], lastUpdate: 0 }, "m3u_tv_channels");
     private channelsHistoryConf = util.newConfig({ channels: [] as Channel[] }, "tv_channels");
-    private keysSettings = util.newConfig<KeysSettings>({ 
-        weatherApiKey: "",
-        youtubeApiKey: "",
-        simulateHostAtHome: false,
-        lightOn: { index: 0, volume: 50 },
-        lightOff: { index: 0, volume: 50 },
-        alarmClock: { index: 0, volume: 50 },
-        timerClock: { index: 0, volume: 50 }
-    }, "keys");
+    private keysSettings = util.newConfig<KeysSettings>(defKeysSettings, "keys");
     // private actions = util.newConfig({ actions: [] as PerformedAction[] }, "actions");
 
     private channelAsController(h: Channel, 
@@ -861,6 +867,17 @@ class App implements TabletHost {
                             (keys as any)[kn] = val;
                             this.keysSettings.change(keys);
                         }})];
+                } else if (isHourMin(v)) {
+                    ret = [
+                        newWritableProperty<HourMin>(kn, v, 
+                            new HourMinHTMLRenderer(), 
+                            {
+                                onSet: (val: HourMin) => {
+                                    (keys as any)[kn] = val;
+                                    this.keysSettings.change(keys);
+                                }
+                            })
+                    ];
                 } else if (isSoundAction(v)) {
                     ret = [
                         newWritableProperty<number>(kn, v.index, 
@@ -1062,7 +1079,7 @@ class App implements TabletHost {
 
         (async () => {
             const keys = await this.keysSettings.read();
-            if (keys.simulateSomeoneIsAtHome === 'true') {
+            if (keys.simulateHostAtHome) {
                 // await delay(Math.random()*30*60*1000); // Wait [0..30] minutes
                 console.log('Switch light on');
                 await this.switchLightOnWaitAndOff();
@@ -1723,20 +1740,24 @@ class App implements TabletHost {
                 const lambda = this.allPropsFor.get(url[0]);
                 let dispose: Disposable[] = [];
                 if (lambda) {
-                    lambda().then(allProps => {
-                        allProps.forEach(propArr => {
-                            propArr.forEach(prop => {
-                                dispose.push(prop.onChange(() => {
-                                    this.broadcastToWebClients({
-                                        type: "onPropChanged",
-                                        id: prop.id,
-                                        name: prop.name,
-                                        val: prop.htmlRenderer.toHtmlVal(prop.get())
-                                    });
-                                }));
+                    lambda()
+                        .then(allProps => {
+                            allProps.forEach(propArr => {
+                                propArr.forEach(prop => {
+                                    dispose.push(prop.onChange(() => {
+                                        this.broadcastToWebClients({
+                                            type: "onPropChanged",
+                                            id: prop.id,
+                                            name: prop.name,
+                                            val: prop.htmlRenderer.toHtmlVal(prop.get())
+                                        });
+                                    }));
+                                });
                             });
+                        })
+                        .catch(e => {
+                            console.error(e);
                         });
-                    });
                 }
 
                 // This is web client. Let's report server revision
@@ -1750,7 +1771,11 @@ class App implements TabletHost {
                         const prop = ClassWithId.byId<Property<any>>(msg.id);
                         if (prop) {
                             if (isWriteableProperty(prop)) {
-                                prop.set(msg.val);
+                                if (prop.unwire) {
+                                    prop.set(prop.unwire(msg.val));
+                                } else {
+                                    prop.set(msg.val);
+                                }
                             } else {
                                 console.error(`Property ${prop.name} is not writable`);
                             }
@@ -2292,10 +2317,17 @@ class App implements TabletHost {
     async sound(controller: ClockController, type: SoundType): Promise<void> {
         const snd = (await this.keysSettings.read())[type];
         if (snd !== null) {
-            controller.play(snd.volume, snd.index);
+            // If there is a day - play full sound, at night - play only half
+            controller.play((await this.isNightMode()) ? snd.volume * 4 / 10 : snd.volume, snd.index);
         } else {
             console.log('No sound set for', type);
         }
+    }
+
+    public async isNightMode(): Promise<boolean> {
+        const keys: KeysSettings = await this.keysSettings.read();
+        const now = nowHourMin();
+        return hourMinCompare(keys.dayBeginsAt, now) >= 0 || hourMinCompare(now, keys.dayEndsAt) >= 0;
     }
 }
 

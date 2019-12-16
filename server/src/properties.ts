@@ -164,8 +164,47 @@ export class StringAndGoRendrer implements HTMLRederer<string> {
     toHtmlVal(t: string): any { return t; }
 }
 
+export type HourMin = {
+    h: number;
+    m: number;
+}
+
+export function isHourMin(x: any): x is HourMin {
+    return typeof(x) === 'object' && 'h' in x && 'm' in x;
+}
+
+export function nowHourMin(): HourMin {
+    const d = new Date();
+    return { h: d.getHours(), m: d.getMinutes() };
+}
+
+export function hourMinCompare(hm1: HourMin, hm2: HourMin): number {
+    if (hm1.h == hm2.h) {
+        return hm1.m - hm2.m;
+    }
+    
+    return hm1.h - hm2.h;
+}
+
+export class HourMinHTMLRenderer implements HTMLRederer<HourMin> {
+    body(prop: Property<HourMin>): string {
+        return `<label>${prop.name}
+            <input id='${prop.id}' type="time" name="${prop.name}" value="${prop.get().h.toLocaleString('en', { minimumIntegerDigits:2 }) + ":" + prop.get().m.toLocaleString('en', { minimumIntegerDigits:2 })}"
+                onchange="var v = document.getElementById('${prop.id}').value.match(/(\\\d?\\\d):(\\\d\\\d)/); sendVal('${prop.id}', '${prop.name}', { h: v[1], m : v[2] })"/>
+            </label>`;
+    }
+
+    updateCode(prop: Property<HourMin>): string {
+        return `document.getElementById('${prop.id}').value = val.h.toLocaleString('en', { minimumIntegerDigits:2 }) + ":" + val.m.toLocaleString('en', { minimumIntegerDigits:2 })`;
+    }
+
+    toHtmlVal(t: HourMin): any { return JSON.stringify(t); }
+}
+
 export interface WritableProperty<T> extends Property<T> {
     set(val: T): void;
+
+    unwire?(v: any): T;
 }
 
 export function isWriteableProperty<T>(object: Property<T>): object is WritableProperty<T> {
@@ -246,11 +285,12 @@ export function newWritableProperty<T>(
     htmlRenderer: HTMLRederer<T> = voidHTMLRenderer(), 
     handlers: { 
         init?(_this: WritablePropertyImpl<T>): void;
+        unwire?(v: any): T;
         onSet?(v:T, oldV:T): void;
         preSet?(v:T): T;
     } = {}): WritablePropertyImpl<T> {
 
-    return new (class WP extends WritablePropertyImpl<T> {
+    const ret = new (class WP extends WritablePropertyImpl<T> {
         constructor() {
             super(name, htmlRenderer, initial);
             if (handlers.init) { 
@@ -269,6 +309,9 @@ export function newWritableProperty<T>(
             }
         }
     })();
+
+    ret.unwire = handlers.unwire;
+    return ret;
 }
 
 export class Button extends WritablePropertyImpl<void> {
