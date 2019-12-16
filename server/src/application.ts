@@ -351,7 +351,7 @@ class App implements TabletHost {
 
     private r1 = new GPIORelay("Лента на шкафу", 38, this.gpioRelays, 0, "Комната");
     // private r2 = new GPIORelay("Розетка 0", 40, this.gpioRelays, 1, "Комната");
-    private r3 = new GPIORelay("Коридор", 36, this.gpioRelays, 2, "Коридор");
+    // private r3 = new GPIORelay("Коридор", 36, this.gpioRelays, 2, "Коридор");
     private r4 = new GPIORelay("Лампа на шкафу", 32, this.gpioRelays, 3, "Комната");
     // private r5 = new GPIORelay("R5", 37, this.gpioRelays, 4);
     // private r6 = new GPIORelay("R6", 35, this.gpioRelays, 5);
@@ -362,7 +362,7 @@ class App implements TabletHost {
 
     private ctrlGPIO = {
         name: "Комната",
-        properties: () => [this.r1, /*this.r2,*/ this.r4, this.r3, /*this.r5, this.r6, this.r7, this.r8 */ ]
+        properties: () => [this.r1, /*this.r2,*/ this.r4, /* this.r3, this.r5, this.r6, this.r7, this.r8 */ ]
     }
 
     private dynamicControllers: Map<string, ClockController> = new Map();
@@ -1105,7 +1105,7 @@ class App implements TabletHost {
         return ([
                 this.miLight.switchOn,
                 this.r1,
-                this.r3,
+                // this.r3,
                 this.r4,
             ] as OnOff[])
             .concat(...dynSwitchers)
@@ -1119,10 +1119,11 @@ class App implements TabletHost {
                         return Promise.resolve(void 0);
                     }
                 })('Лента на двери', 'Комната')] : []))
-            .concat(...([
-                    ['LedController1', 'Лента на столе', 'Комната'], 
-                    ['SmallLamp', 'Маленькая лампа на столе', 'Комната']
-                ]
+            .concat(...(([
+                    ['LedController1', 'Коридор', 'Коридор'], 
+                    // ['SmallLamp', 'Маленькая лампа на столе', 'Комната']
+                    ['RoomLedController', 'Ленты на карнизах', 'Комната'], 
+                ])
                 .filter(([id]) => {
                     return this.findDynController(id);
                 })
@@ -1158,9 +1159,13 @@ class App implements TabletHost {
             this.sound(from.controller, this.r1.get() ? 'lightOff' : 'lightOn');
             this.r1.switch(!this.r1.get());
         }),
-        this.simpleCmd([['stop']], "Коридор", (from) => {
-            this.sound(from.controller, this.r3.get() ? 'lightOff' : 'lightOn');
-            this.r3.switch(!this.r3.get());
+        this.simpleCmd([['stop']], "Ленты на карнизах", (from) => {
+            const l = this.lights();
+            const onoff = l.find(x => x.name === 'Ленты на карнизах');
+            if (onoff) {
+                this.sound(from.controller, onoff.get() ? 'lightOff' : 'lightOn');
+                onoff.switch(!onoff.get());
+            }
         }),
         this.simpleCmd([['time_shift']], "Потолок в комнате", (from) => {
             const roomSwitch = this.findDynController('RoomSwitchers');

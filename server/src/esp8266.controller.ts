@@ -230,12 +230,15 @@ export class ClockController extends ClassWithId implements Controller {
                 if (this.devParams["hasLedStripe"] === 'true') {
                     this.ledStripeColorProperty.set(val ? '000000FF' : '00000000');
                 }
+                if (this.devParams['hasATXPowerSupply'] === 'true') {
+                    this.atxEnabledProperty.set(val);
+                }
                 if (this.devParams["hasPWMOnD0"] === 'true') {
                     if (this.d3PWM && this.d4PWM) {
                         if (val) {
-                            this.d3PWM.set(7);
+                            this.d4PWM.set(50);
                         } else {
-                            this.d3PWM.set(0);
+                            this.d4PWM.set(0);
                         }
                     }
                 }
