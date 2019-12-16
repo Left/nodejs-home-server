@@ -234,9 +234,9 @@ export class ClockController extends ClassWithId implements Controller {
                     this.atxEnabledProperty.set(val);
                 }
                 if (this.devParams["hasPWMOnD0"] === 'true') {
-                    if (this.d3PWM && this.d4PWM) {
+                    if (this.d4PWM) {
                         if (val) {
-                            this.d4PWM.set(50);
+                            this.d4PWM.set(30);
                         } else {
                             this.d4PWM.set(0);
                         }
@@ -263,11 +263,7 @@ export class ClockController extends ClassWithId implements Controller {
             }
         }});
     public potentiometerProperty = newWritableProperty('Potentiometer', 0, new SpanHTMLRenderer(x => x.toString(10)));
-    public readonly d3PWM?: WritableProperty<number>;
     public readonly d4PWM?: WritableProperty<number>;
-    public readonly d7PWM?: WritableProperty<number>;
-    public readonly d6PWM?: WritableProperty<number>;
-    public readonly d5PWM?: WritableProperty<number>;
 
     private static baseW: Map<string, number> = new Map();
     private baseWeight?: number;
@@ -299,17 +295,9 @@ export class ClockController extends ClassWithId implements Controller {
         }
         if (this.devParams['hasPWMOnD0'] === 'true') {
             this._properties.push(this.screenEnabledProperty);
-            this.d3PWM = this.createPWMProp("D3");
             this.d4PWM = this.createPWMProp("D4");
-            this.d7PWM = this.createPWMProp("D7");
-            // this.d6PWM = this.createPWMProp("D6");
-            // this.d5PWM = this.createPWMProp("D5");
     
-            this._properties.push(this.d3PWM);
             this._properties.push(this.d4PWM);
-            this._properties.push(this.d7PWM);
-            // this._properties.push(this.d6PWM);
-            // this._properties.push(this.d5PWM);
         }
         if (this.devParams['hasATXPowerSupply'] === 'true') {
             this._properties.push(this.atxEnabledProperty);
