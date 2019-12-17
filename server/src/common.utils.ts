@@ -305,9 +305,9 @@ export function newConfig<T extends Object>(initial: T, fileName: string): Confi
         async change(props: any): Promise<void> {
             let t = await this.read();
             if (typeof props == 'function') {
-                t = props(t);
+                props(t);
             } else {
-                t = { ...t, props};
+                this._data = { ...this._data, ...props};
             }
             return this.writeFileAsync();
         }
@@ -336,3 +336,39 @@ export type FilterFlags<Base, Condition> = {
     [Key in keyof Base]: 
         Base[Key] extends Condition ? Key : never
 };
+
+/////////////////////////////////////////////////////////////////
+// Date and time
+
+export type HourMin = {
+    h: number;
+    m: number;
+    s?: number;
+}
+
+export function isHourMin(x: any): x is HourMin {
+    return typeof(x) === 'object' && 'h' in x && 'm' in x;
+}
+
+export function nowHourMin(): HourMin {
+    const d = new Date();
+    return { h: d.getHours(), m: d.getMinutes(), s: d.getSeconds() };
+}
+
+export function toSec(hm: HourMin): number {
+    return hm.h*3600 + hm.m*60 + (hm.s || 0);
+}
+
+export function hourMinCompare(hm1: HourMin, hm2: HourMin): number {
+    if (hm1.h == hm2.h) {
+        if (hm1.m == hm2.m) {
+            return (hm1.s || 0) - (hm2.s || 0);
+        }
+    
+        return hm1.m - hm2.m;
+    }
+    
+    return hm1.h - hm2.h;
+}
+
+/////////////////////////////////////////////////////////////////

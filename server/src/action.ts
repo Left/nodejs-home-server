@@ -19,7 +19,9 @@ export function proxify<T>(def: T): AsyncSettings<T> {
 
                 });
             }
-            return Promise.resolve(target[name]);
+            return new Promise((accept, reject) => {
+
+            });
         }
     });
 }

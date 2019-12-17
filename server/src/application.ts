@@ -10,9 +10,9 @@ import * as crypto from 'crypto';
 import * as querystring from 'querystring';
 
 import * as curl from "./http.util";
-import * as util from "./common.utils";
+import { HourMin, isHourMin, nowHourMin, hourMinCompare, toSec, runShell, Config, newConfig, arraysAreEqual, emptyDisposable, getFirstNonPrefixIndex, isNumKey, numArrToVal, toFixedPoint, tempAsString, doAt, parseOr, wrapToHTML, splitLines, toHourMinSec  } from "./common.utils";
 import { getYoutubeInfo, parseYoutubeUrl, getYoutubeInfoById } from "./youtube.utils";
-import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer, ImgHTMLRenderer, Disposable, OnOff, HTMLRederer, HourMin, isHourMin, HourMinHTMLRenderer, nowHourMin, hourMinCompare } from "./properties";
+import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer, ImgHTMLRenderer, Disposable, OnOff, HTMLRederer, HourMinHTMLRenderer } from "./properties";
 import { TabletHost, Tablet, adbClient, Tracker, Device } from "./android.tablet";
 import { CompositeLcdInformer } from './informer.api';
 import { ClockController, Hello, ClockControllerEvents } from './esp8266.controller';
@@ -25,13 +25,13 @@ class GPIORelay extends Relay {
     private _modeWasSet: boolean = false;
     static readonly gpioCmd = "/root/WiringOP/gpio/gpio";
 
-    constructor(readonly name: string, public readonly pin: number, private readonly conf: util.Config<{ relays: boolean[] }>, private readonly index: number, location: string) {
+    constructor(readonly name: string, public readonly pin: number, private readonly conf: Config<{ relays: boolean[] }>, private readonly index: number, location: string) {
         super(name, location);
 
         this.conf.read().then(conf => this.setInternal(conf.relays[this.index]));
 
         if (GPIORelay.gpioInstalled()) {
-            this._init = util.runShell(GPIORelay.gpioCmd, ["-1", "read", "" + this.pin])
+            this._init = runShell(GPIORelay.gpioCmd, ["-1", "read", "" + this.pin])
                 .then((str) => {
                     this.setInternal(str.startsWith("0"));
                     return void 0;
@@ -55,13 +55,13 @@ class GPIORelay extends Relay {
         // console.trace("GPIO switch ", on);
         if (!this._modeWasSet) {
             this._init = this._init.then(() =>
-                util.runShell(GPIORelay.gpioCmd, ["-1", "mode", "" + this.pin, "out"])
+                runShell(GPIORelay.gpioCmd, ["-1", "mode", "" + this.pin, "out"])
                     .then(() => Promise.resolve(void 0))
                     .catch(err => console.log(err.errno)));
         }
 
         return this._init.then(() => {
-            return util.runShell(GPIORelay.gpioCmd, ["-1", "write", "" + this.pin, on ? "0" : "1"])
+            return runShell(GPIORelay.gpioCmd, ["-1", "write", "" + this.pin, on ? "0" : "1"])
                 .then(() => {
                     this.setInternal(on);
                     return this.conf.change(d => { d.relays[this.index] = on });
@@ -127,7 +127,7 @@ class MiLightBulb implements Controller {
     readonly ip = "192.168.121.35";
     readonly port = 8899;
 
-    constructor(private config: util.Config<MiLightBulbState>) {
+    constructor(private config: Config<MiLightBulbState>) {
         config.read().then(conf => {
             this.switchOn.setInternal(conf.on);
             this.allWhite.setInternal(conf.allWhite);
@@ -270,7 +270,7 @@ function compareChannels(c1: Channel, c2: Channel): number {
     return 0; // Should never happen
 }
 
-type TimerProp = { val: Date | null, controller: Controller, fireInSeconds: (sec: number) => void };
+type TimerProp = { val: HourMin, controller: Controller, fireInSeconds: (sec: number) => void };
 
 type Labeled = {
     lbl: string;
@@ -298,6 +298,7 @@ const menuKeys = {
 } as MenuKeysType;
 
 type SoundType = 'lightOn' | 'lightOff' | 'alarmClock' | 'timerClock';
+type TimersType = 'dayBeginsAt' | 'dayEndsAt' | 'sleepAt' | 'wakeAt' | 'timer1At';
 
 type SoundAction = {
     index: number;
@@ -312,10 +313,10 @@ type KeysSettings = {
     weatherApiKey: string;
     youtubeApiKey: string;
     simulateHostAtHome: boolean;
-    dayBeginsAt: HourMin,
-    dayEndsAt: HourMin
 } & {
     [P in SoundType]: SoundAction|null;
+} & {
+    [P in TimersType]: HourMin;
 };
 
 const defKeysSettings: KeysSettings = { 
@@ -327,7 +328,10 @@ const defKeysSettings: KeysSettings = {
     alarmClock: { index: 0, volume: 50 },
     timerClock: { index: 0, volume: 50 },
     dayBeginsAt: { h: 7,  m: 0},
-    dayEndsAt: { h: 22, m: 30}
+    dayEndsAt: { h: 23, m: 0},
+    sleepAt: { h: -1, m: -1},
+    wakeAt: { h: -1, m: -1},
+    timer1At: { h: -1, m: -1},
 }
 
 function clrFromName(name: string) {
@@ -347,7 +351,7 @@ class App implements TabletHost {
     public currentTemp?: number;
     public isSleeping: boolean = false;
 
-    private gpioRelays = util.newConfig({ relays: [false, false, false, false] }, "relays");
+    private gpioRelays = newConfig({ relays: [false, false, false, false] }, "relays");
 
     private r1 = new GPIORelay("Лента на шкафу", 38, this.gpioRelays, 0, "Комната");
     // private r2 = new GPIORelay("Розетка 0", 40, this.gpioRelays, 1, "Комната");
@@ -396,8 +400,8 @@ class App implements TabletHost {
     });
 
 
-    private miLightNow = { on: false, brightness: 0, hue: 0, allWhite: true };
-    private miLightState = util.newConfig(this.miLightNow, "miLight");
+    private miLightNow: MiLightBulbState = { on: false, brightness: 0, hue: 0, allWhite: true };
+    private miLightState = newConfig<MiLightBulbState>(this.miLightNow, "miLight");
 
     private readonly miLight = new MiLightBulb(this.miLightState);
 
@@ -412,45 +416,34 @@ class App implements TabletHost {
     private readonly lat = 44.9704778;
     private readonly lng = 34.1187681;
 
-    private timeProp(name: string, upto: number, onChange: (v: number) => void): WritablePropertyImpl<number> {
-        return newWritableProperty<number>(
-            name,
-            0,
-            new SelectHTMLRenderer<number>(Array.from({ length: upto }, ((v, k) => k)), i => "" + i),
-            { onSet: (v: number) => { onChange(v); }});
-    }
+    private keysSettings = newConfig<KeysSettings>(defKeysSettings, "keys");
 
     private createTimer(name: string, 
-        confName: string, 
-        onFired: ((d: Date, sound?: SoundType) => void),
+        confName: TimersType, 
+        onFired: ((d: HourMin, sound?: SoundType) => void),
         sound?: SoundType): TimerProp {
-        interface Conf {
-            val: string | null;
-        }
 
-        const conf = util.newConfig({ val: null } as Conf, confName);
-        conf.read().then(conf => {
+        this.keysSettings.read().then(conf => {
             // Prop was read, let's set props
-            setNewValue(conf.val ? new Date(conf.val) : null);
+            setNewValue(conf[confName]);
         })
+       
+        const tProp = newWritableProperty<HourMin>("", this.keysSettings.last()[confName], 
+            new HourMinHTMLRenderer(), 
+            { 
+                onSet: (val: HourMin) => {
+                    that.val = val;
+                    onDateChanged();
+                }
+            });
 
         const onDateChanged = () => {
-            const hh = hourProp.get();
-            const mm = minProp.get();
-            const ss = secProp.get();
-
-            if (hh !== null && mm !== null) {
-                setNewValue(util.thisOrNextDayFromHMS(hh, mm, ss || 0));
-                orBeforeProp.setInternal(1);
-            } else {
-                setNewValue(null);
-            }
+            setNewValue(tProp.get());
+            orBeforeProp.setInternal(1);
         };
-        const hourProp = this.timeProp("Час", 24, onDateChanged);
-        const minProp = this.timeProp("Мин", 60, onDateChanged);
-        const secProp = this.timeProp("Сек", 60, onDateChanged);
+            
         const inProp = newWritableProperty<number|undefined>("через", 0,
-            new SpanHTMLRenderer<number>(n => n === undefined ? "" : util.toHourMinSec(n)));
+            new SpanHTMLRenderer<number>(n => n === undefined ? "" : toHourMinSec(n)));
 
         const min = 60;
         const hour = 60 * min;
@@ -466,7 +459,7 @@ class App implements TabletHost {
                 // console.log(_n);
                 const n = timerIn[_n];
                 if (n.startsWith("val")) {
-                    return util.toHourMinSec(+n.slice(3));
+                    return toHourMinSec(+n.slice(3));
                 } else if (n === "never") {
                     return "никогда";
                 } else if (n === "atdate") {
@@ -475,20 +468,28 @@ class App implements TabletHost {
                 return "";
             }),
             { onSet: (_n: number) => {
+                console.log('onSet');
                 const n = timerIn[_n];
                 if (n.startsWith("val")) {
                     that.fireInSeconds(+n.slice(3));
                 } else if (n === "never") {
-                    setNewValue(null);
+                    setNewValue({ h: -1, m: -1, s: -1});
                 } else if (n === "atdate") {
                     onDateChanged();
                 }
             }});
         var timers: NodeJS.Timer[] = [];
         let intervalTimer: NodeJS.Timer;
-        const setNewValue = (d: Date | null) => {
-            console.log(name + " --> " + d);
-            if (d !== that.val) {
+        const setNewValue = (d: HourMin) => {
+            try {
+                return _setNewValue(d);
+            } catch (e) {
+                console.error(e);
+            }
+        }
+        const _setNewValue = (d: HourMin) => {
+            console.log(name + " --> ", d);
+            if (hourMinCompare(d, that.val) !== 0) {
                 // that.val === undefined || that.val.getTime() != d.getTime())) {
                 timers.forEach(t => clearTimeout(t));
                 timers = [];
@@ -498,8 +499,14 @@ class App implements TabletHost {
                 }
                 if (d) {
                     intervalTimer = setInterval(() => {
-                        if (that.val) {
-                            inProp.setInternal(Math.floor((that.val.getTime() - Date.now())/1000));
+                        if (that.val.h !== -1 && that.val.m !== -1) {
+                            const now = toSec(nowHourMin());
+                            let thatMs = toSec(that.val);
+                            if (thatMs < now) {
+                                // move to next day
+                                thatMs += 24*60*60;
+                            }
+                            inProp.setInternal(thatMs - now);
                         } else {
                             inProp.setInternal(undefined);
                         }
@@ -510,56 +517,69 @@ class App implements TabletHost {
 
 
                 that.val = d;
-                if (that.val !== null) {
-                    const msBefore = (that.val.getTime() - new Date().getTime());
+                if (that.val.h !== -1 && that.val.m !== -1) {
+                    const now = toSec(nowHourMin());
+                    let thatMs = toSec(that.val);
+                    if (thatMs < now) {
+                        // move to next day
+                        thatMs += 24*60*60;
+                    }
 
-                    hourProp.setInternal(that.val.getHours());
-                    minProp.setInternal(that.val.getMinutes());
-                    secProp.setInternal(that.val.getSeconds());
+                    tProp.set(that.val);
                     orBeforeProp.setInternal(1);
 
                     const tt = that.val;
                     // Let's setup timer
                     timers.push(setTimeout(() => {
                         onFired(tt, sound);
-                        setNewValue(null);
-                    }, msBefore));
+                        setNewValue({ h: -1, m: -1, s: -1 });
+                    }, (thatMs - now) * 1000));
                     [45, 30, 20, 15, 10, 5, 4, 3, 2, 1].forEach(m => {
-                        const msB = msBefore - m*60*1000;
+                        const msB = (thatMs - now) - m*60;
                         if (msB > 0) {
                             timers.push(setTimeout(() => {
                                 // 
                                 console.log(m + ' минут до ' + name);
                                 this.allInformers.runningLine(m + ' минут до ' + name.toLowerCase(), 3000);
-                            }, msB));
+                            }, msB * 1000));
                         }
-                    });
-                    conf.change({ val: that.val!.toJSON() });
+                    }); 
+                    const toSave = {} as Partial<typeof defKeysSettings>;
+                    toSave[confName] = that.val;
+                    this.keysSettings.change(toSave);
                 } else {
-                    // Dropped timer
-                    // hourProp.setInternal(0);
-                    // minProp.setInternal(null);
-                    // secProp.setInternal(null);
-                    hourProp.setInternal(0);
-                    minProp.setInternal(0);
-                    secProp.setInternal(0);
+                    // Dropped timer 
+                    tProp.setInternal({ h: -1, m: -1, s: -1 });
                     orBeforeProp.setInternal(0);
-                    conf.change({ val: null });
+                    const toSave = {} as Partial<typeof defKeysSettings>;
+                    toSave[confName] = that.val;
+                    this.keysSettings.change(toSave);
                 }
             }
         }
 
         const that = {
-            val: null as Date | null,
+            val: { h: -1, m: -1} as HourMin,
             controller: {
                 name: name,
                 properties: () => [
-                    hourProp, minProp, secProp, orBeforeProp, inProp
+                    tProp, orBeforeProp, inProp
                 ]
             },
             fireInSeconds: (sec: number) => {
-                const d = new Date();
-                d.setTime(d.getTime() + sec * 1000);
+                console.log('fireInSeconds', sec);
+                const d = nowHourMin();
+                let x = (d.s || 0) + d.m * 60 + d.h * 3600;
+
+                x += sec;
+                x = x % (24*60*60);
+
+                d.h = Math.floor(x / 3600) % 24;
+                x -= d.h * 3600;
+                d.m = Math.floor(x / 60) % 60;
+                x -= d.m * 60;
+                d.s = x;               
+
                 setNewValue(d);
             }
         };
@@ -576,39 +596,20 @@ class App implements TabletHost {
         }
     }
 
-    public sleepAt = this.createTimer("Выкл", "off", async (d) => {
+    public sleepAt = this.createTimer("Выкл", "sleepAt", async (d) => {
         this.isSleeping = true;
-        console.log("SLEEP", d);
-        const wasOnIds = [];
-        for (const ctrl of this.controllers) {
-            for (const prop of ctrl.properties()) {
-                if (prop instanceof Relay) {
-                    if (prop.get()) {
-                        wasOnIds.push(prop.id);
-                    }
-                    prop.set(false);
-                    await delay(1000);
-                }
-            }
-        }
+
         const clock = this.findDynController('ClockNRemote');
         if (clock) {
-            await delay(500);
             clock.screenEnabledProperty.set(false);
         }
-        const ledStripe = this.findDynController('LedStripe');
-        if (ledStripe) {
-            ledStripe.screenEnabledProperty.set(false);
-        }
-        const ledController1 = this.findDynController('LedController1');
-        if (ledController1) {
-            ledController1.screenEnabledProperty.set(false);
-        }
 
-        this.relaysState.wasOnIds = wasOnIds;
+        for (const l of this.lights()) {
+            l.switch(false);
+        }
     });
 
-    public timer = this.createTimer("Таймер", "timer", async (d, sound) => {
+    public timer = this.createTimer("Таймер", 'timer1At', async (d, sound) => {
         console.log("Timer!");
 
         this.allInformers.staticLine("Время!");
@@ -637,22 +638,10 @@ class App implements TabletHost {
         }
     }, 'timerClock');
 
-    public wakeAt = this.createTimer("Вкл", "on", (d, sound) => {
-        console.log("WAKE", d);
+    public wakeAt = this.createTimer("Вкл", 'wakeAt', (d, sound) => {
         this.isSleeping = false;
-        //this.nexus7.screenIsOn.set(true);
-        // for (const wo of this.relaysState.wasOnIds) {
-        //     (ClassWithId.byId(wo) as Relay).set(true);
-        // }
         const wake = async () => {
             this.allInformers.runningLine("Просыпаемся...", 10000);
-
-            // await delay(2000);
-            // this.miLight.brightness.set(10);
-            // await delay(100);
-            // this.miLight.allWhite.set(true);
-            // await delay(100);
-            // this.miLight.switchOn.set(true);
 
             this.kindle.screenIsOn.set(true);
             await delay(100)
@@ -679,11 +668,6 @@ class App implements TabletHost {
                     this.sound(clock, sound);
                 }
             } 
-
-            // await delay(3000);
-            // this.r1.switch(true);
-
-            // this.miLight.brightness.set(80);
         }
         wake();
     }, 'alarmClock');
@@ -726,7 +710,7 @@ class App implements TabletHost {
             Button.create("Reboot service", () => {
                 this.rebootService();
             }),
-            Button.create("Reboot Orange Pi", () => util.runShell("reboot", [])),
+            Button.create("Reboot Orange Pi", () => runShell("reboot", [])),
             Button.createClientRedirect("TV Channels", "/tv.html"),
             Button.create("Reload TV channels", () => this.reloadM3uPlaylists()),
             Button.createClientRedirect("Lights", "/lights.html"),
@@ -739,10 +723,9 @@ class App implements TabletHost {
         ]
     }
 
-    private tvChannels = util.newConfig({ channels: [] as Channel[], lastUpdate: 0 }, "m3u_tv_channels");
-    private channelsHistoryConf = util.newConfig({ channels: [] as Channel[] }, "tv_channels");
-    private keysSettings = util.newConfig<KeysSettings>(defKeysSettings, "keys");
-    // private actions = util.newConfig({ actions: [] as PerformedAction[] }, "actions");
+    private tvChannels = newConfig({ channels: [] as Channel[], lastUpdate: 0 }, "m3u_tv_channels");
+    private channelsHistoryConf = newConfig({ channels: [] as Channel[] }, "tv_channels");
+    // private actions = newConfig({ actions: [] as PerformedAction[] }, "actions");
 
     private channelAsController(h: Channel, 
         additionalPropsBefore: Property<any>[] = [],
@@ -885,7 +868,7 @@ class App implements TabletHost {
                                 v => {
                                     const item = ClockController.mp3Names.get(v);
                                     if (item) {
-                                        return v + '. ' + item[0] + ' (' + util.toFixedPoint(item[1], 1) + 'с)'
+                                        return v + '. ' + item[0] + ' (' + toFixedPoint(item[1], 1) + 'с)'
                                     } else {
                                         return "";
                                     }
@@ -946,11 +929,11 @@ class App implements TabletHost {
     private simpleCmd(prefixes: string[][], showName: string, action: (from: RemoteEnd, keys: string[]) => void): IRKeysHandler {
         return {
             partial: (remoteId, arr, finalCheck) => {
-                if (prefixes.some(prefix => util.arraysAreEqual(prefix, arr))) {
+                if (prefixes.some(prefix => arraysAreEqual(prefix, arr))) {
                     return 0; // Accept immediatelly
                 }
 
-                if (prefixes.some(prefix => util.arraysAreEqual(prefix.slice(0, arr.length), arr))) {
+                if (prefixes.some(prefix => arraysAreEqual(prefix.slice(0, arr.length), arr))) {
                     return 1500; // Wait for cmd to complete
                 }
                 return null;
@@ -965,8 +948,8 @@ class App implements TabletHost {
     private createPowerOnOffTimerKeys(prefix: string, actions: () => { showName: string, valueName?: string, action: (dd: number) => void }[]): IRKeysHandler {
         return {
             partial: (remoteId, arr, finalCheck) => {
-                const firstNonPref = util.getFirstNonPrefixIndex(arr, prefix)
-                if (firstNonPref == 0 || arr.slice(firstNonPref).some(x => !util.isNumKey(x))) {
+                const firstNonPref = getFirstNonPrefixIndex(arr, prefix)
+                if (firstNonPref == 0 || arr.slice(firstNonPref).some(x => !isNumKey(x))) {
                     return null; // Not our beast
                 }
 
@@ -978,13 +961,13 @@ class App implements TabletHost {
                     return 3000;
                 } else {
                     // Numbers are here
-                    this.allInformers.staticLine(util.numArrToVal(arr.slice(firstNonPref)) + (a.valueName || ""));
+                    this.allInformers.staticLine(numArrToVal(arr.slice(firstNonPref)) + (a.valueName || ""));
                     return 2000;
                 }
             },
             complete: (remoteId, arr) => {
-                const firstNonPref = util.getFirstNonPrefixIndex(arr, prefix)
-                const dd = util.numArrToVal(arr.slice(firstNonPref));
+                const firstNonPref = getFirstNonPrefixIndex(arr, prefix)
+                const dd = numArrToVal(arr.slice(firstNonPref));
                 if (dd) {
                     const actionsa = actions();
                     actionsa[(firstNonPref - 1) % actionsa.length].action(dd);
@@ -996,10 +979,10 @@ class App implements TabletHost {
     private timerIn(
             val: number,
             name: string,
-            timer: { val: Date | null, fireInSeconds: (sec: number) => void}): void {
+            timer: { val: HourMin, fireInSeconds: (sec: number) => void}): void {
         timer.fireInSeconds(val);
         delay(3000).then(() => 
-            this.allInformers.runningLine(name + " в " + util.toHMS(timer.val!), 3000) );
+            this.allInformers.runningLine(name + " в " + timer.val.h + ":" + timer.val.m.toLocaleString('en', { minimumIntegerDigits:2 }), 3000) );
     }
 
     private makeSwitchChannelIrSeq(irk: string) {
@@ -1047,8 +1030,8 @@ class App implements TabletHost {
         } as IRKeysHandler;
     }
 
-    private dayBeginsTimer: util.Disposable = util.emptyDisposable;
-    private dayEndsTimer: util.Disposable = util.emptyDisposable;
+    private dayBeginsTimer: Disposable = emptyDisposable;
+    private dayEndsTimer: Disposable = emptyDisposable;
 
     private dayBegins() {
         this.isSleeping = false;
@@ -1263,7 +1246,6 @@ class App implements TabletHost {
                     const nowBr = this.modifyBrightnessMi(sign * 10);
                     const ledController1 = this.findDynController('LedController1');
                     if (ledController1) {
-                        ledController1.d3PWM!.set(nowBr);
                         ledController1.d4PWM!.set(nowBr);
                     }            
                 }
@@ -1374,7 +1356,7 @@ class App implements TabletHost {
             partial: (from, arr, final) => {
                 const keyset = menuKeys[from.remoteId];
                 // console.log(arr.slice(0, 1), [ keyset.menu ]);
-                if (!!keyset && util.arraysAreEqual(arr.slice(0, 1), [keyset.menu])) {
+                if (!!keyset && arraysAreEqual(arr.slice(0, 1), [keyset.menu])) {
                     const ind = [0];
                     arr.slice(1).forEach(val => {
                         switch (val) {
@@ -1467,7 +1449,7 @@ class App implements TabletHost {
         if (jso.cod === 200) {
             //jso
             // console.log(jso.weather[0]);
-            const str = jso.weather[0].description + ' ' + util.tempAsString(jso.main.temp) + ' ветер ' + jso.wind.speed + 'м/c';
+            const str = jso.weather[0].description + ' ' + tempAsString(jso.main.temp) + ' ветер ' + jso.wind.speed + 'м/c';
             console.log(str);
             this.nowWeather.set(str);
             this.nowWeatherIcon.set(`http://openweathermap.org/img/w/${jso.weather[0].icon}.png`);
@@ -1552,16 +1534,16 @@ class App implements TabletHost {
 
                         console.log('sunrise is at ' + twilightBegin.toLocaleString());
                         this.dayBeginsTimer.dispose();
-                        this.dayBeginsTimer = util.doAt(twilightBegin.getHours(), twilightBegin.getMinutes(), twilightBegin.getSeconds(), () => { this.dayBegins() });
+                        this.dayBeginsTimer = doAt(twilightBegin.getHours(), twilightBegin.getMinutes(), twilightBegin.getSeconds(), () => { this.dayBegins() });
 
                         console.log('sunset is at ' + twilightEnd.toLocaleString());
                         this.dayEndsTimer.dispose();
-                        this.dayEndsTimer = util.doAt(twilightEnd.getHours(), twilightEnd.getMinutes(), twilightEnd.getSeconds(), () => { this.dayEnds() });
+                        this.dayEndsTimer = doAt(twilightEnd.getHours(), twilightEnd.getMinutes(), twilightEnd.getSeconds(), () => { this.dayEnds() });
                     }
                 })
         };
 
-        util.doAt(0, 5, 0, getSunrizeSunset);
+        doAt(0, 5, 0, getSunrizeSunset);
         getSunrizeSunset();
 
         // Each hour reload our playlists
@@ -1599,11 +1581,11 @@ class App implements TabletHost {
             const url = (request.url || '/').split('/').filter(p => !!p);
             // console.log("Connection from", request.connection.remoteAddress, request.url);
             const remoteAddress = request.connection.remoteAddress!;
-            const ip = request.connection.remoteFamily + "_" + util.parseOr(remoteAddress, /::ffff:(.*)/, remoteAddress) + ":" + request.connection.remotePort;
+            const ip = request.connection.remoteFamily + "_" + parseOr(remoteAddress, /::ffff:(.*)/, remoteAddress) + ":" + request.connection.remotePort;
             ws.url = url[0];
 
             //connection is up, let's add a simple simple event
-            if (util.arraysAreEqual(url, ['esp'])) {
+            if (arraysAreEqual(url, ['esp'])) {
                 console.log(ip, "CONNECT");
 
                 ws.on('close', (data: string) => {
@@ -1643,9 +1625,9 @@ class App implements TabletHost {
                                 onWeatherChanged: (val) => {
                                     this.allInformers.additionalInfo(
                                         Array.prototype.concat(
-                                            val.temp ? [util.tempAsString(val.temp)] : [],
-                                            val.pressure ? ["давление " + util.toFixedPoint(val.pressure*0.00750062, 1) + "мм рт ст"] : [],
-                                            val.humidity ? ["влажность " + util.toFixedPoint(val.humidity, 1) + "%"] : [],
+                                            val.temp ? [tempAsString(val.temp)] : [],
+                                            val.pressure ? ["давление " + toFixedPoint(val.pressure*0.00750062, 1) + "мм рт ст"] : [],
+                                            val.humidity ? ["влажность " + toFixedPoint(val.humidity, 1) + "%"] : [],
                                             [this.nowWeather.get()]
                                         ).filter(x => !!x).join(', '));
                                 },
@@ -1741,7 +1723,7 @@ class App implements TabletHost {
                         console.error('Can not process message:', data, e);
                     }
                 });
-            } else if (util.arraysAreEqual(url, ['web'])) {
+            } else if (arraysAreEqual(url, ['web'])) {
                 const lambda = this.allPropsFor.get(url[0]);
                 let dispose: Disposable[] = [];
                 if (lambda) {
@@ -1776,11 +1758,7 @@ class App implements TabletHost {
                         const prop = ClassWithId.byId<Property<any>>(msg.id);
                         if (prop) {
                             if (isWriteableProperty(prop)) {
-                                if (prop.unwire) {
-                                    prop.set(prop.unwire(msg.val));
-                                } else {
-                                    prop.set(msg.val);
-                                }
+                                prop.set(msg.val);
                             } else {
                                 console.error(`Property ${prop.name} is not writable`);
                             }
@@ -1939,12 +1917,12 @@ class App implements TabletHost {
             if (tbl) {
                 const tabletId = querystring.escape(req.query['id']);
                 res.contentType('html');
-                res.send(util.wrapToHTML(["html", { lang: "en" }],
+                res.send(wrapToHTML(["html", { lang: "en" }],
                     [
-                        util.wrapToHTML("head", [
-                            util.wrapToHTML(["meta", { 'http-equiv': "content-type", content: "text/html; charset=UTF-8" }]),
-                            util.wrapToHTML(["meta", { name: "viewport", content: "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" }], undefined),
-                            util.wrapToHTML(["script", { type: "text/javascript" }],
+                        wrapToHTML("head", [
+                            wrapToHTML(["meta", { 'http-equiv': "content-type", content: "text/html; charset=UTF-8" }]),
+                            wrapToHTML(["meta", { name: "viewport", content: "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" }], undefined),
+                            wrapToHTML(["script", { type: "text/javascript" }],
                             `
                             function sendReq(url, resFn) {
                                 var xhr = new XMLHttpRequest();
@@ -1967,8 +1945,8 @@ class App implements TabletHost {
                             }
                             `)
                         ].join("\n")) + "\n" +
-                        util.wrapToHTML("body", [
-                            util.wrapToHTML(["img", {
+                        wrapToHTML("body", [
+                            wrapToHTML(["img", {
                                 id: 'mainScr',
                                 style: 'transform: rotate(' + [270, 0, 90, 180][tbl.orientation.get()] + 'deg);',
                                 src: '/tablet_screen?id=' + tabletId
@@ -2065,9 +2043,9 @@ class App implements TabletHost {
         }).join(',\n');
 
         const hdr = [
-            util.wrapToHTML(["meta", { 'http-equiv': "content-type", content: "text/html; charset=UTF-8" }]),
-            util.wrapToHTML(["meta", { name: "viewport", content: "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" }], undefined),
-            util.wrapToHTML(["script", { type: "text/javascript" }],
+            wrapToHTML(["meta", { 'http-equiv': "content-type", content: "text/html; charset=UTF-8" }]),
+            wrapToHTML(["meta", { name: "viewport", content: "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" }], undefined),
+            wrapToHTML(["script", { type: "text/javascript" }],
                 `
             var reconnectInterval;
             var sock;
@@ -2130,9 +2108,9 @@ class App implements TabletHost {
             };
             `)
         ];
-        return util.wrapToHTML(["html", { lang: "en" }],
-            util.wrapToHTML("head", hdr.join("\n")) + "\n" +
-            util.wrapToHTML("body", allProps.map((ctrl) => {
+        return wrapToHTML(["html", { lang: "en" }],
+            wrapToHTML("head", hdr.join("\n")) + "\n" +
+            wrapToHTML("body", allProps.map((ctrl) => {
                 return "<div style='margin-top: 6px; margin-bottom: 3px; border-top: 1px solid grey;'>" + ctrl.map((prop: Property<any>): string => {
                     let res = "";
 
@@ -2237,7 +2215,7 @@ class App implements TabletHost {
     private parseM3Us(urls: { url: string, source: string}[]): Promise<Channel[]> {
         return Promise.all(urls.map(_url => {
             return curl.get(_url.url).then(text => {
-                const lines = util.splitLines(text);
+                const lines = splitLines(text);
                 if (lines[0].match(/^.?#EXTM3U/)) {
                     lines.splice(0, 1);
                     const res: Channel[] = [];
@@ -2290,7 +2268,7 @@ class App implements TabletHost {
     }
 
     private rebootService(): void {
-        util.runShell("/bin/systemctl", ["restart", "nodeserver"]);
+        runShell("/bin/systemctl", ["restart", "nodeserver"]);
     }
 
     private async getMemInfo(): Promise<MemInfo> {
@@ -2302,7 +2280,7 @@ class App implements TabletHost {
                             reject(err);
                         } else {
                             const res = {} as MemInfo;
-                            const lines = util.splitLines(contents);
+                            const lines = splitLines(contents);
                             lines.forEach(l => {
                                 const splitl = l.split(/:?\s+/).map(s => s.trim());
                                 const name = splitl[0];

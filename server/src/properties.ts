@@ -1,4 +1,5 @@
 import * as events from "events";
+import { HourMin } from "./common.utils";
 
 export interface Property<T> {
     readonly id: string;
@@ -164,38 +165,18 @@ export class StringAndGoRendrer implements HTMLRederer<string> {
     toHtmlVal(t: string): any { return t; }
 }
 
-export type HourMin = {
-    h: number;
-    m: number;
-}
-
-export function isHourMin(x: any): x is HourMin {
-    return typeof(x) === 'object' && 'h' in x && 'm' in x;
-}
-
-export function nowHourMin(): HourMin {
-    const d = new Date();
-    return { h: d.getHours(), m: d.getMinutes() };
-}
-
-export function hourMinCompare(hm1: HourMin, hm2: HourMin): number {
-    if (hm1.h == hm2.h) {
-        return hm1.m - hm2.m;
-    }
-    
-    return hm1.h - hm2.h;
-}
-
 export class HourMinHTMLRenderer implements HTMLRederer<HourMin> {
     body(prop: Property<HourMin>): string {
         return `<label>${prop.name}
             <input id='${prop.id}' type="time" name="${prop.name}" value="${prop.get().h.toLocaleString('en', { minimumIntegerDigits:2 }) + ":" + prop.get().m.toLocaleString('en', { minimumIntegerDigits:2 })}"
-                onchange="var v = document.getElementById('${prop.id}').value.match(/(\\\d?\\\d):(\\\d\\\d)/); sendVal('${prop.id}', '${prop.name}', { h: v[1], m : v[2] })"/>
+                onchange="var v = document.getElementById('${prop.id}').value.match(/(\\\d?\\\d):(\\\d\\\d):?(\\\d\\\d)?/); sendVal('${prop.id}', '${prop.name}', { h: +(v[1]), m: +(v[2]), s: (v[3] ? (+(v[3])) : undefined) })"/>
             </label>`;
     }
 
     updateCode(prop: Property<HourMin>): string {
-        return `document.getElementById('${prop.id}').value = val.h.toLocaleString('en', { minimumIntegerDigits:2 }) + ":" + val.m.toLocaleString('en', { minimumIntegerDigits:2 })`;
+        return `var x = JSON.parse(val); 
+                var ls = (x) => x.toLocaleString('en', { minimumIntegerDigits:2 }); 
+                document.getElementById('${prop.id}').value = ls(x.h) + ":" + ls(x.m) + (x.s ? ":" + ls(x.s) : "")`;
     }
 
     toHtmlVal(t: HourMin): any { return JSON.stringify(t); }
@@ -203,8 +184,6 @@ export class HourMinHTMLRenderer implements HTMLRederer<HourMin> {
 
 export interface WritableProperty<T> extends Property<T> {
     set(val: T): void;
-
-    unwire?(v: any): T;
 }
 
 export function isWriteableProperty<T>(object: Property<T>): object is WritableProperty<T> {
@@ -217,7 +196,7 @@ export interface Controller {
 }
 
 export class ClassWithId {
-    private static _nextId = 0;
+    private static _nextId = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
     private static _allProps = new Map<string, any>();
     public readonly id: string;
 
@@ -285,7 +264,6 @@ export function newWritableProperty<T>(
     htmlRenderer: HTMLRederer<T> = voidHTMLRenderer(), 
     handlers: { 
         init?(_this: WritablePropertyImpl<T>): void;
-        unwire?(v: any): T;
         onSet?(v:T, oldV:T): void;
         preSet?(v:T): T;
     } = {}): WritablePropertyImpl<T> {
@@ -310,7 +288,6 @@ export function newWritableProperty<T>(
         }
     })();
 
-    ret.unwire = handlers.unwire;
     return ret;
 }
 
