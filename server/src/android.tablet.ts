@@ -81,7 +81,7 @@ class VolumeControl extends WritablePropertyImpl<number> {
 
     private getVolume(): Promise<number> {
         return new Promise<number>((accept, reject) => {
-            this.tbl.shellCmd('dumpsys audio | grep -E \'STREAM|Current|Mute\'')
+            this.tbl.shellCmd('dumpsys audio | grep -A 2 -E \'STREAM_MUSIC\'')
                 .then((val: string) => {
                     let str = val.toString();
                     const allTheLines = str.split('- STREAM_');

@@ -298,7 +298,7 @@ const menuKeys = {
 } as MenuKeysType;
 
 type SoundType = 'lightOn' | 'lightOff' | 'alarmClock' | 'timerClock';
-type TimersType = 'dayBeginsAt' | 'dayEndsAt' | 'sleepAt' | 'wakeAt' | 'timer1At';
+type TimersType = 'dayBeginsAt' | 'dayEndsAt';
 
 type SoundAction = {
     index: number;
@@ -307,6 +307,18 @@ type SoundAction = {
 
 function isSoundAction(x: any): x is SoundAction {
     return typeof(x) === 'object' && 'index' in x && 'volume' in x;
+}
+
+type SleepType = 'sleepAt' | 'wakeAt' | 'timer1At';
+
+type SleepSettings = {
+    [P in SleepType]: HourMin;
+};
+
+const defSleepSettings: SleepSettings = {
+    sleepAt: { h: -1, m: -1},
+    wakeAt: { h: -1, m: -1},
+    timer1At: { h: -1, m: -1},
 }
 
 type KeysSettings = {
@@ -329,9 +341,6 @@ const defKeysSettings: KeysSettings = {
     timerClock: { index: 0, volume: 50 },
     dayBeginsAt: { h: 7,  m: 0},
     dayEndsAt: { h: 23, m: 0},
-    sleepAt: { h: -1, m: -1},
-    wakeAt: { h: -1, m: -1},
-    timer1At: { h: -1, m: -1},
 }
 
 function clrFromName(name: string) {
@@ -416,23 +425,23 @@ class App implements TabletHost {
     private readonly lat = 44.9704778;
     private readonly lng = 34.1187681;
 
+    private sleepSettings = newConfig<SleepSettings>(defSleepSettings, "timers");
     private keysSettings = newConfig<KeysSettings>(defKeysSettings, "keys");
 
     private createTimer(name: string, 
-        confName: TimersType, 
+        confName: SleepType, 
         onFired: ((d: HourMin, sound?: SoundType) => void),
         sound?: SoundType): TimerProp {
 
-        this.keysSettings.read().then(conf => {
+        this.sleepSettings.read().then(conf => {
             // Prop was read, let's set props
             setNewValue(conf[confName]);
         })
        
-        const tProp = newWritableProperty<HourMin>("", this.keysSettings.last()[confName], 
+        const tProp = newWritableProperty<HourMin>("", this.sleepSettings.last()[confName], 
             new HourMinHTMLRenderer(), 
             { 
                 onSet: (val: HourMin) => {
-                    that.val = val;
                     onDateChanged();
                 }
             });
@@ -480,14 +489,8 @@ class App implements TabletHost {
             }});
         var timers: NodeJS.Timer[] = [];
         let intervalTimer: NodeJS.Timer;
+
         const setNewValue = (d: HourMin) => {
-            try {
-                return _setNewValue(d);
-            } catch (e) {
-                console.error(e);
-            }
-        }
-        const _setNewValue = (d: HourMin) => {
             console.log(name + " --> ", d);
             if (hourMinCompare(d, that.val) !== 0) {
                 // that.val === undefined || that.val.getTime() != d.getTime())) {
@@ -529,6 +532,7 @@ class App implements TabletHost {
                     orBeforeProp.setInternal(1);
 
                     const tt = that.val;
+                    console.log('setup timer', tt);
                     // Let's setup timer
                     timers.push(setTimeout(() => {
                         onFired(tt, sound);
@@ -544,16 +548,16 @@ class App implements TabletHost {
                             }, msB * 1000));
                         }
                     }); 
-                    const toSave = {} as Partial<typeof defKeysSettings>;
+                    const toSave = {} as Partial<SleepSettings>;
                     toSave[confName] = that.val;
-                    this.keysSettings.change(toSave);
+                    this.sleepSettings.change(toSave);
                 } else {
                     // Dropped timer 
                     tProp.setInternal({ h: -1, m: -1, s: -1 });
                     orBeforeProp.setInternal(0);
-                    const toSave = {} as Partial<typeof defKeysSettings>;
+                    const toSave = {} as Partial<SleepSettings>;
                     toSave[confName] = that.val;
-                    this.keysSettings.change(toSave);
+                    this.sleepSettings.change(toSave);
                 }
             }
         }
@@ -604,9 +608,13 @@ class App implements TabletHost {
             clock.screenEnabledProperty.set(false);
         }
 
+        // Turn the lights down low
         for (const l of this.lights()) {
             l.switch(false);
         }
+
+        this.kindle.stopPlaying();
+        this.kindle.screenIsOn.set(false); // Turn TV off
     });
 
     public timer = this.createTimer("Таймер", 'timer1At', async (d, sound) => {
@@ -645,7 +653,7 @@ class App implements TabletHost {
 
             this.kindle.screenIsOn.set(true);
             await delay(100)
-            this.kindle.volume.set(20);
+            this.kindle.volume.set(70);
             await delay(100)
             const chan = (await this.channelsHistoryConf.read()).channels.find(c => c.channel === 1);
             if (chan) {

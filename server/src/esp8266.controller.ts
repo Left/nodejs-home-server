@@ -316,7 +316,96 @@ export class ClockController extends ClassWithId implements Controller {
             this._properties.push(Button.create("-", () => {
                 this.ledStripeColorProperty.set(RGBA.parse(this.ledStripeColorProperty.get())!.changeBrightness(-10).asString());
             }));
-            
+            this._properties.push(Button.create("New Year", () => {
+                (async () => {
+                    type ColorProps = 'r'|'g'|'b'|'w';
+                    const colorProps:ColorProps[] = ['r', 'g', 'b', 'w'];
+                    type Color = {
+                        [P in ColorProps]: number;
+                    };
+                    const colors = [{ r: 1, g: 0, b: 0, w: 0}, { r: 0, g: 0, b: 1, w: 0}, { r: 1, g: 0, b: 1, w: 0}];
+                    function randomColor(): Color {
+                        const x = colors[Math.floor(Math.random() * colors.length)];
+                        return { r: x.r, g: x.g, b: x.b, w: x.w };
+                        /*
+                        const ret: Partial<Color> = {};
+                        for (const c of colorProps) {
+                            ret[c] = colors[Math.random() % colors.length];
+                            if (c === 'w') {
+                                ret[c] = 0;
+                            } else if (c === 'g') {
+                                ret[c] = Math.random() / 3;
+                            } else {
+                                ret[c] = Math.random();
+                            }
+                        }
+                        return ret as Color;
+                        */
+                    }
+                    function toRgb(clr: Color): string {
+                        const ret = []
+                        for (const c of colorProps) {
+                            let x = Math.floor(256*clr[c]).toString(16);
+                            if (x.length < 2) {
+                                x = '0' + x;
+                            } else if (x.length > 2) {
+                                x = 'ff';
+                            }
+                            ret.push(x);
+                        }
+                        return ret.join('');
+                    }
+
+                    const mainColor = { r: 0.01, g: 1, b: 0.1, w: 0 };
+                    const arr = new Array(64).fill(mainColor);
+                    type Blink = {
+                        clr: Color;
+                        time: number;
+                    };
+                    
+                    const blinks: Map<number, Blink> = new Map();
+                    
+                    function addRandomBlink() {
+                        for (;;) {
+                            const n = Math.floor(Math.random() * arr.length);
+                            if (!blinks.has(n)) {
+                                blinks.set(n, { 
+                                    clr: randomColor(),
+                                    time: 20 + Math.floor(Math.random() * 50)
+                                });
+                                break;
+                            }
+                        }
+                    }
+
+                    Array.from({ length: 8 }).forEach((v, i) => addRandomBlink()); 
+
+                    for (let i = 0; i < 4000; ++i) {
+                        for (const b of blinks.entries()) {
+                            for (const c of colorProps) {
+                                b[1].clr[c] = b[1].clr[c] + (mainColor[c] - b[1].clr[c]) * 0.03;
+                            }
+                            b[1].time--;
+                            if (b[1].time <= 0) {
+                                addRandomBlink();
+                                blinks.delete(b[0]);
+                            }
+                        }
+
+                        const value = arr.map((x, i) => {
+                            if (blinks.has(i)) {
+                                return toRgb(blinks.get(i)!.clr);
+                            } else {
+                                return toRgb(x);
+                            }
+                        }).join('');
+
+                        this.send({ type: 'ledstripe', value, period: 100 });
+                        await delay(100);
+                    }
+                })();
+            }));
+
             this._properties.push(this.ledStripeColorProperty);
         }
         if (this.devParams['hasPotenciometer'] === 'true') {
