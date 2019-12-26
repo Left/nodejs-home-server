@@ -254,11 +254,8 @@ export class ClockController extends ClassWithId implements Controller {
         });
     public ledStripeColorProperty = newWritableProperty("Color", "", new StringAndGoRendrer("Set"), {
         onSet: (val, oldVal) => {
-            const rgbNow = RGBA.parse(oldVal);
             const rgbTo = RGBA.parse(val);
-            if (!rgbNow || !rgbTo) {
-                // ?
-            } else if (rgbTo.compare(rgbNow) !== 0) {
+            if (rgbTo) {
                 this.send({ type: 'ledstripe', value: new Array(64).fill(rgbTo.asString()).join(''), period: 800 });
             }
         }});
@@ -321,11 +318,28 @@ export class ClockController extends ClassWithId implements Controller {
                     newyear: true, 
                     basecolor: "10801000", 
                     blinkcolors: Array.prototype.concat(
-                        Array(3).fill("0000FF00"),
-                        Array(3).fill("FF00FF00"),
+                        Array(2).fill("0000FF00"),
+                        Array(3).fill("00008000"),
+                        Array(2).fill("00FFFF00"),
+                        Array(2).fill("FFFF0000"),
+                        Array(2).fill("FF00FF00"),
                         Array(3).fill("FF000000"))
                             .join(''), 
-                    period: 5000 });
+                    period: 3000 });
+            }));
+            this._properties.push(Button.create("Disko", () => {
+                this.send({ type: 'ledstripe', 
+                    newyear: true, 
+                    basecolor: "00000080", 
+                    blinkcolors: Array.prototype.concat(
+                        Array(2).fill("0000FF00"),
+                        Array(2).fill("00008000"),
+                        Array(1).fill("00FFFF00"),
+                        Array(1).fill("FFFF0000"),
+                        Array(1).fill("FF00FF00"),
+                        Array(4).fill("FF000000"))
+                            .join(''), 
+                    period: 3000 });
             }));
 
             this._properties.push(this.ledStripeColorProperty);
