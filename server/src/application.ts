@@ -1407,8 +1407,7 @@ class App implements TabletHost {
                             }
                         }
                         const line = res[0].lbl;
-                        console.log(line);
-                        this.allInformers.runningLine(line, 8000);
+                        from.controller.lcdInformer?.runningLine(line, 8000);
                     }
                     return 8000;
                 }
@@ -1529,11 +1528,12 @@ class App implements TabletHost {
             const now = new Date();
             console.log('sunrise query');
             curl.get(`https://api.sunrise-sunset.org/json?formatted=0&lat=${this.lat}&lng=${this.lng}&date=${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`)
-                .then(resStr => {
+                .then(async resStr => {
                     const res = JSON.parse(resStr) as SunrizeError | SunrizeDate;
                     if (res.status === 'OK') {
                         let twilightBegin = new Date(res.results.civil_twilight_begin);
-                        const at7_00 = new Date(twilightBegin.getFullYear(), twilightBegin.getMonth(), twilightBegin.getDate(), 7, 0, 0, 0);
+                        const dba = (await this.keysSettings.read()).dayBeginsAt;
+                        const at7_00 = new Date(twilightBegin.getFullYear(), twilightBegin.getMonth(), twilightBegin.getDate(), dba.h, dba.m, dba.s || 0, 0);
                         if (twilightBegin.getTime() > at7_00.getTime()) {
                             // If it's too dark at 7:00 - switch screen on anyway
                             twilightBegin = at7_00;

@@ -316,21 +316,36 @@ export class ClockController extends ClassWithId implements Controller {
             this._properties.push(Button.create("New Year", () => {
                 this.send({ type: 'ledstripe', 
                     newyear: true, 
-                    basecolor: "10801000", 
+                    basecolor: "00080000", 
                     blinkcolors: Array.prototype.concat(
                         Array(2).fill("0000FF00"),
                         Array(3).fill("00008000"),
-                        Array(2).fill("00FFFF00"),
+                        // Array(2).fill("00FFFF00"),
+                        // Array(2).fill("FFFF0000"),
+                        Array(2).fill("FF00FF00"),
+                        // Array(3).fill("FF000000")
+                        )
+                            .join(''), 
+                    period: 8000 });
+            }));
+            this._properties.push(Button.create("New Year (fast)", () => {
+                this.send({ type: 'ledstripe', 
+                    newyear: true, 
+                    basecolor: "00080000", 
+                    blinkcolors: Array.prototype.concat(
+                        Array(2).fill("0000FF00"),
+                        Array(3).fill("00008000"),
+                        // Array(2).fill("00FFFF00"),
                         Array(2).fill("FFFF0000"),
                         Array(2).fill("FF00FF00"),
                         Array(3).fill("FF000000"))
                             .join(''), 
-                    period: 3000 });
+                    period: 8000 });
             }));
             this._properties.push(Button.create("Disko", () => {
                 this.send({ type: 'ledstripe', 
                     newyear: true, 
-                    basecolor: "00000080", 
+                    basecolor: "00000020", 
                     blinkcolors: Array.prototype.concat(
                         Array(2).fill("0000FF00"),
                         Array(2).fill("00008000"),
@@ -339,7 +354,7 @@ export class ClockController extends ClassWithId implements Controller {
                         Array(1).fill("FF00FF00"),
                         Array(4).fill("FF000000"))
                             .join(''), 
-                    period: 3000 });
+                    period: 4000 });
             }));
 
             this._properties.push(this.ledStripeColorProperty);
