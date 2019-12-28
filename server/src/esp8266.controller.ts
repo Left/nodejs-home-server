@@ -99,7 +99,13 @@ interface IRKey extends Msg {
     key: string;
 }
 
-type AnyMessage = Log | Temp | Hello | IRKey | Weight | ButtonPressed | PingResult | RelayState | LedStripeState | PotentiometerState | AtxState;
+interface RawIRKey extends Msg {
+    type: 'raw_ir_key';
+    periods: number[];
+    timeseq: number;
+}
+
+type AnyMessage = Log | Temp | Hello | IRKey | Weight | ButtonPressed | PingResult | RelayState | LedStripeState | PotentiometerState | AtxState | RawIRKey;
 
 export interface ClockControllerEvents {
     onDisconnect: () => void;
@@ -107,6 +113,7 @@ export interface ClockControllerEvents {
     onWeightReset: () => void;
     onWeightChanged: (weight: number) => void;
     onIRKey: (remoteId: string, keyId: string) => void;
+    onRawIrKey: (timeSeq: number, periods: number[]) => void;
     onPotentiometer: (value: number) => void;
 }
 
@@ -533,6 +540,11 @@ export class ClockController extends ClassWithId implements Controller {
             case 'ir_key':
                 this.handler.onIRKey(objData.remote, objData.key);
                 // console.log(this + " " + "irKey: ", );
+                break;
+            case 'raw_ir_key':
+                // this.handler.onIRKey(objData.remote, objData.key);
+                // console.log(objData.timeseq, objData.periods.length);
+                this.handler.onRawIrKey(objData.timeseq, objData.periods);
                 break;
             case 'relayState':
                 // console.log(this + " " + "relayState: ", objData.id, objData.value);

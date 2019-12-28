@@ -241,6 +241,12 @@ interface IRKeysHandler {
 
 type ChannelType = 'Url' | 'Youtube';
 
+type IRKey = {
+    periods: number[];
+    keyName: string;
+    remoteName: string;
+}
+
 interface Channel {
     name: string;
     cat?: string;
@@ -723,6 +729,7 @@ class App implements TabletHost {
             Button.create("Reload TV channels", () => this.reloadM3uPlaylists()),
             Button.createClientRedirect("Lights", "/lights.html"),
             Button.createClientRedirect("Settings", "/settings.html"),
+            Button.createClientRedirect("InfraRed", "/ir.html"),
             newWritableProperty<boolean>("Allow renames", this.allowRenames, new CheckboxHTMLRenderer(), { onSet: (val: boolean) => {
                 this.allowRenames = val;
                 this.reloadAllWebClients('web');
@@ -733,6 +740,7 @@ class App implements TabletHost {
 
     private tvChannels = newConfig({ channels: [] as Channel[], lastUpdate: 0 }, "m3u_tv_channels");
     private channelsHistoryConf = newConfig({ channels: [] as Channel[] }, "tv_channels");
+    private irKeysConf = newConfig({ irKeysConf: [] as IRKey[] }, "ir_keys");
     // private actions = newConfig({ actions: [] as PerformedAction[] }, "actions");
 
     private channelAsController(h: Channel, 
@@ -766,6 +774,55 @@ class App implements TabletHost {
         ), [
             Button.createCopyToClipboard("Copy URL", url)
         ]);
+    }
+
+    private lastPressedIrKey = newWritableProperty<number[]>("Periods:", [], new SpanHTMLRenderer(
+        x => (x.length + ": [" + x.map(x => x.toString()).join(', ') + "]")
+    ));
+    private lastPressedIrKeyRecognizedAs = newWritableProperty("Recognized as:", "", new SpanHTMLRenderer());
+    private lastPressedRemote = newWritableProperty("Remote name", "", new StringAndGoRendrer("Set"), {
+        onSet: (val) => this.changeIRConf()
+    });
+    private lastPressedKey = newWritableProperty("Key name", "", new StringAndGoRendrer("Set"), {
+        onSet: (val) =>  this.changeIRConf()
+    });
+
+    private async recognizeIRKey(periods: number[]): Promise<IRKey> {
+        const allKeys = (await this.irKeysConf.read()).irKeysConf;
+        for (const k of allKeys) {
+            let i = 0;
+            for (; i < Math.min(k.periods.length, periods.length); ++i) {
+                const ratio = (k.periods[i] || 1) / (periods[i] || 1);
+                if (ratio < 0.7 || ratio > 1.4) {
+                    break; // wrong key
+                }
+            }
+            if (i === periods.length || i === k.periods.length) {
+                // Recognized!
+                return k;
+            }
+        }
+        return { periods, keyName: "", remoteName: "" };
+    }
+
+    private async changeIRConf(): Promise<void> {
+        const irRemote = this.lastPressedRemote.get();
+        const irKey = this.lastPressedKey.get();
+        const periods = this.lastPressedIrKey.get();
+
+        const k = await this.recognizeIRKey(periods);
+        if (irRemote && irKey) {
+            await this.irKeysConf.change(f => {
+                console.log('CHANGE IR CONF: adding', irRemote, irKey);
+                const s = new Map(f.irKeysConf.map(e => [e.remoteName + ":" + e.keyName, e]));
+                if (k.keyName || k.remoteName) {
+                    // Remove old
+                    s.delete(k.remoteName + ":" + k.keyName);
+                }
+                s.set(irRemote + ":" + irKey, { periods, keyName: irKey, remoteName: irRemote });
+                f.irKeysConf = Array.from(s.values());
+            });
+        }
     }
 
     private renderChannels() {
@@ -839,6 +896,14 @@ class App implements TabletHost {
                 prev.get(loc)!.push(curr);
                 return s;
             }, s).values());
+        }],
+        ["ir", async () => {
+            return [
+                [this.lastPressedIrKey],
+                [this.lastPressedIrKeyRecognizedAs],
+                [this.lastPressedKey],
+                [this.lastPressedRemote],
+            ];
         }],
         ["settings", async () => {
             const keys: KeysSettings = await this.keysSettings.read();
@@ -1173,7 +1238,7 @@ class App implements TabletHost {
                 prop.set(prop.get() === '00000000' ? '000000FF' : '00000000');
             }
         }),
-        this.simpleCmd([['clear']], "MiLight", (from) => {
+        this.simpleCmd([['clear'], ['recall']], "MiLight", (from) => {
             this.sound(from.controller, this.miLight.switchOn.get() ? 'lightOff' : 'lightOn');
             this.miLight.switchOn.switch(!this.miLight.switchOn.get());
         }),
@@ -1439,6 +1504,61 @@ class App implements TabletHost {
         return inArr[(newIndex + inArr.length) % inArr.length];
     }
 
+    private readonly mapIRs = new Map<string, {
+        lastRemote: number,
+        seq: string[],
+        handler?: IRKeysHandler,
+        wait: number,
+        timestamps: number[]
+    }>();
+
+    private onIRKey(remoteId: string, keyId: string, clockController: ClockController) {                                  
+        // console.log(remoteId, keyId);
+        var _irState;
+        if (!this.mapIRs.has(remoteId)) {
+            _irState = { lastRemote: 0, seq: [], wait: 1500, timestamps: [] };
+            this.mapIRs.set(remoteId, _irState);
+        } else {
+            _irState = this.mapIRs.get(remoteId);
+        }
+
+        const irState = _irState!;
+        const now = new Date().getTime();
+        const remoteEnd = { remoteId, controller: clockController };
+
+        irState.seq.push(keyId);
+        irState.timestamps.push(now);
+        var toHandle;
+        for (const handler of this.irKeyHandlers) {
+            const toWait = handler.partial(remoteEnd, irState.seq, false, irState.timestamps);
+            if (toWait != null) {
+                toHandle = handler;
+                irState.wait = toWait;
+            }
+        }
+        if (toHandle) {
+            irState.handler = toHandle;
+        } else {
+            console.log('Ignored ' + irState.seq.join(",") + ' on ' + remoteId);
+            irState.seq = [];
+        }
+
+        delay(irState.wait).then(() => {
+            const now = new Date().getTime();
+            if ((now - irState.lastRemote) >= irState.wait) {
+                // Go!
+                if (irState.handler && irState.handler.partial(remoteEnd, irState.seq, true, irState.timestamps) !== null) {
+                    irState.handler.complete(remoteEnd, irState.seq, irState.timestamps);
+                }
+
+                irState.seq = [];
+                irState.lastRemote = now;
+            }
+        });
+
+        irState.lastRemote = now;
+    }
+
     public toggleRelay(remote: ClockController, relayName: string, index: number): void {
         const kitchenRelay = this.findDynController(relayName);
         if (kitchenRelay) {
@@ -1611,13 +1731,6 @@ class App implements TabletHost {
                             console.log(ip, "HELLO");
 
                             const hello = objData as Hello;
-                            const mapIRs = new Map<string, {
-                                lastRemote: number,
-                                seq: string[],
-                                handler?: IRKeysHandler,
-                                wait: number,
-                                timestamps: number[]
-                            }>();
 
                             const clockController = new ClockController(ws, ip, hello, {
                                 onDisconnect: () => {
@@ -1653,51 +1766,20 @@ class App implements TabletHost {
                                         clockController.brightnessProperty.set(Math.floor((1024 - value) / 18));
                                     }
                                 },
+                                onRawIrKey: async (timeSeq: number, periods: number[]) => {
+                                    this.lastPressedIrKey.set(periods);
+                                    const k = await this.recognizeIRKey(periods);
+                                    this.lastPressedIrKeyRecognizedAs.set(k.remoteName + ":" + k.keyName);
+                                    this.lastPressedKey.set("");
+                                    this.lastPressedRemote.set("");
+                                    if (k.keyName || k.remoteName) {
+                                        this.onIRKey(k.remoteName, k.keyName, clockController);
+                                        // console.log("Recognized", k.remoteName, k.keyName);
+                                    }
+                                    this.reloadAllWebClients('ir');
+                                },
                                 onIRKey: (remoteId: string, keyId: string) => {
-                                    // console.log(remoteId, keyId);
-                                    var _irState;
-                                    if (!mapIRs.has(remoteId)) {
-                                        _irState = { lastRemote: 0, seq: [], wait: 1500, timestamps: [] };
-                                        mapIRs.set(remoteId, _irState);
-                                    } else {
-                                        _irState = mapIRs.get(remoteId);
-                                    }
-
-                                    const irState = _irState!;
-                                    const now = new Date().getTime();
-                                    const remoteEnd = { remoteId, controller: clockController };
-
-                                    irState.seq.push(keyId);
-                                    irState.timestamps.push(now);
-                                    var toHandle;
-                                    for (const handler of this.irKeyHandlers) {
-                                        const toWait = handler.partial(remoteEnd, irState.seq, false, irState.timestamps);
-                                        if (toWait != null) {
-                                            toHandle = handler;
-                                            irState.wait = toWait;
-                                        }
-                                    }
-                                    if (toHandle) {
-                                        irState.handler = toHandle;
-                                    } else {
-                                        console.log('Ignored ' + irState.seq.join(",") + ' on ' + remoteId);
-                                        irState.seq = [];
-                                    }
-
-                                    delay(irState.wait).then(() => {
-                                        const now = new Date().getTime();
-                                        if ((now - irState.lastRemote) >= irState.wait) {
-                                            // Go!
-                                            if (irState.handler && irState.handler.partial(remoteEnd, irState.seq, true, irState.timestamps) !== null) {
-                                                irState.handler.complete(remoteEnd, irState.seq, irState.timestamps);
-                                            }
-
-                                            irState.seq = [];
-                                            irState.lastRemote = now;
-                                        }
-                                    });
-
-                                    irState.lastRemote = now;
+                                    this.onIRKey(remoteId, keyId, clockController);
                                 }
                             } as ClockControllerEvents);
                             if (!!controller) {
@@ -1984,6 +2066,10 @@ class App implements TabletHost {
         router.get('/settings.html', async (req, res) => {
             res.contentType('html');
             res.send(await this.renderToHTML('settings'));
+        });
+        router.get('/ir.html', async (req, res) => {
+            res.contentType('html');
+            res.send(await this.renderToHTML('ir'));
         });
         router.get('/actions.html', async (req, res) => {
             res.contentType('html');
