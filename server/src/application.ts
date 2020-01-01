@@ -791,15 +791,15 @@ class App implements TabletHost {
         const allKeys = (await this.irKeysConf.read()).irKeysConf;
         for (const k of allKeys) {
             let i = 0;
-            for (; i < Math.min(k.periods.length, periods.length); ++i) {
+            for (;; ++i) {
+                if (i === periods.length || i === k.periods.length || periods[i] > 30000) {
+                    // Recognized!
+                    return k;
+                }
                 const ratio = (k.periods[i] || 1) / (periods[i] || 1);
                 if (ratio < 0.7 || ratio > 1.4) {
                     break; // wrong key
                 }
-            }
-            if (i === periods.length || i === k.periods.length) {
-                // Recognized!
-                return k;
             }
         }
         return { periods, keyName: "", remoteName: "" };
