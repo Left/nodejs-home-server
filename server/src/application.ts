@@ -3,8 +3,10 @@ import * as http from 'http';
 import * as WebSocket from 'ws';
 // import * as stream from "stream";
 import * as fs from "fs";
+import { homedir } from "os";
 import * as nodeutil from "util";
 import * as path from "path";
+import * as util from "util";
 import * as dgram from "dgram";
 import * as crypto from 'crypto';
 import * as querystring from 'querystring';
@@ -755,7 +757,7 @@ class App implements TabletHost {
                     newWritableProperty<string>("", 
                         {
                             'Youtube': () => "get_tv_logo?" + "ytb=" + parseYoutubeUrl(h.url)!.id,
-                            'Url': () => "https://github2.com/AlexELEC/channel-logos/blob/master/logos/" + encodeURIComponent(h.name) + ".png?raw=true"
+                            'Url': () => "get_tv_channel_logo?name=" + encodeURIComponent(h.name)
                         }[getType(h)](), new ImgHTMLRenderer(40, 40)),                     
                     newWritableProperty<string>("", h.name, new SpanHTMLRenderer()),
                     that.makePlayButtonsForChannel(h.url, t => that.playChannel(t, h)), 
@@ -834,7 +836,7 @@ class App implements TabletHost {
         });
 
         // channelsProto contains all channels that are not used yet
-        const channelsProto = Array.from({ length: 20 }, (e, i) => i).filter(ch => !chToHist.has(ch));
+        const channelsProto = Array.from({ length: 30 }, (e, i) => i).filter(ch => !chToHist.has(ch));
         return this.channelsHistoryConf.last().channels.filter(h => h).map((h, index) => {
             // If needed, add own channel
             const channels = Array.prototype.concat(h.channel ? [h.channel] : [], channelsProto) as number[];
@@ -881,6 +883,11 @@ class App implements TabletHost {
         ["iptv", async () => this.tvChannels.last().channels.filter(h => h).map((h, index) => {
             return Array.prototype.concat(
                 [ newWritableProperty("", "" + index + ".", new SpanHTMLRenderer()) ], 
+                newWritableProperty<string>("", 
+                {
+                    'Youtube': () => "get_tv_logo?" + "ytb=" + parseYoutubeUrl(h.url)!.id,
+                    'Url': () => "get_tv_channel_logo?name=" + encodeURIComponent(h.name)
+                }[getType(h)](), new ImgHTMLRenderer(40, 40)),
                 [ newWritableProperty("", [h.name, h.source ? ('(' + h.source + ')') : undefined].filter(x => !!x).join(" "), new SpanHTMLRenderer()) ],
                 [ newWritableProperty("", h.cat, new SpanHTMLRenderer()) ], 
                 this.makePlayButtonsForChannel(h.url, t => this.playURL(t, h.url, h.name))
@@ -1937,6 +1944,26 @@ class App implements TabletHost {
         });
 
         let nologoBuffer: Buffer; // Cache 'nologo' because it will be used often
+        router.get('/get_tv_channel_logo', async (req, res) => {
+            const n: string = req.query['name'];
+            const hd = homedir();
+            const dn = hd + "/.tvlogos/";
+            const fn = dn + n + ".png";
+
+            if (await util.promisify(fs.exists)(fn)) {
+                const content = await ((util.promisify(fs.readFile))(fn));
+                res.contentType('image/png');
+                res.end(content);
+            } else {
+                const buf = (await curl.getBin("https://github.com/AlexELEC/channel-logos/blob/master/logos/" + encodeURIComponent(n) + ".png?raw=true")).body;
+                if (!fs.existsSync(dn)) {
+                    fs.mkdirSync(dn);  
+                }
+                (util.promisify(fs.writeFile))(fn, buf);
+                res.contentType('image/png');
+                res.end(buf);
+            }
+        });
         router.get('/get_tv_logo', async (req, res) => {
             const n: string = req.query['name'];
             const ytb: string = req.query['ytb'];
