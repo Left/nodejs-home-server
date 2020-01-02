@@ -3,10 +3,23 @@
 
 syntax = "proto2";
 
+message Settings {
+    
+}
+
+message Hello {
+    required int32 versionMajor = 100;
+    required int32 versionMinor = 101;
+    required int32 versionLast  = 102;
+    required Settings settings  = 103;
+}
+
+message IRKey {
+    repeated int32 period = 1000;
+}
+
 message SimpleMessage {
-    required int32 id = 1;
-    required int32 num = 2;
-    required string str = 3;
-    required int32 num2 = 4;
-    required int32 num3_add = 5;
+    required int32 id = 200;
+    optional Hello hello = 201;
+    optional IRKey pressedIRkey = 202;
 }

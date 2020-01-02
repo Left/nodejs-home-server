@@ -1767,6 +1767,14 @@ class App implements TabletHost {
                                     }
                                 },
                                 onRawIrKey: async (timeSeq: number, periods: number[]) => {
+                                    // First, pre-process periods - find 9000 ns (which is startup seq)
+                                    for (let i = 0; i < periods.length; ++i) {
+                                        if (periods[i] > 7000 && periods[i] < 11000) {
+                                            periods = periods.slice(i);
+                                            break;
+                                        }
+                                    }
+
                                     this.lastPressedIrKey.set(periods);
                                     const k = await this.recognizeIRKey(periods);
                                     this.lastPressedIrKeyRecognizedAs.set(k.remoteName + ":" + k.keyName);
