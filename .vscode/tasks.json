@@ -23,22 +23,9 @@
         },
         {
             "type": "shell",
-            "label": "compile protobuf (native)",
-            "command": "protoc",
-            "args": [ "--nanopb_out=${workspaceFolder}/../BluePillTest/src", "protocol.proto" ],
-            "options": {
-                "cwd": "${workspaceFolder}/protocol"
-            },
-        },
-        {
-            "type": "shell",
-            "label": "compile protobuf (nodejs)",
-            "command": "protoc",
-            "args": [ 
-                "--plugin=\"protoc-gen-ts=./../server/node_modules/.bin/protoc-gen-ts\"", 
-                "--js_out=\"import_style=commonjs,binary:./../server/src\"",
-                "--ts_out=\"./../server/src\"",
-                "protocol.proto" ],
+            "label": "compile protobuf",
+            "command": "bash",
+            "args": [ "compile.sh" ],
             "options": {
                 "cwd": "${workspaceFolder}/protocol"
             },

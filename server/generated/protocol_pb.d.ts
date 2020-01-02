@@ -77,6 +77,11 @@ export class Msg extends jspb.Message {
   getId(): number | undefined;
   setId(value: number): void;
 
+  hasTimeseq(): boolean;
+  clearTimeseq(): void;
+  getTimeseq(): number | undefined;
+  setTimeseq(value: number): void;
+
   hasHello(): boolean;
   clearHello(): void;
   getHello(): Hello | undefined;
@@ -100,6 +105,7 @@ export class Msg extends jspb.Message {
 export namespace Msg {
   export type AsObject = {
     id?: number,
+    timeseq?: number,
     hello?: Hello.AsObject,
     irkeyperiodsList: Array<number>,
   }

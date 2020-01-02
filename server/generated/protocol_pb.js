@@ -575,7 +575,7 @@ proto.Hello.prototype.hasSettings = function() {
  * @private {!Array<number>}
  * @const
  */
-proto.Msg.repeatedFields_ = [3];
+proto.Msg.repeatedFields_ = [4];
 
 
 
@@ -609,8 +609,9 @@ proto.Msg.prototype.toObject = function(opt_includeInstance) {
 proto.Msg.toObject = function(includeInstance, msg) {
   var f, obj = {
     id: (f = jspb.Message.getField(msg, 1)) == null ? undefined : f,
+    timeseq: (f = jspb.Message.getField(msg, 2)) == null ? undefined : f,
     hello: (f = msg.getHello()) && proto.Hello.toObject(includeInstance, f),
-    irkeyperiodsList: (f = jspb.Message.getRepeatedField(msg, 3)) == null ? undefined : f
+    irkeyperiodsList: (f = jspb.Message.getRepeatedField(msg, 4)) == null ? undefined : f
   };
 
   if (includeInstance) {
@@ -652,13 +653,17 @@ proto.Msg.deserializeBinaryFromReader = function(msg, reader) {
       msg.setId(value);
       break;
     case 2:
+      var value = /** @type {number} */ (reader.readInt32());
+      msg.setTimeseq(value);
+      break;
+    case 3:
       var value = new proto.Hello;
       reader.readMessage(value,proto.Hello.deserializeBinaryFromReader);
       msg.setHello(value);
       break;
-    case 3:
-      var value = /** @type {number} */ (reader.readInt32());
-      msg.addIrkeyperiods(value);
+    case 4:
+      var value = /** @type {!Array<number>} */ (reader.readPackedInt32());
+      msg.setIrkeyperiodsList(value);
       break;
     default:
       reader.skipField();
@@ -696,18 +701,25 @@ proto.Msg.serializeBinaryToWriter = function(message, writer) {
       f
     );
   }
+  f = /** @type {number} */ (jspb.Message.getField(message, 2));
+  if (f != null) {
+    writer.writeInt32(
+      2,
+      f
+    );
+  }
   f = message.getHello();
   if (f != null) {
     writer.writeMessage(
-      2,
+      3,
       f,
       proto.Hello.serializeBinaryToWriter
     );
   }
   f = message.getIrkeyperiodsList();
   if (f.length > 0) {
-    writer.writeRepeatedInt32(
-      3,
+    writer.writePackedInt32(
+      4,
       f
     );
   }
@@ -751,12 +763,48 @@ proto.Msg.prototype.hasId = function() {
 
 
 /**
- * optional Hello hello = 2;
+ * required int32 timeseq = 2;
+ * @return {number}
+ */
+proto.Msg.prototype.getTimeseq = function() {
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 2, 0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.Msg} returns this
+ */
+proto.Msg.prototype.setTimeseq = function(value) {
+  return jspb.Message.setField(this, 2, value);
+};
+
+
+/**
+ * Clears the field making it undefined.
+ * @return {!proto.Msg} returns this
+ */
+proto.Msg.prototype.clearTimeseq = function() {
+  return jspb.Message.setField(this, 2, undefined);
+};
+
+
+/**
+ * Returns whether this field is set.
+ * @return {boolean}
+ */
+proto.Msg.prototype.hasTimeseq = function() {
+  return jspb.Message.getField(this, 2) != null;
+};
+
+
+/**
+ * optional Hello hello = 3;
  * @return {?proto.Hello}
  */
 proto.Msg.prototype.getHello = function() {
   return /** @type{?proto.Hello} */ (
-    jspb.Message.getWrapperField(this, proto.Hello, 2));
+    jspb.Message.getWrapperField(this, proto.Hello, 3));
 };
 
 
@@ -765,7 +813,7 @@ proto.Msg.prototype.getHello = function() {
  * @return {!proto.Msg} returns this
 */
 proto.Msg.prototype.setHello = function(value) {
-  return jspb.Message.setWrapperField(this, 2, value);
+  return jspb.Message.setWrapperField(this, 3, value);
 };
 
 
@@ -783,16 +831,16 @@ proto.Msg.prototype.clearHello = function() {
  * @return {boolean}
  */
 proto.Msg.prototype.hasHello = function() {
-  return jspb.Message.getField(this, 2) != null;
+  return jspb.Message.getField(this, 3) != null;
 };
 
 
 /**
- * repeated int32 irKeyPeriods = 3;
+ * repeated int32 irKeyPeriods = 4;
  * @return {!Array<number>}
  */
 proto.Msg.prototype.getIrkeyperiodsList = function() {
-  return /** @type {!Array<number>} */ (jspb.Message.getRepeatedField(this, 3));
+  return /** @type {!Array<number>} */ (jspb.Message.getRepeatedField(this, 4));
 };
 
 
@@ -801,7 +849,7 @@ proto.Msg.prototype.getIrkeyperiodsList = function() {
  * @return {!proto.Msg} returns this
  */
 proto.Msg.prototype.setIrkeyperiodsList = function(value) {
-  return jspb.Message.setField(this, 3, value || []);
+  return jspb.Message.setField(this, 4, value || []);
 };
 
 
@@ -811,7 +859,7 @@ proto.Msg.prototype.setIrkeyperiodsList = function(value) {
  * @return {!proto.Msg} returns this
  */
 proto.Msg.prototype.addIrkeyperiods = function(value, opt_index) {
-  return jspb.Message.addToRepeatedField(this, 3, value, opt_index);
+  return jspb.Message.addToRepeatedField(this, 4, value, opt_index);
 };
 
 

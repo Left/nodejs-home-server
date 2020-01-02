@@ -17,7 +17,7 @@ import { TabletHost, Tablet, adbClient, Tracker, Device } from "./android.tablet
 import { CompositeLcdInformer } from './informer.api';
 import { ClockController, Hello, ClockControllerEvents } from './esp8266.controller';
 
-import * as protocol from "./protocol_pb";
+import { Msg } from "./../generated/protocol_pb";
 import { doWithTimeout, delay } from './common.utils';
 
 class GPIORelay extends Relay {
@@ -755,7 +755,7 @@ class App implements TabletHost {
                     newWritableProperty<string>("", 
                         {
                             'Youtube': () => "get_tv_logo?" + "ytb=" + parseYoutubeUrl(h.url)!.id,
-                            'Url': () => "https://github.com/AlexELEC/channel-logos/blob/master/logos/" + encodeURIComponent(h.name) + ".png?raw=true"
+                            'Url': () => "https://github2.com/AlexELEC/channel-logos/blob/master/logos/" + encodeURIComponent(h.name) + ".png?raw=true"
                         }[getType(h)](), new ImgHTMLRenderer(40, 40)),                     
                     newWritableProperty<string>("", h.name, new SpanHTMLRenderer()),
                     that.makePlayButtonsForChannel(h.url, t => that.playChannel(t, h)), 
@@ -1568,6 +1568,27 @@ class App implements TabletHost {
         }
     }
 
+    private async onRawIRKey(clockController: ClockController, timeSeq: number, periods: number[]) {
+        // First, pre-process periods - find 9000 ns (which is startup seq)
+        for (let i = 0; i < periods.length; ++i) {
+            if (periods[i] > 7000 && periods[i] < 11000) {
+                periods = periods.slice(i);
+                break;
+            }
+        }
+
+        this.lastPressedIrKey.set(periods);
+        const k = await this.recognizeIRKey(periods);
+        this.lastPressedIrKeyRecognizedAs.set(k.remoteName + ":" + k.keyName);
+        this.lastPressedKey.set("");
+        this.lastPressedRemote.set("");
+        if (k.keyName || k.remoteName) {
+            this.onIRKey(k.remoteName, k.keyName, clockController);
+            console.log("Recognized", k.remoteName, k.keyName);
+        }
+        this.reloadAllWebClients('ir');        
+    }
+
     private async updateWeather() {
         const cityid = 693805;
         const keys = await this.keysSettings.read();
@@ -1685,12 +1706,17 @@ class App implements TabletHost {
             udpServer.close();
         });
         udpServer.on('message', (msg, rinfo) => {
+            console.log(rinfo.address);
+
             try {
-                const newLocal = protocol.SimpleMessage.deserializeBinary(msg);
+                const newLocal = Msg.deserializeBinary(msg);
                 const typedMessage = newLocal.toObject();
-                console.log(JSON.stringify(typedMessage, undefined, ' '));
+                if (typedMessage.irkeyperiodsList.length > 0) {
+                    this.onRawIRKey(this.findDynController('ESP_9331442')!, typedMessage.timeseq, typedMessage.irkeyperiodsList);
+                }
+                // console.log(JSON.stringify(typedMessage, undefined, ' '));
             } catch (e) {
-                // console.log()
+                console.log(e);
             }
             // console.log(`server got: ${msg} from ${rinfo.address}:${rinfo.port}`);
         });
@@ -1767,24 +1793,7 @@ class App implements TabletHost {
                                     }
                                 },
                                 onRawIrKey: async (timeSeq: number, periods: number[]) => {
-                                    // First, pre-process periods - find 9000 ns (which is startup seq)
-                                    for (let i = 0; i < periods.length; ++i) {
-                                        if (periods[i] > 7000 && periods[i] < 11000) {
-                                            periods = periods.slice(i);
-                                            break;
-                                        }
-                                    }
-
-                                    this.lastPressedIrKey.set(periods);
-                                    const k = await this.recognizeIRKey(periods);
-                                    this.lastPressedIrKeyRecognizedAs.set(k.remoteName + ":" + k.keyName);
-                                    this.lastPressedKey.set("");
-                                    this.lastPressedRemote.set("");
-                                    if (k.keyName || k.remoteName) {
-                                        this.onIRKey(k.remoteName, k.keyName, clockController);
-                                        // console.log("Recognized", k.remoteName, k.keyName);
-                                    }
-                                    this.reloadAllWebClients('ir');
+                                    return this.onRawIRKey(clockController, timeSeq, periods);
                                 },
                                 onIRKey: (remoteId: string, keyId: string) => {
                                     this.onIRKey(remoteId, keyId, clockController);

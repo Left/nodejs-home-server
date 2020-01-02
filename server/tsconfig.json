@@ -20,6 +20,7 @@
     ],
     "include": [
         "src/**/*.ts",
+        "src/**/*_pb.js",
     ],
     "exclude": [
         "node_modules"
