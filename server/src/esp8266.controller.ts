@@ -1,7 +1,6 @@
 import { Relay, Controller, Property, ClassWithId, PropertyImpl, SpanHTMLRenderer, Button, newWritableProperty, SliderHTMLRenderer, StringAndGoRendrer, CheckboxHTMLRenderer, WritableProperty } from "./properties";
 import { LcdInformer } from './informer.api';
 import { delay, toFixedPoint } from './common.utils';
-import * as WebSocket from 'ws';
 
 interface PingResult {
     type: 'pingresult';
@@ -107,6 +106,22 @@ interface RawIRKey extends Msg {
 
 type AnyMessage = Log | Temp | Hello | IRKey | Weight | ButtonPressed | PingResult | RelayState | LedStripeState | PotentiometerState | AtxState | RawIRKey;
 
+export type AnyMessageToSend = 
+    { type: 'ping', pingid: string } |
+    { type: 'reboot' } |
+    { type: "unixtime", value: number } |
+    { type: 'show'|'tune'|'additional-info', totalMsToShow?: number, text: string } |
+    { type: 'switch', id: string, on: string } |
+    { type: 'pwm', value: number, pin: string, period: number } |
+    { type: 'playmp3', index: string } |
+    { type: 'screenEnable', value: boolean } |
+    { type: 'setvolume', value: string } |
+    { type: 'atxEnable', value: boolean } |
+    { type: 'brightness', value: number } |
+    { type: 'ledstripe', value: string, period: number } |
+    { type: 'ledstripe', newyear: true, basecolor: string, blinkcolors: string, period: number }
+    ;
+
 export interface ClockControllerEvents {
     onDisconnect: () => void;
     onWeatherChanged: (weather: { temp?: number, humidity?: number, pressure?: number}) => void;
@@ -129,7 +144,7 @@ class ControllerRelay extends Relay {
     switch(on: boolean): Promise<void> {
         if (this.controller && this.controller.online) {
             return this.controller.send({
-                type: "switch",
+                type: 'switch',
                 id: "" + this.index,
                 on: on ? "true" : "false"
             });
@@ -195,10 +210,15 @@ export class RGBA {
     }
 }
 
+export type ClockControllerCommunications = {
+    send: (o: AnyMessageToSend) => void,
+    disconnect: () => void
+};
+
 export class ClockController extends ClassWithId implements Controller {
     protected pingId = 0;
     protected intervalId?: NodeJS.Timer;
-    protected lastResponse = Date.now();
+    public lastResponse = Date.now();
     private readonly _name: string;
     private readonly _properties: Property<any>[];
     public properties() { return this._properties; }
@@ -206,13 +226,15 @@ export class ClockController extends ClassWithId implements Controller {
     public readonly lcdInformer?: LcdInformer;
     public readonly internalName: string;
 
+    public lastMsgLocal: number | undefined; // result of millis() method passed to server
+
     public tempProperty = new PropertyImpl<number|undefined>(
         "Температура", 
-        new SpanHTMLRenderer(v => (v === undefined ? "Нет данных" : ((v > 0 ? "+" : "-") + v + "&#8451;"))), 
+        new SpanHTMLRenderer(v => (v === undefined ? "Нет данных" : ((v > 0 ? "+" : "-") + toFixedPoint(v, 1) + "&#8451;"))), 
         undefined);
     public humidityProperty = new PropertyImpl<number|undefined>(
         "Влажность", 
-        new SpanHTMLRenderer(v => v === undefined ? "Нет данных" : (v + "%")), 
+        new SpanHTMLRenderer(v => v === undefined ? "Нет данных" : (toFixedPoint(v, 1) + "%")), 
         undefined);
     public pressureProperty = new PropertyImpl<number|undefined>(
         "Давление", 
@@ -243,7 +265,7 @@ export class ClockController extends ClassWithId implements Controller {
                 if (this.devParams["hasPWMOnD0"] === 'true') {
                     if (this.d4PWM) {
                         if (val) {
-                            this.d4PWM.set(30);
+                            this.d4PWM.set(35);
                         } else {
                             this.d4PWM.set(0);
                         }
@@ -275,7 +297,7 @@ export class ClockController extends ClassWithId implements Controller {
     public readonly relays: ControllerRelay[] = [];
     private readonly devParams: DevParams;
 
-    constructor(private readonly ws: WebSocket,
+    constructor(private readonly ws: ClockControllerCommunications,
         public readonly ip: string,
         readonly hello: Hello,
         private readonly handler: ClockControllerEvents) {
@@ -439,33 +461,27 @@ export class ClockController extends ClassWithId implements Controller {
     }
 
     public get online() {
-        return !!this.ws && this.wasRecentlyContacted();
+        return this.wasRecentlyContacted();
     }
 
     public dropConnection() {
-        // console.log(this.ip, "dropConnection", this.ws.readyState, [this.ws.CONNECTING, this.ws.OPEN]);
         if (this.intervalId) {
             clearInterval(this.intervalId);
             this.intervalId = undefined;
             this.handler.onDisconnect();
         }
-        if (this.ws.readyState === this.ws.OPEN) {
-            // console.log(this.ip, "CLOSE");
-            this.ws.close();
-        }
+        this.ws.disconnect();
     }
 
     public async reboot(): Promise<void> {
-        await this.send({ type: "reboot" });
+        await this.send({ type: 'reboot' });
         await delay(10);
         this.dropConnection();
     }
 
-    public send(json: Object): Promise<void> {
-        const txt = JSON.stringify(json);
-        // console.log(this + " SEND: " + txt);
+    public send(json: AnyMessageToSend): Promise<void> {
         try {
-            this.ws.send(txt);
+            this.ws.send(json);
         } catch (err) {
             // Failed to send, got error, let's reconnect
             this.dropConnection();
@@ -548,7 +564,7 @@ export class ClockController extends ClassWithId implements Controller {
                 break;
             case 'relayState':
                 // console.log(this + " " + "relayState: ", objData.id, objData.value);
-                this.relays[objData.id].setInternal(objData.value);
+                this.setRelayState(objData.id, objData.value);
                 break;
             case 'ledstripeState':
                 this.ledStripeColorProperty.setInternal(objData.value.substr(0, 8));
@@ -566,6 +582,10 @@ export class ClockController extends ClassWithId implements Controller {
         }
     }
 
+    public setRelayState(id: number, value: boolean): void {
+        this.relays[id].setInternal(value);
+    }
+
     public playMp3(index: number): void {
         // console.log(this.name, JSON.stringify({ type: 'playmp3', index: "" + index }));
         this.send({ type: 'playmp3', index: "" + index });
@@ -574,7 +594,7 @@ export class ClockController extends ClassWithId implements Controller {
     public setVol(vol: number): void {       
         const value = "" + Math.round(Math.max(0, Math.min(30, (vol*30/100))));
         // console.log(this.name, JSON.stringify({ type: 'setvolume', value }));
-        this.send({ type: 'setvolume', value });        
+        this.send({ type: 'setvolume', value });
     }
 
     private createPWMProp(pin: string): WritableProperty<number> {

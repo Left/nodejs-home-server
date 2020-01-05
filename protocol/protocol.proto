@@ -3,21 +3,68 @@
 
 syntax = "proto2";
 
-message Settings {
-    required string name = 1;
-    required string rus_name = 2;
-}
-
 message Hello {
     required int32 versionMajor = 1;
     required int32 versionMinor = 2;
     required int32 versionLast  = 3;
-    required Settings settings  = 4;
+    required bool screenEnabled = 4;
+    required string settings = 5; // JSON-encoded
+}
+
+message Relay {
+    required int32 id = 1;
+    required bool state = 2;
+}
+
+message ParsedRemote {
+    required string remote = 1;
+    required string key = 2;
 }
 
 message Msg {
     required int32 id = 1;
     required int32 timeseq = 2;
     optional Hello hello = 3;
-    repeated int32 irKeyPeriods = 4 [packed=true];
+    repeated uint32 irKeyPeriods = 4 [packed=true];
+    optional string debugLogMessage = 5;
+    repeated Relay relayStates = 6;
+    optional ParsedRemote parsedRemote = 7; 
+    optional bool buttonPressed = 8;
+    optional uint32 weight = 9;
+    optional float temp = 10;
+    optional float humidity = 11;
+    optional float pressure = 12;
+    optional uint32 potentiometer = 13;
+    optional bool atxState = 14;
+}
+
+
+message MsgBack {
+    required int32 id = 1;
+    optional bool introduceYourself = 200;
+    optional bool reboot = 201;
+    optional bool screenEnable = 202;
+    optional string testMsg = 3;
+    optional uint32 unixtime = 4;
+    optional string textToShow = 5;
+    optional uint32 timeMsToShow = 6;
+    enum ShowType {
+        SHOW = 0;
+        TUNE = 1;
+        ADDITIONAL = 2;
+    }
+    optional ShowType showType = 7;
+    optional uint32 relaysToSwitch = 8;
+    optional bool relaysToSwitchState = 9;
+    optional bool atxEnable = 10;
+    optional uint32 playMp3 = 11;
+    optional uint32 volume = 12;
+    optional uint32 brightness = 13;
+    optional uint32 pwmPin = 14;
+    optional uint32 pwmValue = 15;
+    optional uint32 pwmPeriod = 16;
+    optional string ledValue = 17;
+    optional uint32 ledPeriod = 18;
+    optional string ledBaseColor = 19;
+    optional string ledBlinkColors = 20;
 }

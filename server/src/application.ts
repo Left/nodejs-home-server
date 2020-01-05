@@ -17,10 +17,11 @@ import { getYoutubeInfo, parseYoutubeUrl, getYoutubeInfoById } from "./youtube.u
 import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer, ImgHTMLRenderer, Disposable, OnOff, HTMLRederer, HourMinHTMLRenderer } from "./properties";
 import { TabletHost, Tablet, adbClient, Tracker, Device } from "./android.tablet";
 import { CompositeLcdInformer } from './informer.api';
-import { ClockController, Hello, ClockControllerEvents } from './esp8266.controller';
+import { ClockController, ClockControllerCommunications, Hello, ClockControllerEvents, AnyMessageToSend } from './esp8266.controller';
 
-import { Msg } from "./../generated/protocol_pb";
+import { Msg, MsgBack, ShowTypeMap } from "./../generated/protocol_pb";
 import { doWithTimeout, delay } from './common.utils';
+import { disconnect } from 'cluster';
 
 class GPIORelay extends Relay {
     private _init: Promise<void>;
@@ -360,6 +361,7 @@ function clrFromName(name: string) {
     }).join('');
 }
 
+const UDP_SERVER_PORT = 8081;
 
 class App implements TabletHost {
     public expressApi: express.Express;
@@ -387,7 +389,7 @@ class App implements TabletHost {
     }
 
     private dynamicControllers: Map<string, ClockController> = new Map();
-
+    
     findDynController(internalName: string): ClockController | undefined {
         for (const ctrl of this.dynamicControllers.values()) {
             if (ctrl.internalName == internalName) {
@@ -1708,18 +1710,148 @@ class App implements TabletHost {
         }, 1000*60*60);
 
         const udpServer = dgram.createSocket("udp4");
+        const sendUdpMsg = (address: string, modify: (m: MsgBack) => void) => {
+            const back = new MsgBack();
+            back.setId(42);                   
+            back.setUnixtime(Math.floor((new Date()).getTime() / 1000));
+            modify(back);
+
+            const buf = back.serializeBinary();
+            // console.log(buf.toString());
+
+            // send
+            udpServer.send(buf, UDP_SERVER_PORT, address, (err, bytes) => {
+                if (err) {
+                    console.log(err);
+                }
+            });
+        }
+
         udpServer.on('error', err => {
             console.error(err);
             udpServer.close();
         });
         udpServer.on('message', (msg, rinfo) => {
-            console.log(rinfo.address);
+            const controller = Array.from(this.dynamicControllers.values()).find(dc => {
+                return dc.ip === rinfo.address;
+            });
+
+            if (controller) {
+                controller.lastResponse = (new Date()).getTime();
+            } else {
+                console.log('NOT FOUND', rinfo.address);
+            }
 
             try {
                 const newLocal = Msg.deserializeBinary(msg);
                 const typedMessage = newLocal.toObject();
-                if (typedMessage.irkeyperiodsList.length > 0) {
-                    this.onRawIRKey(this.findDynController('ESP_9331442')!, typedMessage.timeseq, typedMessage.irkeyperiodsList);
+
+                if (controller) {
+                    controller.lastMsgLocal = typedMessage.timeseq;
+                } else {
+                    // Let other side introduce self
+                    sendUdpMsg(rinfo.address, (m: MsgBack) => {
+                        m.setIntroduceyourself(true);
+                    })
+                }
+
+                if (typedMessage.debuglogmessage) {
+                    console.log(rinfo.address, typedMessage.debuglogmessage);
+                }
+                if (typedMessage.relaystatesList && typedMessage.relaystatesList.length > 0) {
+                    if (controller) {
+                        for (const r of typedMessage.relaystatesList) {
+                            controller.setRelayState(r.id!, r.state!);
+                        }
+                    }
+                }
+                if (typedMessage.hello) {
+                    if (controller) {
+                        controller.dropConnection();
+                    }
+                    this.createClockController({
+                        type: 'hello',
+                        firmware: typedMessage.hello.versionmajor + "." + typedMessage.hello.versionminor,
+                        afterRestart: 0,
+                        screenEnabled: typedMessage.hello.screenenabled,
+                        devParams: JSON.parse(typedMessage.hello.settings || "{}")
+                    }, rinfo.address, {
+                        send: (packet: AnyMessageToSend) => {
+                            sendUdpMsg(rinfo.address, (m: MsgBack) => {
+                                // TODO: Impl
+                                switch (packet.type) {
+                                    case 'reboot':
+                                        m.setReboot(true);
+                                        break;
+                                    case 'show':
+                                    case 'tune':
+                                    case 'additional-info':
+                                        if (packet.totalMsToShow) {
+                                            m.setTimemstoshow(packet.totalMsToShow);
+                                        }
+                                        m.setTexttoshow(packet.text);
+                                        m.setShowtype({
+                                            'show': ShowTypeMap.SHOW,
+                                            'tune': ShowTypeMap.TUNE,
+                                            'additional-info': ShowTypeMap.ADDITIONAL
+                                        }[packet.type]);
+                                        break;
+                                    case 'switch':
+                                        m.setRelaystoswitch(+packet.id);
+                                        m.setRelaystoswitchstate(packet.on === 'true');
+                                        break;
+                                    case 'atxEnable':
+                                        m.setAtxenable(packet.value);
+                                        break;
+                                    case 'playmp3':
+                                        m.setPlaymp3(+packet.index);
+                                        break;
+                                    case 'setvolume':
+                                        m.setVolume(+packet.value);
+                                        break;
+                                    case 'screenEnable':
+                                        m.setScreenenable(packet.value);
+                                        break;
+                                    case 'brightness':
+                                        m.setBrightness(packet.value);
+                                        break;
+                                    case 'pwm':
+                                        m.setPwmpin(+(packet.pin.slice(1)));
+                                        m.setPwmvalue(packet.value);
+                                        m.setPwmperiod(packet.period);
+                                        break;
+                                    case 'ledstripe':
+                                        m.setLedperiod(packet.period);
+                                        if ('newyear' in packet) {
+                                            m.setLedbasecolor(packet.basecolor);
+                                            m.setLedblinkcolors(packet.blinkcolors);
+                                        } else {
+                                            m.setLedvalue(packet.value);
+                                        }
+                                        break;
+                                }
+                            });
+                        },
+                        disconnect: () => {
+                            // Something to do?
+                        }
+                    });
+                }
+                if (typedMessage.irkeyperiodsList && typedMessage.irkeyperiodsList.length > 0) {
+                    // console.log(typedMessage.irkeyperiodsList.join(','));
+                    if (controller) {
+                        this.onRawIRKey(controller, typedMessage.timeseq!, typedMessage.irkeyperiodsList);
+                    }
+                }
+
+                if (typedMessage.humidity && typedMessage.temp && typedMessage.pressure) {
+                    if (controller) {
+                        controller.tempProperty.setInternal(typedMessage.temp);
+                        controller.humidityProperty.setInternal(typedMessage.humidity);
+                        controller.pressureProperty.setInternal(typedMessage.pressure);
+                    }
+    
+                    this.weatherChanged(typedMessage.temp, typedMessage.pressure, typedMessage.humidity);
                 }
                 // console.log(JSON.stringify(typedMessage, undefined, ' '));
             } catch (e) {
@@ -1731,7 +1863,7 @@ class App implements TabletHost {
             const address = udpServer.address();
             console.log(`server listening ${address.address}:${address.port}`);
         });
-        udpServer.bind(8081);
+        udpServer.bind(UDP_SERVER_PORT);
 
         this.expressApi = express();
 
@@ -1761,70 +1893,18 @@ class App implements TabletHost {
 
                         // It might be hello message
                         if ('type' in objData && objData.type == 'hello') {
-                            console.log(ip, "HELLO");
-
-                            const hello = objData as Hello;
-
-                            const clockController = new ClockController(ws, ip, hello, {
-                                onDisconnect: () => {
-                                    console.log(ip, 'DISCONNECT!!!');
-                                    // console.trace();
-                                    this.dynamicControllers.delete(ip);
-                                    if (clockController.lcdInformer) {
-                                        this.allInformers.delete(ip);
-                                    }
-                                    this.reloadAllWebClients('web');
-                                    this.allInformers.runningLine('Отключено ' + clockController.name, 3000);
+                            let clockController = this.createClockController(objData, ip, {
+                                send: (json: AnyMessageToSend) => {
+                                    const txt = JSON.stringify(json);
+                                    ws.send(txt);
                                 },
-                                onWeatherChanged: (val) => {
-                                    this.allInformers.additionalInfo(
-                                        Array.prototype.concat(
-                                            val.temp ? [tempAsString(val.temp)] : [],
-                                            val.pressure ? ["давление " + toFixedPoint(val.pressure*0.00750062, 1) + "мм рт ст"] : [],
-                                            val.humidity ? ["влажность " + toFixedPoint(val.humidity, 1) + "%"] : [],
-                                            [this.nowWeather.get()]
-                                        ).filter(x => !!x).join(', '));
-                                },
-                                onWeightChanged: (weight: number) => {
-                                    this.allInformers.staticLine(weight + "г");
-                                },
-                                onWeightReset: () => {
-                                    this.allInformers.staticLine("Сброс");
-                                },
-                                onPotentiometer: (value: number) => {                                   
-                                    if (clockController.hasScreen()) {
-                                        // Let's tune screen brightness
-                                        // adc value is from 0 (nuke bright) to 1024 (absolutely dark)
-                                        // 
-                                        clockController.brightnessProperty.set(Math.floor((1024 - value) / 18));
-                                    }
-                                },
-                                onRawIrKey: async (timeSeq: number, periods: number[]) => {
-                                    return this.onRawIRKey(clockController, timeSeq, periods);
-                                },
-                                onIRKey: (remoteId: string, keyId: string) => {
-                                    this.onIRKey(remoteId, keyId, clockController);
+                                disconnect: () => {
+                                    if (ws.readyState === ws.OPEN) {
+                                        // console.log(this.ip, "CLOSE");
+                                        ws.close();
+                                    }                            
                                 }
-                            } as ClockControllerEvents);
-                            if (!!controller) {
-                                // What is happening here:
-                                // hello comes again from the same controller
-                                // it means it was reset - let's re-init it
-                                controller.dropConnection();
-                            }
-                            this.dynamicControllers.set(ip, clockController);
-                            if (clockController.lcdInformer) {
-                                this.allInformers.set(ip, clockController.lcdInformer);
-                            }
-                            clockController.send({ type: "unixtime", value: Math.floor((new Date()).getTime() / 1000) });
-                            if (clockController.hasScreen()) {
-                                clockController.screenEnabledProperty.set(!this.isSleeping);
-                            }
-
-                            // this.allInformers.runningLine('Подключено ' + clockController.name, 3000);
-
-                            // Reload
-                            this.reloadAllWebClients('web');
+                            });
 
                             ws.on('error', () => { clockController.dropConnection(); });
                             ws.on('close', () => { clockController.dropConnection(); });
@@ -2449,6 +2529,68 @@ class App implements TabletHost {
         const keys: KeysSettings = await this.keysSettings.read();
         const now = nowHourMin();
         return hourMinCompare(keys.dayBeginsAt, now) >= 0 || hourMinCompare(now, keys.dayEndsAt) >= 0;
+    }
+
+    private createClockController(hello: Hello, ip: string, handlers: ClockControllerCommunications): ClockController {
+        const clockController: ClockController = new ClockController(handlers, ip, hello, {
+            onDisconnect: () => {
+                console.log(ip, 'DISCONNECT!!!');
+                // console.trace();
+                this.dynamicControllers.delete(ip);
+                if (clockController.lcdInformer) {
+                    this.allInformers.delete(ip);
+                }
+                this.reloadAllWebClients('web');
+                this.allInformers.runningLine('Отключено ' + clockController.name, 3000);
+            },
+            onWeatherChanged: (val) => {
+                this.weatherChanged(val.temp, val.pressure, val.humidity);
+            },
+            onWeightChanged: (weight: number) => {
+                this.allInformers.staticLine(weight + "г");
+            },
+            onWeightReset: () => {
+                this.allInformers.staticLine("Сброс");
+            },
+            onPotentiometer: (value: number) => {                                   
+                if (clockController.hasScreen()) {
+                    // Let's tune screen brightness
+                    // adc value is from 0 (nuke bright) to 1024 (absolutely dark)
+                    // 
+                    clockController.brightnessProperty.set(Math.floor((1024 - value) / 18));
+                }
+            },
+            onRawIrKey: async (timeSeq: number, periods: number[]) => {
+                return this.onRawIRKey(clockController, timeSeq, periods);
+            },
+            onIRKey: (remoteId: string, keyId: string) => {
+                this.onIRKey(remoteId, keyId, clockController);
+            }
+        } as ClockControllerEvents);
+        this.dynamicControllers.set(ip, clockController);
+        if (clockController.lcdInformer) {
+            this.allInformers.set(ip, clockController.lcdInformer);
+        }
+        clockController.send({ type: "unixtime", value: Math.floor((new Date()).getTime() / 1000) });
+        if (clockController.hasScreen()) {
+            clockController.screenEnabledProperty.set(!this.isSleeping);
+        }
+
+        // this.allInformers.runningLine('Подключено ' + clockController.name, 3000);
+
+        // Reload
+        this.reloadAllWebClients('web');
+
+        return clockController;
+    }
+    weatherChanged(temp: number | undefined, pressure: number | undefined, humidity: number | undefined) {
+        this.allInformers.additionalInfo(
+            Array.prototype.concat(
+                temp ? [tempAsString(temp)] : [],
+                pressure ? ["давление " + toFixedPoint(pressure*0.00750062, 1) + "мм рт ст"] : [],
+                humidity ? ["влажность " + toFixedPoint(humidity, 1) + "%"] : [],
+                [this.nowWeather.get()]
+            ).filter(x => !!x).join(', '));
     }
 }
 

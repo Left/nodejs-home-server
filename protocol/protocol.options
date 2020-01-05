@@ -1,6 +1,6 @@
 #
-Msg.irKeyPeriods        max_count:500
+Msg.relayStates        max_count:8
 
 #
-Settings.name       max_size:100
-Settings.rus_name   max_size:100
+# Settings.name       max_size:100
+
