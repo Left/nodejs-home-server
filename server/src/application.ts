@@ -19,9 +19,8 @@ import { TabletHost, Tablet, adbClient, Tracker, Device } from "./android.tablet
 import { CompositeLcdInformer } from './informer.api';
 import { ClockController, ClockControllerCommunications, Hello, ClockControllerEvents, AnyMessageToSend } from './esp8266.controller';
 
-import { Msg, MsgBack, ShowTypeMap } from "./../generated/protocol_pb";
+import { Msg, MsgBack } from "./../generated/protocol_pb";
 import { doWithTimeout, delay } from './common.utils';
-import { disconnect } from 'cluster';
 
 class GPIORelay extends Relay {
     private _init: Promise<void>;
@@ -991,7 +990,7 @@ class App implements TabletHost {
 
     private get controllers(): Controller[] {
         const dynPropsArray = Array.from(this.dynamicControllers.values());
-        dynPropsArray.sort((a, b) => a.ip == b.ip ? 0 : (a.ip < b.ip ? -1 : 1));
+        dynPropsArray.sort((a, b) => a.name.localeCompare(b.name));
 
         return Array.prototype.concat([
                 this.sleepAt.controller,
@@ -1713,7 +1712,6 @@ class App implements TabletHost {
         const sendUdpMsg = (address: string, modify: (m: MsgBack) => void) => {
             const back = new MsgBack();
             back.setId(42);                   
-            back.setUnixtime(Math.floor((new Date()).getTime() / 1000));
             modify(back);
 
             const buf = back.serializeBinary();
@@ -1731,30 +1729,27 @@ class App implements TabletHost {
             console.error(err);
             udpServer.close();
         });
+        const lastHelloReqSent: Map<string, number> = new Map();
         udpServer.on('message', (msg, rinfo) => {
-            const controller = Array.from(this.dynamicControllers.values()).find(dc => {
-                return dc.ip === rinfo.address;
-            });
-
-            if (controller) {
-                controller.lastResponse = (new Date()).getTime();
-            } else {
-                console.log('NOT FOUND', rinfo.address);
-            }
+            const controller = this.dynamicControllers.get(rinfo.address);
 
             try {
                 const newLocal = Msg.deserializeBinary(msg);
                 const typedMessage = newLocal.toObject();
 
                 if (controller) {
-                    controller.lastMsgLocal = typedMessage.timeseq;
+                    // console.log(rinfo.address, controller.lastResponse, Date.now());
+                    controller.lastResponse = Date.now();
+                    controller.lastMsgLocal = typedMessage.timeseq!;
                 } else {
-                    // Let other side introduce self
-                    sendUdpMsg(rinfo.address, (m: MsgBack) => {
-                        m.setIntroduceyourself(true);
-                    })
+                    console.log('NOT FOUND', rinfo.address, JSON.stringify(typedMessage));
                 }
 
+                if (typedMessage.potentiometer) {
+                    if (controller) {
+                        this.onPotentiometer(controller, typedMessage.potentiometer);
+                    }
+                }
                 if (typedMessage.debuglogmessage) {
                     console.log(rinfo.address, typedMessage.debuglogmessage);
                 }
@@ -1766,7 +1761,8 @@ class App implements TabletHost {
                     }
                 }
                 if (typedMessage.hello) {
-                    if (controller) {
+                    if (controller && controller.lastMsgLocal && (controller.lastMsgLocal! > typedMessage.timeseq!)) {
+                        console.log('Controller was restarted', rinfo.address);
                         controller.dropConnection();
                     }
                     this.createClockController({
@@ -1791,9 +1787,9 @@ class App implements TabletHost {
                                         }
                                         m.setTexttoshow(packet.text);
                                         m.setShowtype({
-                                            'show': ShowTypeMap.SHOW,
-                                            'tune': ShowTypeMap.TUNE,
-                                            'additional-info': ShowTypeMap.ADDITIONAL
+                                            'show': MsgBack.ShowType.SHOW,
+                                            'tune': MsgBack.ShowType.TUNE,
+                                            'additional-info': MsgBack.ShowType.ADDITIONAL
                                         }[packet.type]);
                                         break;
                                     case 'switch':
@@ -1829,6 +1825,11 @@ class App implements TabletHost {
                                             m.setLedvalue(packet.value);
                                         }
                                         break;
+                                    case 'unixtime':
+                                        m.setUnixtime(Math.floor((new Date()).getTime() / 1000));
+                                        break;
+                                    case 'ping':
+                                        break;
                                 }
                             });
                         },
@@ -1836,11 +1837,26 @@ class App implements TabletHost {
                             // Something to do?
                         }
                     });
+                } else {
+                    if (!controller && 
+                        (!lastHelloReqSent.has(rinfo.address) ||
+                        (Date.now() - lastHelloReqSent.get(rinfo.address)! > 3000))) {
+                        // Let other side introduce self
+                        sendUdpMsg(rinfo.address, (m: MsgBack) => {
+                            m.setIntroduceyourself(true);
+                        })
+                        lastHelloReqSent.set(rinfo.address, Date.now());
+                    }
                 }
                 if (typedMessage.irkeyperiodsList && typedMessage.irkeyperiodsList.length > 0) {
                     // console.log(typedMessage.irkeyperiodsList.join(','));
                     if (controller) {
                         this.onRawIRKey(controller, typedMessage.timeseq!, typedMessage.irkeyperiodsList);
+                    }
+                }
+                if (typedMessage.parsedremote) {
+                    if (controller) {
+                        this.onIRKey(typedMessage.parsedremote.remote!, typedMessage.parsedremote.key!, controller);
                     }
                 }
 
@@ -2534,6 +2550,7 @@ class App implements TabletHost {
     private createClockController(hello: Hello, ip: string, handlers: ClockControllerCommunications): ClockController {
         const clockController: ClockController = new ClockController(handlers, ip, hello, {
             onDisconnect: () => {
+                console.trace();
                 console.log(ip, 'DISCONNECT!!!');
                 // console.trace();
                 this.dynamicControllers.delete(ip);
@@ -2553,12 +2570,7 @@ class App implements TabletHost {
                 this.allInformers.staticLine("Сброс");
             },
             onPotentiometer: (value: number) => {                                   
-                if (clockController.hasScreen()) {
-                    // Let's tune screen brightness
-                    // adc value is from 0 (nuke bright) to 1024 (absolutely dark)
-                    // 
-                    clockController.brightnessProperty.set(Math.floor((1024 - value) / 18));
-                }
+                return this.onPotentiometer(clockController, value);
             },
             onRawIrKey: async (timeSeq: number, periods: number[]) => {
                 return this.onRawIRKey(clockController, timeSeq, periods);
@@ -2567,23 +2579,34 @@ class App implements TabletHost {
                 this.onIRKey(remoteId, keyId, clockController);
             }
         } as ClockControllerEvents);
+        console.log('Adding controller', ip);
         this.dynamicControllers.set(ip, clockController);
         if (clockController.lcdInformer) {
             this.allInformers.set(ip, clockController.lcdInformer);
         }
-        clockController.send({ type: "unixtime", value: Math.floor((new Date()).getTime() / 1000) });
         if (clockController.hasScreen()) {
             clockController.screenEnabledProperty.set(!this.isSleeping);
+            delay(100).then(() => {
+                clockController.send({ type: 'unixtime', value: Math.floor((new Date()).getTime() / 1000) });
+            });
         }
-
-        // this.allInformers.runningLine('Подключено ' + clockController.name, 3000);
 
         // Reload
         this.reloadAllWebClients('web');
 
         return clockController;
     }
-    weatherChanged(temp: number | undefined, pressure: number | undefined, humidity: number | undefined) {
+
+    private onPotentiometer(clockController: ClockController, value: number): void {
+        if (clockController.hasScreen()) {
+            // Let's tune screen brightness
+            // adc value is from 0 (nuke bright) to 1024 (absolutely dark)
+            // 
+            clockController.brightnessProperty.set(Math.floor((1024 - value) / 18));
+        }
+    }
+
+    private weatherChanged(temp: number | undefined, pressure: number | undefined, humidity: number | undefined): void {
         this.allInformers.additionalInfo(
             Array.prototype.concat(
                 temp ? [tempAsString(temp)] : [],

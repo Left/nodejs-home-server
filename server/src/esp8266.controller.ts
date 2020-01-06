@@ -226,7 +226,7 @@ export class ClockController extends ClassWithId implements Controller {
     public readonly lcdInformer?: LcdInformer;
     public readonly internalName: string;
 
-    public lastMsgLocal: number | undefined; // result of millis() method passed to server
+    public lastMsgLocal: number = 0; // result of millis() method passed to server
 
     public tempProperty = new PropertyImpl<number|undefined>(
         "Температура", 
@@ -265,7 +265,7 @@ export class ClockController extends ClassWithId implements Controller {
                 if (this.devParams["hasPWMOnD0"] === 'true') {
                     if (this.d4PWM) {
                         if (val) {
-                            this.d4PWM.set(35);
+                            this.d4PWM.set(28);
                         } else {
                             this.d4PWM.set(0);
                         }
@@ -440,12 +440,14 @@ export class ClockController extends ClassWithId implements Controller {
         }
 
         this.intervalId = setInterval(() => {
-            // console.log(this.name, "wasRecentlyContacted", this.wasRecentlyContacted());
-            if (!this.wasRecentlyContacted()) {
-                // 6 seconds passed, no repsonse. Drop the connection and re-try
-                this.dropConnection();
-            } else {
-                this.send({ type: 'ping', pingid: ("" + (this.pingId++)) } as Ping);
+            if (this.intervalId) {
+                if (!this.wasRecentlyContacted()) {
+                    // console.log(this.name, this.ip, "wasRecentlyContacted returned false", this.lastResponse, Date.now());
+                    // 6 seconds passed, no repsonse. Drop the connection and re-try
+                    this.dropConnection();
+                } else {
+                    this.send({ type: 'ping', pingid: ("" + (this.pingId++)) } as Ping);
+                }
             }
         }, 1500);
 
@@ -484,6 +486,7 @@ export class ClockController extends ClassWithId implements Controller {
             this.ws.send(json);
         } catch (err) {
             // Failed to send, got error, let's reconnect
+            console.log(err);
             this.dropConnection();
         }
         return Promise.resolve(void 0);
@@ -492,7 +495,7 @@ export class ClockController extends ClassWithId implements Controller {
     public toString(): string { return this.name; }
 
     protected wasRecentlyContacted() {
-        return Date.now() - this.lastResponse < 18000;
+        return (Date.now() - this.lastResponse) < 18000;
     }
 
     private tare(): void {
