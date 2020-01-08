@@ -65,10 +65,9 @@ type DevParams = {
     "device.name": string,         // Device Name String("ESP_") + ESP.getChipId()
     "device.name.russian": string, // Device Name (russian)
     "wifi.name": string,           // WiFi SSID ""
-    // "wifi.pwd": string,         // WiFi Password "true"
+    // "wifi.pwd": string,         // WiFi Password ""
     "websocket.server": string,    // WebSocket server ""
     "websocket.port": string,      // WebSocket port ""
-    "ntpTime": string,             // Get NTP time "true"
     "invertRelay": string,         // Invert relays "false"
     "hasScreen": string,           // Has screen "true"
     "hasHX711": string,            // Has HX711 (weight detector) "false"
@@ -119,7 +118,8 @@ export type AnyMessageToSend =
     { type: 'atxEnable', value: boolean } |
     { type: 'brightness', value: number } |
     { type: 'ledstripe', value: string, period: number } |
-    { type: 'ledstripe', newyear: true, basecolor: string, blinkcolors: string, period: number }
+    { type: 'ledstripe', newyear: true, basecolor: string, blinkcolors: string, period: number } |
+    { type: 'screen', content: { width: number, height: number, content: Buffer }, offsets: { x: number, y: number, at: number }[] }
     ;
 
 export interface ClockControllerEvents {
@@ -217,7 +217,6 @@ export type ClockControllerCommunications = {
 
 export class ClockController extends ClassWithId implements Controller {
     protected pingId = 0;
-    protected intervalId?: NodeJS.Timer;
     public lastResponse = Date.now();
     private readonly _name: string;
     private readonly _properties: Property<any>[];
@@ -439,18 +438,6 @@ export class ClockController extends ClassWithId implements Controller {
             this._properties.push(Button.createClientRedirect("Open settings", "http://" + ipA[0]));
         }
 
-        this.intervalId = setInterval(() => {
-            if (this.intervalId) {
-                if (!this.wasRecentlyContacted()) {
-                    // console.log(this.name, this.ip, "wasRecentlyContacted returned false", this.lastResponse, Date.now());
-                    // 6 seconds passed, no repsonse. Drop the connection and re-try
-                    this.dropConnection();
-                } else {
-                    this.send({ type: 'ping', pingid: ("" + (this.pingId++)) } as Ping);
-                }
-            }
-        }, 1500);
-
         console.log('Connected ' + this.name + ' (' + this.ip + ')');
     }
 
@@ -467,11 +454,7 @@ export class ClockController extends ClassWithId implements Controller {
     }
 
     public dropConnection() {
-        if (this.intervalId) {
-            clearInterval(this.intervalId);
-            this.intervalId = undefined;
-            this.handler.onDisconnect();
-        }
+        this.handler.onDisconnect();
         this.ws.disconnect();
     }
 
@@ -494,7 +477,7 @@ export class ClockController extends ClassWithId implements Controller {
 
     public toString(): string { return this.name; }
 
-    protected wasRecentlyContacted() {
+    public wasRecentlyContacted() {
         return (Date.now() - this.lastResponse) < 18000;
     }
 

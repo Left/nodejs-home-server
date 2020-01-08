@@ -25,6 +25,10 @@ export class CompositeLcdInformer implements LcdInformer {
         }
     }
 
+    public all(): IterableIterator<LcdInformer> {
+        return this.dynamicInformers.values();
+    }
+
     public delete(ip: string): any {
         this.dynamicInformers.delete(ip);
     }

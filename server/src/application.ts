@@ -19,7 +19,7 @@ import { TabletHost, Tablet, adbClient, Tracker, Device } from "./android.tablet
 import { CompositeLcdInformer } from './informer.api';
 import { ClockController, ClockControllerCommunications, Hello, ClockControllerEvents, AnyMessageToSend } from './esp8266.controller';
 
-import { Msg, MsgBack } from "./../generated/protocol_pb";
+import { Msg, MsgBack, ScreenOffset, ScreenContent } from "./../generated/protocol_pb";
 import { doWithTimeout, delay } from './common.utils';
 
 class GPIORelay extends Relay {
@@ -737,6 +737,7 @@ class App implements TabletHost {
                 this.allowRenames = val;
                 this.reloadAllWebClients('web');
             }}),
+            Button.create("Test", () => this.test()),
             this._freeMem
         ]
     }
@@ -1217,7 +1218,21 @@ class App implements TabletHost {
         this.makeSwitchChannelIrSeq('ent'),
         this.makeSwitchChannelIrSeq('reset'),
         this.simpleCmd([['fullscreen']], "", () => {
-            
+            const ledStripe = this.findDynController('LedStripe');
+            if (ledStripe) {
+                ledStripe.send({ type: 'ledstripe', 
+                    newyear: true, 
+                    basecolor: "00080000", 
+                    blinkcolors: Array.prototype.concat(
+                        Array(2).fill("0000FF00"),
+                        Array(3).fill("00008000"),
+                        // Array(2).fill("00FFFF00"),
+                        Array(2).fill("FFFF0000"),
+                        Array(2).fill("FF00FF00"),
+                        Array(3).fill("FF000000"))
+                            .join(''), 
+                    period: 8000 });
+            }
         }),
         this.simpleCmd([["record"]], "Лента на шкафу", (from) => {
             this.sound(from.controller, this.r1.get() ? 'lightOff' : 'lightOn');
@@ -1709,6 +1724,16 @@ class App implements TabletHost {
         }, 1000*60*60);
 
         const udpServer = dgram.createSocket("udp4");
+        setInterval(() => {
+            for (const controller of this.dynamicControllers.values()) {
+                if (!controller.wasRecentlyContacted()) {
+                    // console.log(this.name, this.ip, "wasRecentlyContacted returned false", this.lastResponse, Date.now());
+                    // 6 seconds passed, no repsonse. Drop the connection and re-try
+                    controller.dropConnection();
+                }
+            }
+        }, 1000);
+
         const sendUdpMsg = (address: string, modify: (m: MsgBack) => void) => {
             const back = new MsgBack();
             back.setId(42);                   
@@ -1759,6 +1784,9 @@ class App implements TabletHost {
                             controller.setRelayState(r.id!, r.state!);
                         }
                     }
+                }
+                if (typeof (typedMessage.atxstate) !== 'undefined') {
+                    console.log("ATX", typedMessage.atxstate);
                 }
                 if (typedMessage.hello) {
                     if (controller && controller.lastMsgLocal && (controller.lastMsgLocal! > typedMessage.timeseq!)) {
@@ -1830,6 +1858,23 @@ class App implements TabletHost {
                                         break;
                                     case 'ping':
                                         break;
+                                    case 'screen':
+                                        const offsetsArr = packet.offsets.map(
+                                            x => {
+                                                const so = new ScreenOffset();
+                                                so.setX(x.x);
+                                                so.setY(x.y);
+                                                so.setAtms(x.at);
+                                                return so;
+                                            }
+                                        );
+                                        m.setScreenoffsetfrom(offsetsArr[0]);
+                                        m.setScreenoffsetto(offsetsArr[1]);
+                                        const sc = new ScreenContent();
+                                        sc.setWidth(packet.content.width);
+                                        sc.setHeight(packet.content.height);
+                                        sc.setContent(packet.content.content);
+                                        m.setScreencontent(sc);
                                 }
                             });
                         },
@@ -1837,6 +1882,8 @@ class App implements TabletHost {
                             // Something to do?
                         }
                     });
+                    // Reload
+                    this.reloadAllWebClients('web');
                 } else {
                     if (!controller && 
                         (!lastHelloReqSent.has(rinfo.address) ||
@@ -1895,8 +1942,6 @@ class App implements TabletHost {
 
             //connection is up, let's add a simple simple event
             if (arraysAreEqual(url, ['esp'])) {
-                console.log(ip, "CONNECT");
-
                 ws.on('close', (data: string) => {
                     const controller = this.dynamicControllers.get(ip);
                     console.log((controller || {name: ip}).name, "CLOSE");
@@ -1921,6 +1966,8 @@ class App implements TabletHost {
                                     }                            
                                 }
                             });
+                            // Reload
+                            this.reloadAllWebClients('web');
 
                             ws.on('error', () => { clockController.dropConnection(); });
                             ws.on('close', () => { clockController.dropConnection(); });
@@ -2579,7 +2626,6 @@ class App implements TabletHost {
                 this.onIRKey(remoteId, keyId, clockController);
             }
         } as ClockControllerEvents);
-        console.log('Adding controller', ip);
         this.dynamicControllers.set(ip, clockController);
         if (clockController.lcdInformer) {
             this.allInformers.set(ip, clockController.lcdInformer);
@@ -2590,9 +2636,6 @@ class App implements TabletHost {
                 clockController.send({ type: 'unixtime', value: Math.floor((new Date()).getTime() / 1000) });
             });
         }
-
-        // Reload
-        this.reloadAllWebClients('web');
 
         return clockController;
     }
@@ -2614,6 +2657,33 @@ class App implements TabletHost {
                 humidity ? ["влажность " + toFixedPoint(humidity, 1) + "%"] : [],
                 [this.nowWeather.get()]
             ).filter(x => !!x).join(', '));
+    }
+
+    private test(): void {
+        for (const inf of this.dynamicControllers.values()) {
+            if (inf.hasScreen()) {
+                let t = inf.lastMsgLocal + 200;
+                const tStep = 1000;
+                for (let i = 0; i < 10; ++i, t+=tStep) {
+                    inf.send({
+                        type: 'screen',
+                        content: { 
+                            width: 32, 
+                            height: 8, 
+                            content: Buffer.from(Array.from({ length: 32}).map((x, ii) => [ 0xff, 0, 0xff, 0, 0xaa] [i % 5]))
+                        },
+                        offsets: [{ 
+                            x: i == 0 ? 0 : -32, 
+                            y: 0,
+                            at: i == 0 ? t : t - tStep
+                        }, {
+                            x: 32,
+                            y: 0, 
+                            at: t + tStep
+                        }] });
+                }
+            }
+        }
     }
 }
 

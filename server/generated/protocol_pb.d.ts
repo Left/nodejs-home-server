@@ -205,6 +205,76 @@ export namespace Msg {
   }
 }
 
+export class ScreenOffset extends jspb.Message {
+  hasX(): boolean;
+  clearX(): void;
+  getX(): number | undefined;
+  setX(value: number): void;
+
+  hasY(): boolean;
+  clearY(): void;
+  getY(): number | undefined;
+  setY(value: number): void;
+
+  hasAtms(): boolean;
+  clearAtms(): void;
+  getAtms(): number | undefined;
+  setAtms(value: number): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): ScreenOffset.AsObject;
+  static toObject(includeInstance: boolean, msg: ScreenOffset): ScreenOffset.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: ScreenOffset, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): ScreenOffset;
+  static deserializeBinaryFromReader(message: ScreenOffset, reader: jspb.BinaryReader): ScreenOffset;
+}
+
+export namespace ScreenOffset {
+  export type AsObject = {
+    x?: number,
+    y?: number,
+    atms?: number,
+  }
+}
+
+export class ScreenContent extends jspb.Message {
+  hasWidth(): boolean;
+  clearWidth(): void;
+  getWidth(): number | undefined;
+  setWidth(value: number): void;
+
+  hasHeight(): boolean;
+  clearHeight(): void;
+  getHeight(): number | undefined;
+  setHeight(value: number): void;
+
+  hasContent(): boolean;
+  clearContent(): void;
+  getContent(): Uint8Array | string;
+  getContent_asU8(): Uint8Array;
+  getContent_asB64(): string;
+  setContent(value: Uint8Array | string): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): ScreenContent.AsObject;
+  static toObject(includeInstance: boolean, msg: ScreenContent): ScreenContent.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: ScreenContent, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): ScreenContent;
+  static deserializeBinaryFromReader(message: ScreenContent, reader: jspb.BinaryReader): ScreenContent;
+}
+
+export namespace ScreenContent {
+  export type AsObject = {
+    width?: number,
+    height?: number,
+    content: Uint8Array | string,
+  }
+}
+
 export class MsgBack extends jspb.Message {
   hasId(): boolean;
   clearId(): void;
@@ -316,6 +386,21 @@ export class MsgBack extends jspb.Message {
   getLedblinkcolors(): string | undefined;
   setLedblinkcolors(value: string): void;
 
+  hasScreencontent(): boolean;
+  clearScreencontent(): void;
+  getScreencontent(): ScreenContent | undefined;
+  setScreencontent(value?: ScreenContent): void;
+
+  hasScreenoffsetfrom(): boolean;
+  clearScreenoffsetfrom(): void;
+  getScreenoffsetfrom(): ScreenOffset | undefined;
+  setScreenoffsetfrom(value?: ScreenOffset): void;
+
+  hasScreenoffsetto(): boolean;
+  clearScreenoffsetto(): void;
+  getScreenoffsetto(): ScreenOffset | undefined;
+  setScreenoffsetto(value?: ScreenOffset): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): MsgBack.AsObject;
   static toObject(includeInstance: boolean, msg: MsgBack): MsgBack.AsObject;
@@ -350,6 +435,9 @@ export namespace MsgBack {
     ledperiod?: number,
     ledbasecolor?: string,
     ledblinkcolors?: string,
+    screencontent?: ScreenContent.AsObject,
+    screenoffsetfrom?: ScreenOffset.AsObject,
+    screenoffsetto?: ScreenOffset.AsObject,
   }
 
   export interface ShowTypeMap {
