@@ -2258,7 +2258,8 @@ proto.MsgBack.toObject = function(includeInstance, msg) {
     ledblinkcolors: (f = jspb.Message.getField(msg, 20)) == null ? undefined : f,
     screencontent: (f = msg.getScreencontent()) && proto.ScreenContent.toObject(includeInstance, f),
     screenoffsetfrom: (f = msg.getScreenoffsetfrom()) && proto.ScreenOffset.toObject(includeInstance, f),
-    screenoffsetto: (f = msg.getScreenoffsetto()) && proto.ScreenOffset.toObject(includeInstance, f)
+    screenoffsetto: (f = msg.getScreenoffsetto()) && proto.ScreenOffset.toObject(includeInstance, f),
+    screenclean: (f = jspb.Message.getBooleanField(msg, 303)) == null ? undefined : f
   };
 
   if (includeInstance) {
@@ -2397,6 +2398,10 @@ proto.MsgBack.deserializeBinaryFromReader = function(msg, reader) {
       var value = new proto.ScreenOffset;
       reader.readMessage(value,proto.ScreenOffset.deserializeBinaryFromReader);
       msg.setScreenoffsetto(value);
+      break;
+    case 303:
+      var value = /** @type {boolean} */ (reader.readBool());
+      msg.setScreenclean(value);
       break;
     default:
       reader.skipField();
@@ -2603,6 +2608,13 @@ proto.MsgBack.serializeBinaryToWriter = function(message, writer) {
       302,
       f,
       proto.ScreenOffset.serializeBinaryToWriter
+    );
+  }
+  f = /** @type {boolean} */ (jspb.Message.getField(message, 303));
+  if (f != null) {
+    writer.writeBool(
+      303,
+      f
     );
   }
 };
@@ -3517,6 +3529,42 @@ proto.MsgBack.prototype.clearScreenoffsetto = function() {
  */
 proto.MsgBack.prototype.hasScreenoffsetto = function() {
   return jspb.Message.getField(this, 302) != null;
+};
+
+
+/**
+ * optional bool screenClean = 303;
+ * @return {boolean}
+ */
+proto.MsgBack.prototype.getScreenclean = function() {
+  return /** @type {boolean} */ (jspb.Message.getBooleanFieldWithDefault(this, 303, false));
+};
+
+
+/**
+ * @param {boolean} value
+ * @return {!proto.MsgBack} returns this
+ */
+proto.MsgBack.prototype.setScreenclean = function(value) {
+  return jspb.Message.setField(this, 303, value);
+};
+
+
+/**
+ * Clears the field making it undefined.
+ * @return {!proto.MsgBack} returns this
+ */
+proto.MsgBack.prototype.clearScreenclean = function() {
+  return jspb.Message.setField(this, 303, undefined);
+};
+
+
+/**
+ * Returns whether this field is set.
+ * @return {boolean}
+ */
+proto.MsgBack.prototype.hasScreenclean = function() {
+  return jspb.Message.getField(this, 303) != null;
 };
 
 

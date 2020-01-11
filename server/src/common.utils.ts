@@ -49,15 +49,27 @@ export function wrapToHTML(tag: string| [string, {[k: string]: string}], body?: 
     }
 } 
 
-export function toHMS(d: Date): string {
-    function toDoubleZero(x: number): string {
-        if (x > 9) {
-            return '' + x;
-        } else {
-            return '0' + x;
-        }
+function toDoubleZero(x: number): string {
+    if (x > 9) {
+        return '' + x;
+    } else {
+        return '0' + x;
     }
-    return toDoubleZero(d.getHours()) + ":" + toDoubleZero(d.getMinutes()) + "." + toDoubleZero(Math.floor(d.getSeconds()));
+}
+
+function toTripleZero(x: number): string {
+    if (x <= 9) {
+        return '0' + x;
+    } else if (x <= 99) {
+        return '00' + x;
+    } else {
+        return '' + x;
+    }
+}
+
+export function toHMS(d: Date): string {
+    return toDoubleZero(d.getHours()) + ":" + toDoubleZero(d.getMinutes()) + " " + toDoubleZero(Math.floor(d.getSeconds())) + "." +
+        toTripleZero(d.getMilliseconds());
 }
 
 export function toHourMinSec(seconds: number): string {

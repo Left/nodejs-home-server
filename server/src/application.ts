@@ -12,7 +12,7 @@ import * as crypto from 'crypto';
 import * as querystring from 'querystring';
 
 import * as curl from "./http.util";
-import { HourMin, isHourMin, nowHourMin, hourMinCompare, toSec, runShell, Config, newConfig, arraysAreEqual, emptyDisposable, getFirstNonPrefixIndex, isNumKey, numArrToVal, toFixedPoint, tempAsString, doAt, parseOr, wrapToHTML, splitLines, toHourMinSec  } from "./common.utils";
+import { HourMin, isHourMin, nowHourMin, hourMinCompare, toSec, runShell, Config, newConfig, arraysAreEqual, emptyDisposable, getFirstNonPrefixIndex, isNumKey, numArrToVal, toFixedPoint, tempAsString, doAt, parseOr, wrapToHTML, splitLines, toHourMinSec, toHMS  } from "./common.utils";
 import { getYoutubeInfo, parseYoutubeUrl, getYoutubeInfoById } from "./youtube.utils";
 import { Relay, Controller, newWritableProperty, CheckboxHTMLRenderer, SliderHTMLRenderer, Property, ClassWithId, SpanHTMLRenderer, Button, WritablePropertyImpl, SelectHTMLRenderer, isWriteableProperty, StringAndGoRendrer, ImgHTMLRenderer, Disposable, OnOff, HTMLRederer, HourMinHTMLRenderer } from "./properties";
 import { TabletHost, Tablet, adbClient, Tracker, Device } from "./android.tablet";
@@ -21,6 +21,8 @@ import { ClockController, ClockControllerCommunications, Hello, ClockControllerE
 
 import { Msg, MsgBack, ScreenOffset, ScreenContent } from "./../generated/protocol_pb";
 import { doWithTimeout, delay } from './common.utils';
+
+type WebPageType = 'web' | 'lights' | 'settings' | 'iptv' | 'ir' | 'actions' | 'log';
 
 class GPIORelay extends Relay {
     private _init: Promise<void>;
@@ -362,6 +364,11 @@ function clrFromName(name: string) {
 
 const UDP_SERVER_PORT = 8081;
 
+type Log = {
+    d: Date;
+    s: string;
+}
+
 class App implements TabletHost {
     public expressApi: express.Express;
     public server: http.Server;
@@ -381,6 +388,20 @@ class App implements TabletHost {
     // private r8 = new GPIORelay("R8", 31, this.gpioRelays, 7);
 
     private allowRenames = false;
+
+    private globalLog = newWritableProperty<Log[]>("", [],
+        new SpanHTMLRenderer<Log[]>(x => "<br/>" + 
+            x.map(i => "<span style='color: green; font-size: smaller'>" + toHMS(i.d) + " </span>&nbsp;<span>" + i.s + "</span>").join("<br/>")
+        ));
+
+    private log(str: string): void {
+        const sa = this.globalLog.get();
+        sa.push({ s: str, d: new Date() });
+        this.globalLog.setInternal(sa);
+        delay(300).then(() => {
+            this.reloadAllWebClients('log');
+        });
+    }
 
     private ctrlGPIO = {
         name: "Комната",
@@ -486,7 +507,7 @@ class App implements TabletHost {
                 return "";
             }),
             { onSet: (_n: number) => {
-                console.log('onSet');
+                this.log('onSet');
                 const n = timerIn[_n];
                 if (n.startsWith("val")) {
                     that.fireInSeconds(+n.slice(3));
@@ -500,7 +521,7 @@ class App implements TabletHost {
         let intervalTimer: NodeJS.Timer;
 
         const setNewValue = (d: HourMin) => {
-            console.log(name + " --> ", d);
+            this.log(name + " --> " + d.h + ":" + d.m + ":" + d.s);
             if (hourMinCompare(d, that.val) !== 0) {
                 // that.val === undefined || that.val.getTime() != d.getTime())) {
                 timers.forEach(t => clearTimeout(t));
@@ -541,7 +562,7 @@ class App implements TabletHost {
                     orBeforeProp.setInternal(1);
 
                     const tt = that.val;
-                    console.log('setup timer', tt);
+                    this.log('setup timer' + tt);
                     // Let's setup timer
                     timers.push(setTimeout(() => {
                         onFired(tt, sound);
@@ -552,7 +573,7 @@ class App implements TabletHost {
                         if (msB > 0) {
                             timers.push(setTimeout(() => {
                                 // 
-                                console.log(m + ' минут до ' + name);
+                                this.log(m + ' минут до ' + name);
                                 this.allInformers.runningLine(m + ' минут до ' + name.toLowerCase(), 3000);
                             }, msB * 1000));
                         }
@@ -580,7 +601,7 @@ class App implements TabletHost {
                 ]
             },
             fireInSeconds: (sec: number) => {
-                console.log('fireInSeconds', sec);
+                this.log('fireInSeconds' + sec);
                 const d = nowHourMin();
                 let x = (d.s || 0) + d.m * 60 + d.h * 3600;
 
@@ -627,7 +648,7 @@ class App implements TabletHost {
     });
 
     public timer = this.createTimer("Таймер", 'timer1At', async (d, sound) => {
-        console.log("Timer!");
+        this.log("Timer!");
 
         this.allInformers.staticLine("Время!");
 /*
@@ -709,7 +730,7 @@ class App implements TabletHost {
                 _this.set(freeMem);
                 if (freeMem < 15 && (Date.now() - lastReportedTime) > 20000) {
                     lastReportedTime = Date.now();
-                    console.log('Low memory: ', freeMem);
+                    this.log('Low memory: ' + freeMem);
                     this.allInformers.runningLine('На сервере мало памяти', 3000);
                 }
                 if (freeMem < 8 && !startedRebooting) {
@@ -733,6 +754,7 @@ class App implements TabletHost {
             Button.createClientRedirect("Lights", "/lights.html"),
             Button.createClientRedirect("Settings", "/settings.html"),
             Button.createClientRedirect("InfraRed", "/ir.html"),
+            Button.createClientRedirect("Log", "/log.html"),
             newWritableProperty<boolean>("Allow renames", this.allowRenames, new CheckboxHTMLRenderer(), { onSet: (val: boolean) => {
                 this.allowRenames = val;
                 this.reloadAllWebClients('web');
@@ -817,7 +839,7 @@ class App implements TabletHost {
         const k = await this.recognizeIRKey(periods);
         if (irRemote && irKey) {
             await this.irKeysConf.change(f => {
-                console.log('CHANGE IR CONF: adding', irRemote, irKey);
+                this.log('CHANGE IR CONF: adding' + irRemote + irKey);
                 const s = new Map(f.irKeysConf.map(e => [e.remoteName + ":" + e.keyName, e]));
                 if (k.keyName || k.remoteName) {
                     // Remove old
@@ -876,13 +898,13 @@ class App implements TabletHost {
         });
     }
 
-    private allPropsFor: Map<string, () => Promise<Property<any>[][]>> = new Map([
+    private allPropsFor: Map<WebPageType, () => Promise<Property<any>[][]>> = new Map([
         ['web', async () => this.controllers.map((ctrl) => {
             return Array.prototype.concat(
                 ctrl.name ? [ newWritableProperty("", ctrl.name, new SpanHTMLRenderer()) ] : [], 
                 ctrl.properties());
         })],
-        ["iptv", async () => this.tvChannels.last().channels.filter(h => h).map((h, index) => {
+        ['iptv', async () => this.tvChannels.last().channels.filter(h => h).map((h, index) => {
             return Array.prototype.concat(
                 [ newWritableProperty("", "" + index + ".", new SpanHTMLRenderer()) ], 
                 newWritableProperty<string>("", 
@@ -895,7 +917,7 @@ class App implements TabletHost {
                 this.makePlayButtonsForChannel(h.url, t => this.playURL(t, h.url, h.name))
             );
         })],
-        ["lights", async () => {
+        ['lights', async () => {
             const s: Map<string, OnOff[]> = new Map();
             return Array.from(this.lights().reduce((prev, curr) => {
                 const loc = curr.location || "";
@@ -906,7 +928,7 @@ class App implements TabletHost {
                 return s;
             }, s).values());
         }],
-        ["ir", async () => {
+        ['ir', async () => {
             return [
                 [this.lastPressedIrKey],
                 [this.lastPressedIrKeyRecognizedAs],
@@ -914,7 +936,7 @@ class App implements TabletHost {
                 [this.lastPressedRemote],
             ];
         }],
-        ["settings", async () => {
+        ['settings', async () => {
             const keys: KeysSettings = await this.keysSettings.read();
             return Object.getOwnPropertyNames(this.keysSettings.def).map((kn2) => {
                 const kn = kn2 as (keyof KeysSettings);
@@ -971,20 +993,23 @@ class App implements TabletHost {
                             })
                     ];
                 } else {
-                    console.log("Property " + kn + " has unsupported type" + typeof(v));
+                    this.log("Property " + kn + " has unsupported type" + typeof(v));
                     return [] as Property<any>[];
                 }
    
                 return ret as Property<any>[];
             });
         }],
-        ["actions", async () => {
+        ['log', async () => {
+            return [[this.globalLog]];
+        }],
+        ['actions', async () => {
             // const actions = await this.actions.read();
             return [];
         }]
     ]);
 
-    private reloadAllWebClients(val: string) {
+    private reloadAllWebClients(val: WebPageType) {
         this.broadcastToWebClients({ type: "reloadProps", value: val });
     }
 
@@ -1131,7 +1156,7 @@ class App implements TabletHost {
         this.miLight.allWhite.set(true);
         await delay(3*60*60*1000); // In 3 hours, switch the light off
         this.miLight.switchOn.set(false);
-        console.log('Switch light off');    
+        this.log('Switch light off');    
     }
 
     private dayEnds() {
@@ -1146,7 +1171,7 @@ class App implements TabletHost {
             const keys = await this.keysSettings.read();
             if (keys.simulateHostAtHome) {
                 // await delay(Math.random()*30*60*1000); // Wait [0..30] minutes
-                console.log('Switch light on');
+                this.log('Switch light on');
                 await this.switchLightOnWaitAndOff();
             }
         })();
@@ -1440,7 +1465,7 @@ class App implements TabletHost {
                                 await t.stopPlaying(); 
                                 await t.screenIsOn.set(false);
                             }},
-                            { lbl: 'Reboot', action: () => console.log('REBOOT') }
+                            { lbl: 'Reboot', action: () => this.log('REBOOT') }
                         ]
                     } as Menu))
                 }
@@ -1522,8 +1547,6 @@ class App implements TabletHost {
         const prevIndex = inArr.findIndex(c => c === lastChannel);
         const newIndex = prevIndex + add;
 
-        // console.log(prevIndex, newIndex, inArr[(newIndex + inArr.length) % inArr.length].channel);
-
         return inArr[(newIndex + inArr.length) % inArr.length];
     }
 
@@ -1536,7 +1559,6 @@ class App implements TabletHost {
     }>();
 
     private onIRKey(remoteId: string, keyId: string, clockController: ClockController) {                                  
-        // console.log(remoteId, keyId);
         var _irState;
         if (!this.mapIRs.has(remoteId)) {
             _irState = { lastRemote: 0, seq: [], wait: 1500, timestamps: [] };
@@ -1562,7 +1584,7 @@ class App implements TabletHost {
         if (toHandle) {
             irState.handler = toHandle;
         } else {
-            console.log('Ignored ' + irState.seq.join(",") + ' on ' + remoteId);
+            this.log('Ignored ' + irState.seq.join(",") + ' on ' + remoteId);
             irState.seq = [];
         }
 
@@ -1607,7 +1629,7 @@ class App implements TabletHost {
         this.lastPressedRemote.set("");
         if (k.keyName || k.remoteName) {
             this.onIRKey(k.remoteName, k.keyName, clockController);
-            console.log("Recognized", k.remoteName, k.keyName);
+            this.log("Recognized " + k.remoteName + " " + k.keyName + " from " + clockController.ip);
         }
         this.reloadAllWebClients('ir');        
     }
@@ -1621,11 +1643,11 @@ class App implements TabletHost {
             //jso
             // console.log(jso.weather[0]);
             const str = jso.weather[0].description + ' ' + tempAsString(jso.main.temp) + ' ветер ' + jso.wind.speed + 'м/c';
-            console.log(str);
+            this.log(str);
             this.nowWeather.set(str);
             this.nowWeatherIcon.set(`http://openweathermap.org/img/w/${jso.weather[0].icon}.png`);
         } else {
-            console.log(ress);
+            this.log(ress);
         }
     }
 
@@ -1641,7 +1663,7 @@ class App implements TabletHost {
                     t.connectIfNeeded()
                         .then(() => {
                             if (oldOnline != t.online) {
-                                this.reloadAllWebClients('web')
+                                this.reloadAllWebClients('web');
                             }
                         })
                         .catch(e => {});
@@ -1667,7 +1689,7 @@ class App implements TabletHost {
                                 new Buffer(w*h/2).fill(clr | clr << 4)
                             ]),
                             49152, "192.168.121.170", (err, bytes) => {
-                            // console.log(err, bytes);
+                            // this.log(err, bytes);
                         });
                         await delay(0);
                     }
@@ -1685,12 +1707,12 @@ class App implements TabletHost {
             if ((new Date().getTime() - conf.lastUpdate) / 1000 > 10*60) {
                 this.reloadM3uPlaylists();
             }
-            console.log("Read " + conf.channels.length + " M3U channels");
+            this.log("Read " + conf.channels.length + " M3U channels");
         });
 
         const getSunrizeSunset = () => {
             const now = new Date();
-            console.log('sunrise query');
+            this.log('sunrise query');
             curl.get(`https://api.sunrise-sunset.org/json?formatted=0&lat=${this.lat}&lng=${this.lng}&date=${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`)
                 .then(async resStr => {
                     const res = JSON.parse(resStr) as SunrizeError | SunrizeDate;
@@ -1704,11 +1726,11 @@ class App implements TabletHost {
                         }
                         const twilightEnd = new Date(res.results.civil_twilight_end)
 
-                        console.log('sunrise is at ' + twilightBegin.toLocaleString());
+                        this.log('sunrise is at ' + twilightBegin.toLocaleString());
                         this.dayBeginsTimer.dispose();
                         this.dayBeginsTimer = doAt(twilightBegin.getHours(), twilightBegin.getMinutes(), twilightBegin.getSeconds(), () => { this.dayBegins() });
 
-                        console.log('sunset is at ' + twilightEnd.toLocaleString());
+                        this.log('sunset is at ' + twilightEnd.toLocaleString());
                         this.dayEndsTimer.dispose();
                         this.dayEndsTimer = doAt(twilightEnd.getHours(), twilightEnd.getMinutes(), twilightEnd.getSeconds(), () => { this.dayEnds() });
                     }
@@ -1745,7 +1767,7 @@ class App implements TabletHost {
             // send
             udpServer.send(buf, UDP_SERVER_PORT, address, (err, bytes) => {
                 if (err) {
-                    console.log(err);
+                    this.log(err.toString());
                 }
             });
         }
@@ -1763,11 +1785,11 @@ class App implements TabletHost {
                 const typedMessage = newLocal.toObject();
 
                 if (controller) {
-                    // console.log(rinfo.address, controller.lastResponse, Date.now());
+                    // this.log(rinfo.address, controller.lastResponse, Date.now());
                     controller.lastResponse = Date.now();
                     controller.lastMsgLocal = typedMessage.timeseq!;
                 } else {
-                    console.log('NOT FOUND', rinfo.address, JSON.stringify(typedMessage));
+                    this.log('Message from controller that is not initialized:' + rinfo.address + "  " + JSON.stringify(typedMessage));
                 }
 
                 if (typedMessage.potentiometer) {
@@ -1776,7 +1798,7 @@ class App implements TabletHost {
                     }
                 }
                 if (typedMessage.debuglogmessage) {
-                    console.log(rinfo.address, typedMessage.debuglogmessage);
+                    this.log(rinfo.address + " " + typedMessage.debuglogmessage);
                 }
                 if (typedMessage.relaystatesList && typedMessage.relaystatesList.length > 0) {
                     if (controller) {
@@ -1786,11 +1808,11 @@ class App implements TabletHost {
                     }
                 }
                 if (typeof (typedMessage.atxstate) !== 'undefined') {
-                    console.log("ATX", typedMessage.atxstate);
+                    this.log("ATX: " + typedMessage.atxstate);
                 }
                 if (typedMessage.hello) {
                     if (controller && controller.lastMsgLocal && (controller.lastMsgLocal! > typedMessage.timeseq!)) {
-                        console.log('Controller was restarted', rinfo.address);
+                        this.log('Controller was restarted ' + rinfo.address);
                         controller.dropConnection();
                     }
                     this.createClockController({
@@ -1896,7 +1918,7 @@ class App implements TabletHost {
                     }
                 }
                 if (typedMessage.irkeyperiodsList && typedMessage.irkeyperiodsList.length > 0) {
-                    // console.log(typedMessage.irkeyperiodsList.join(','));
+                    // this.log(typedMessage.irkeyperiodsList.join(','));
                     if (controller) {
                         this.onRawIRKey(controller, typedMessage.timeseq!, typedMessage.irkeyperiodsList);
                     }
@@ -1918,13 +1940,13 @@ class App implements TabletHost {
                 }
                 // console.log(JSON.stringify(typedMessage, undefined, ' '));
             } catch (e) {
-                console.log(e);
+                this.log(e);
             }
             // console.log(`server got: ${msg} from ${rinfo.address}:${rinfo.port}`);
         });
         udpServer.on('listening', () => {
             const address = udpServer.address();
-            console.log(`server listening ${address.address}:${address.port}`);
+            this.log(`server listening ${address.address}:${address.port}`);
         });
         udpServer.bind(UDP_SERVER_PORT);
 
@@ -1944,7 +1966,7 @@ class App implements TabletHost {
             if (arraysAreEqual(url, ['esp'])) {
                 ws.on('close', (data: string) => {
                     const controller = this.dynamicControllers.get(ip);
-                    console.log((controller || {name: ip}).name, "CLOSE");
+                    this.log((controller || {name: ip}).name, "CLOSE");
                 });
                 // This is ESP controller!
                 ws.on('message', (data: string) => {
@@ -1981,7 +2003,7 @@ class App implements TabletHost {
                     }
                 });
             } else if (arraysAreEqual(url, ['web'])) {
-                const lambda = this.allPropsFor.get(url[0]);
+                const lambda = this.allPropsFor.get('web');
                 let dispose: Disposable[] = [];
                 if (lambda) {
                     lambda()
@@ -2033,7 +2055,7 @@ class App implements TabletHost {
                         }))));
                     } else {
                         //log the received message and send it back to the client
-                        console.log('received: %s', message);
+                        this.log('received: ' + message);
                     }
                 });
 
@@ -2042,14 +2064,14 @@ class App implements TabletHost {
                     dispose = [];
                 });
             } else {
-                console.log("WTH???", url);
+                this.log("WTH??? " + url);
             }
 
             //send immediatly a feedback to the incoming connection    
             // ws.send('Hi there, I am a WebSocket server');
         });
         this.wss.on('error', (error: Error) => {
-            console.log("Error! " + error.message);
+            this.log("Error! " + error.message);
         });
 
         const router = express.Router()
@@ -2124,7 +2146,7 @@ class App implements TabletHost {
                         return prev;
                     }
                 }, []);
-                // console.log(names, namesDistinct);
+                // this.log(names, namesDistinct);
                 Promise.all(namesDistinct.map((n: string) => { 
                     return nodeutil.promisify(fs.stat)(__dirname + '/../web/logos/' + n + '.png')
                         .then(st => [st, n] as [fs.Stats, string])
@@ -2149,7 +2171,7 @@ class App implements TabletHost {
                                         fs.readFile(path.normalize(__dirname + '/../web/logos/nologo.png'), acceptDef);
                                     }
                                 } else {
-                                    console.log(err);
+                                    this.log(err.toString());
                                 }
                             } else {
                                 res.contentType('image/png');
@@ -2234,11 +2256,11 @@ class App implements TabletHost {
         });
         router.get('/index.html', async (req, res) => {
             res.contentType('html');
-            res.send(await this.renderToHTML("web"));
+            res.send(await this.renderToHTML('web'));
         });
         router.get('/lights.html', async (req, res) => {
             res.contentType('html');
-            res.send(await this.renderToHTML("lights", (renderer, prop) => {
+            res.send(await this.renderToHTML('lights', (renderer, prop) => {
                 return renderer.body(prop, {
                     bgColor: clrFromName(prop.name),
                     padding: "6px",
@@ -2248,7 +2270,7 @@ class App implements TabletHost {
         });
         router.get('/tv.html', async (req, res) => {
             res.contentType('html');
-            res.send(await this.renderToHTML("iptv"));
+            res.send(await this.renderToHTML('iptv'));
         });
         router.get('/settings.html', async (req, res) => {
             res.contentType('html');
@@ -2261,6 +2283,15 @@ class App implements TabletHost {
         router.get('/actions.html', async (req, res) => {
             res.contentType('html');
             res.send(await this.renderToHTML('actions'));
+        });
+        router.get('/log.html', async (req, res) => {
+            res.contentType('html');
+            res.send(await this.renderToHTML('log', (renderer, prop) => {
+                return renderer.body(prop, {
+                    padding: "4px",
+                    margin: "2px"
+                });
+            }));
         });
 
         this.expressApi.use('/', router);
@@ -2308,14 +2339,14 @@ class App implements TabletHost {
             */
         ]).then(channels => {
             this.tvChannels.change(conf => {
-                console.log('Parsed ' + channels.length + " IPTV channels");
+                this.log('Parsed ' + channels.length + " IPTV channels");
                 conf.channels = channels;
                 conf.lastUpdate = new Date().getTime();
             });
         });
     }
 
-    private async renderToHTML(idToReferesh: string, getBody: (renderer: HTMLRederer<any>, prop: Property<any>) => string = (renderer, prop) => renderer.body(prop)): Promise<string> {
+    private async renderToHTML(idToReferesh: WebPageType, getBody: (renderer: HTMLRederer<any>, prop: Property<any>) => string = (renderer, prop) => renderer.body(prop)): Promise<string> {
         const allProps = await this.allPropsFor.get(idToReferesh)!();
         const propChangedMap = allProps.map((props, ctrlIndex) => {
             return props.map((prop: Property<any>, prIndex: number): string => {
@@ -2409,7 +2440,7 @@ class App implements TabletHost {
             delay(1000).then(() => {
                 const table = this.tablets.get(device.id);
                 if (table) {
-                    console.log('device - INIT', device);
+                    this.log('device - INIT ' + device.id + " " + device.type);
                     table
                         .init()
                         .catch(e => { console.log('Device - err', device.id, e); });
@@ -2453,7 +2484,7 @@ class App implements TabletHost {
     }
 
     public playChannel(t: Tablet, c: Channel): Promise<void> {
-        console.log("Playing " + JSON.stringify(c) + ' as ' + getType(c));
+        this.log("Playing " + JSON.stringify(c) + ' as ' + getType(c));
 
         return this.playURL(t, c.url, c.name);
     }
@@ -2513,7 +2544,7 @@ class App implements TabletHost {
                             prev.url = val;
                             prev.source = _url.source;
                             if (!prev.name) {
-                                console.log(prev);
+                                this.log(JSON.stringify(prev));
                             }
                             res.push(prev);
                             return {} as Channel;
@@ -2544,7 +2575,7 @@ class App implements TabletHost {
 
         this.allInformers.runningLine("Включаем " + name + " на " + t.shortName, 3000);
         
-        console.log('playSimpleUrl', url);
+        this.log('playSimpleUrl ' + url);
         t.playURL(url);
     }
 
@@ -2584,7 +2615,7 @@ class App implements TabletHost {
             // If there is a day - play full sound, at night - play only half
             controller.play((await this.isNightMode()) ? snd.volume * 4 / 10 : snd.volume, snd.index);
         } else {
-            console.log('No sound set for', type);
+            this.log('No sound set for ' + type);
         }
     }
 
@@ -2598,7 +2629,7 @@ class App implements TabletHost {
         const clockController: ClockController = new ClockController(handlers, ip, hello, {
             onDisconnect: () => {
                 console.trace();
-                console.log(ip, 'DISCONNECT!!!');
+                this.log(ip + 'DISCONNECT!!!');
                 // console.trace();
                 this.dynamicControllers.delete(ip);
                 if (clockController.lcdInformer) {
@@ -2636,6 +2667,8 @@ class App implements TabletHost {
                 clockController.send({ type: 'unixtime', value: Math.floor((new Date()).getTime() / 1000) });
             });
         }
+
+        this.log('Connected ' + clockController.name + ' (' + clockController.ip + ')');
 
         return clockController;
     }

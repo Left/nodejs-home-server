@@ -437,8 +437,6 @@ export class ClockController extends ClassWithId implements Controller {
         if (ipA) {
             this._properties.push(Button.createClientRedirect("Open settings", "http://" + ipA[0]));
         }
-
-        console.log('Connected ' + this.name + ' (' + this.ip + ')');
     }
 
     public hasScreen() {

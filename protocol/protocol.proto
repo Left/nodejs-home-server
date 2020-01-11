@@ -82,4 +82,5 @@ message MsgBack {
     optional ScreenContent screenContent = 300;
     optional ScreenOffset screenOffsetFrom = 301;
     optional ScreenOffset screenOffsetTo = 302;
+    optional bool screenClean = 303;
 }

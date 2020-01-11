@@ -401,6 +401,11 @@ export class MsgBack extends jspb.Message {
   getScreenoffsetto(): ScreenOffset | undefined;
   setScreenoffsetto(value?: ScreenOffset): void;
 
+  hasScreenclean(): boolean;
+  clearScreenclean(): void;
+  getScreenclean(): boolean | undefined;
+  setScreenclean(value: boolean): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): MsgBack.AsObject;
   static toObject(includeInstance: boolean, msg: MsgBack): MsgBack.AsObject;
@@ -438,6 +443,7 @@ export namespace MsgBack {
     screencontent?: ScreenContent.AsObject,
     screenoffsetfrom?: ScreenOffset.AsObject,
     screenoffsetto?: ScreenOffset.AsObject,
+    screenclean?: boolean,
   }
 
   export interface ShowTypeMap {
