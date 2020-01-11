@@ -10,6 +10,12 @@ export async function get(_url: string): Promise<string> {
 
 export type BinResponse = { body: Buffer, contentType?: string }
 
+export function encodeStr(rawStr: string) {
+    return rawStr.replace(/[\u00A0-\u9999<>\&]/gim, function(i) {
+        return '&#'+i.charCodeAt(0)+';';
+    });
+}
+
 export function getBin(_url: string): Promise<BinResponse> {
     return new Promise<BinResponse>((accept, decline) => {
         const u = new url.URL(_url);

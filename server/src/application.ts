@@ -21,6 +21,7 @@ import { ClockController, ClockControllerCommunications, Hello, ClockControllerE
 
 import { Msg, MsgBack, ScreenOffset, ScreenContent } from "./../generated/protocol_pb";
 import { doWithTimeout, delay } from './common.utils';
+import { encodeStr } from './http.util';
 
 type WebPageType = 'web' | 'lights' | 'settings' | 'iptv' | 'ir' | 'actions' | 'log';
 
@@ -367,6 +368,7 @@ const UDP_SERVER_PORT = 8081;
 type Log = {
     d: Date;
     s: string;
+    e?: Error;
 }
 
 class App implements TabletHost {
@@ -389,14 +391,28 @@ class App implements TabletHost {
 
     private allowRenames = false;
 
+    private clearGlobalLog = Button.create("Clear log", () => {
+        this.globalLog.setInternal([]);
+        this.log("Log was cleared."); // This will also refresh web part
+    });
     private globalLog = newWritableProperty<Log[]>("", [],
         new SpanHTMLRenderer<Log[]>(x => "<br/>" + 
-            x.map(i => "<span style='color: green; font-size: smaller'>" + toHMS(i.d) + " </span>&nbsp;<span>" + i.s + "</span>").join("<br/>")
+            x.map(i => {
+                const r = [ "<span style='color: green; font-size: smaller'>" + toHMS(i.d) + " </span>" ];
+                r.push("&nbsp;<span>" + encodeStr(i.s) + "</span>");
+                if (i.e && i.e.stack) {
+                    r.push('<br/>');
+                    for (const sl of i.e.stack.split(/\r\n|\r|\n/gi)) {
+                        r.push("&nbsp;<span style='color:red'>" + encodeStr(sl) + "</span><br/>");
+                    }
+                }
+                return r.join("");
+            }).reverse().join("<br/>")
         ));
 
-    private log(str: string): void {
+    private log(str: string, stack?: boolean): void {
         const sa = this.globalLog.get();
-        sa.push({ s: str, d: new Date() });
+        sa.push({ s: str, d: new Date(), e: (stack ? new Error() : undefined) });
         this.globalLog.setInternal(sa);
         delay(300).then(() => {
             this.reloadAllWebClients('log');
@@ -639,6 +655,7 @@ class App implements TabletHost {
         }
 
         // Turn the lights down low
+        this.log('Turning off all the lights');
         for (const l of this.lights()) {
             l.switch(false);
         }
@@ -1001,7 +1018,10 @@ class App implements TabletHost {
             });
         }],
         ['log', async () => {
-            return [[this.globalLog]];
+            return [
+                [this.clearGlobalLog], 
+                [this.globalLog]
+            ];
         }],
         ['actions', async () => {
             // const actions = await this.actions.read();
@@ -1047,6 +1067,7 @@ class App implements TabletHost {
             },
             complete: (from, arr) => {
                 this.allInformers.runningLine(showName, 2000);
+                this.log('Performing action ' + showName + " initialized by " + from.remoteId + " [" + arr.join(',') + "]");
                 action(from, arr);
             }
         } as IRKeysHandler;
@@ -1191,6 +1212,7 @@ class App implements TabletHost {
                     });
 
         const ledStripe = this.findDynController('LedStripe');
+        const app = this;
         
         return ([
                 this.miLight.switchOn,
@@ -1205,6 +1227,7 @@ class App implements TabletHost {
                         return ledStripe.ledStripeColorProperty.get() !== '00000000';
                     }
                     public switch(on: boolean): Promise<void> {
+                        app.log('Switching off ', true);
                         ledStripe.ledStripeColorProperty.set(on ? '000000FF' : '00000000');
                         return Promise.resolve(void 0);
                     }
@@ -1843,6 +1866,7 @@ class App implements TabletHost {
                                         }[packet.type]);
                                         break;
                                     case 'switch':
+                                        this.log('Switching ' + rinfo.address + " " + packet.id + ' to ' + packet.on, true);
                                         m.setRelaystoswitch(+packet.id);
                                         m.setRelaystoswitchstate(packet.on === 'true');
                                         break;
@@ -2628,8 +2652,7 @@ class App implements TabletHost {
     private createClockController(hello: Hello, ip: string, handlers: ClockControllerCommunications): ClockController {
         const clockController: ClockController = new ClockController(handlers, ip, hello, {
             onDisconnect: () => {
-                console.trace();
-                this.log(ip + 'DISCONNECT!!!');
+                this.log(ip + ' DISCONNECT');
                 // console.trace();
                 this.dynamicControllers.delete(ip);
                 if (clockController.lcdInformer) {

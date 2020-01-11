@@ -59,9 +59,9 @@ function toDoubleZero(x: number): string {
 
 function toTripleZero(x: number): string {
     if (x <= 9) {
-        return '0' + x;
-    } else if (x <= 99) {
         return '00' + x;
+    } else if (x <= 99) {
+        return '0' + x;
     } else {
         return '' + x;
     }
