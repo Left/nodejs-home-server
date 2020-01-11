@@ -1636,8 +1636,16 @@ class App implements TabletHost {
         }
     }
 
-    private async onRawIRKey(clockController: ClockController, timeSeq: number, periods: number[]) {
-        // First, pre-process periods - find 9000 ns (which is startup seq)
+    private async onRawIRKey(clockController: ClockController, timeSeq: number, periods_: number[]) {
+        // First, remove noise
+        let periods = periods_.reduce((per, v, i) => {
+            if (v > 50 && v < 100000) {
+                per.push(v);
+            }
+            return per;
+        }, [] as number[]);
+
+        // pre-process periods - find 9000 ns (which is startup seq)
         for (let i = 0; i < periods.length; ++i) {
             if (periods[i] > 7000 && periods[i] < 11000) {
                 periods = periods.slice(i);
@@ -1645,12 +1653,17 @@ class App implements TabletHost {
             }
         }
 
+        if (periods.length < 20) {
+            this.log('Got some noise from IR: ' + periods_.map(x => x.toString()).join(', '));
+            return;
+        }
+
         this.lastPressedIrKey.set(periods);
         const k = await this.recognizeIRKey(periods);
         this.lastPressedIrKeyRecognizedAs.set(k.remoteName + ":" + k.keyName);
         this.lastPressedKey.set("");
         this.lastPressedRemote.set("");
-        if (k.keyName || k.remoteName) {
+        if (!!k.keyName || !!k.remoteName) {
             this.onIRKey(k.remoteName, k.keyName, clockController);
             this.log("Recognized " + k.remoteName + " " + k.keyName + " from " + clockController.ip);
         }
@@ -1866,7 +1879,7 @@ class App implements TabletHost {
                                         }[packet.type]);
                                         break;
                                     case 'switch':
-                                        this.log('Switching ' + rinfo.address + " " + packet.id + ' to ' + packet.on, true);
+                                        // this.log('Switching ' + rinfo.address + " " + packet.id + ' to ' + packet.on, true);
                                         m.setRelaystoswitch(+packet.id);
                                         m.setRelaystoswitchstate(packet.on === 'true');
                                         break;
