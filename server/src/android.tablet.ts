@@ -1,6 +1,7 @@
 import { Relay, WritablePropertyImpl, SliderHTMLRenderer, Controller, newWritableProperty, StringAndGoRendrer, Button, SpanHTMLRenderer, PropertyImpl } from "./properties";
 import * as util from "./common.utils";
 import { LcdInformer } from './informer.api';
+import { parseYoutubeUrl } from "./youtube.utils";
 
 import * as stream from 'stream';
 import * as querystring from 'querystring';
@@ -273,14 +274,21 @@ export class Tablet implements Controller {
     };
 
     public stopPlaying(): Promise<void> {
-        return this.shellCmd("am force-stop org.videolan.vlc").then(() => void 0);
+        return this.shellCmd("am force-stop org.videolan.vlc").then(() =>
+            this.shellCmd("am force-stop com.google.android.youtube")).then(() => void 0);
     }
 
     public async playURL(url: string): Promise<void> {
         await this.stopPlaying();
-        
-        await this.shellCmd("am start -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity -a android.intent.action.VIEW -d \"" +
+
+        const u = parseYoutubeUrl(url);
+        if (!u) {        
+            await this.shellCmd("am start -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity -a android.intent.action.VIEW -d \"" +
+                    url.replace("&", "\&") + "\" --ez force_fullscreen true")
+        } else {
+            await this.shellCmd("am start -a android.intent.action.VIEW -d \"" +
                 url.replace("&", "\&") + "\" --ez force_fullscreen true")
+        }
 
         return Promise.resolve(void 0);
     }

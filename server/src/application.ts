@@ -1645,9 +1645,9 @@ class App implements TabletHost {
             return per;
         }, [] as number[]);
 
-        // pre-process periods - find 9000 ns (which is startup seq)
+        // pre-process periods - find 4400 ns (which is startup seq)
         for (let i = 0; i < periods.length; ++i) {
-            if (periods[i] > 7000 && periods[i] < 11000) {
+            if (periods[i] > 4100 && periods[i] < 4700) {
                 periods = periods.slice(i);
                 break;
             }
