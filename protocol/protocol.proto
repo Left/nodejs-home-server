@@ -36,6 +36,7 @@ message Msg {
     optional float pressure = 12;
     optional uint32 potentiometer = 13;
     optional bool atxState = 14;
+    repeated uint32 destinies = 15 [packed=true];
 }
 
 message ScreenOffset {
