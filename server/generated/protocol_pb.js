@@ -905,7 +905,7 @@ proto.ParsedRemote.prototype.hasKey = function() {
  * @private {!Array<number>}
  * @const
  */
-proto.Msg.repeatedFields_ = [4,6];
+proto.Msg.repeatedFields_ = [4,6,15];
 
 
 
@@ -952,7 +952,8 @@ proto.Msg.toObject = function(includeInstance, msg) {
     humidity: (f = jspb.Message.getOptionalFloatingPointField(msg, 11)) == null ? undefined : f,
     pressure: (f = jspb.Message.getOptionalFloatingPointField(msg, 12)) == null ? undefined : f,
     potentiometer: (f = jspb.Message.getField(msg, 13)) == null ? undefined : f,
-    atxstate: (f = jspb.Message.getBooleanField(msg, 14)) == null ? undefined : f
+    atxstate: (f = jspb.Message.getBooleanField(msg, 14)) == null ? undefined : f,
+    destiniesList: (f = jspb.Message.getRepeatedField(msg, 15)) == null ? undefined : f
   };
 
   if (includeInstance) {
@@ -1047,6 +1048,10 @@ proto.Msg.deserializeBinaryFromReader = function(msg, reader) {
     case 14:
       var value = /** @type {boolean} */ (reader.readBool());
       msg.setAtxstate(value);
+      break;
+    case 15:
+      var value = /** @type {!Array<number>} */ (reader.readPackedUint32());
+      msg.setDestiniesList(value);
       break;
     default:
       reader.skipField();
@@ -1175,6 +1180,13 @@ proto.Msg.serializeBinaryToWriter = function(message, writer) {
   if (f != null) {
     writer.writeBool(
       14,
+      f
+    );
+  }
+  f = message.getDestiniesList();
+  if (f.length > 0) {
+    writer.writePackedUint32(
+      15,
       f
     );
   }
@@ -1687,6 +1699,43 @@ proto.Msg.prototype.clearAtxstate = function() {
  */
 proto.Msg.prototype.hasAtxstate = function() {
   return jspb.Message.getField(this, 14) != null;
+};
+
+
+/**
+ * repeated uint32 destinies = 15;
+ * @return {!Array<number>}
+ */
+proto.Msg.prototype.getDestiniesList = function() {
+  return /** @type {!Array<number>} */ (jspb.Message.getRepeatedField(this, 15));
+};
+
+
+/**
+ * @param {!Array<number>} value
+ * @return {!proto.Msg} returns this
+ */
+proto.Msg.prototype.setDestiniesList = function(value) {
+  return jspb.Message.setField(this, 15, value || []);
+};
+
+
+/**
+ * @param {number} value
+ * @param {number=} opt_index
+ * @return {!proto.Msg} returns this
+ */
+proto.Msg.prototype.addDestinies = function(value, opt_index) {
+  return jspb.Message.addToRepeatedField(this, 15, value, opt_index);
+};
+
+
+/**
+ * Clears the list making it empty but non-null.
+ * @return {!proto.Msg} returns this
+ */
+proto.Msg.prototype.clearDestiniesList = function() {
+  return this.setDestiniesList([]);
 };
 
 

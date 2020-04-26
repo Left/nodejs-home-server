@@ -1205,7 +1205,7 @@ class App implements TabletHost {
     }
 
     private lights(): OnOff[] {
-        const dynSwitchers = ['RoomSwitchers', 'RelayOnKitchen']
+        const dynSwitchers = ['RoomSwitchers', 'RelayOnKitchen', 'NoncontactSwitch']
                     .map(name => {
                         const dc = this.findDynController(name);
                         return (dc ? dc.relays : []) as OnOff[];
@@ -1636,6 +1636,44 @@ class App implements TabletHost {
         }
     }
 
+    private destinies: number[] = [];
+    private ignoreDestinies = false;
+
+    private async onRawDestinies(clockController: ClockController, timeSeq: number, destinies_: number[]) {
+        if (this.ignoreDestinies) {
+            return;
+        }
+
+        this.destinies = this.destinies.concat(destinies_.filter(x => x < 100000)).slice(Math.max(0, this.destinies.length - 100));
+
+        const take = 3;
+        const avg = this.destinies.slice(Math.max(0, this.destinies.length - take)).reduce((a, b) => a + b, 0) / take;
+
+        if (avg < 2000) {
+            // Ignore for some time
+            this.ignoreDestinies = true;
+            this.destinies = [];
+            (async () => {
+                await delay(1000);
+                this.ignoreDestinies = false;
+            }) ();
+
+            const stateThis = clockController.relays[0].get();
+            const cntrlrs  = [
+                clockController, this.findDynController('RoomSwitchers')
+            ].filter ( x => !!x ) as ClockController[]
+
+            cntrlrs.forEach( c => c.relays[0].switch(!stateThis));
+
+            if (!stateThis) {
+                (async () => {
+                    await delay(600000); // 10 mins
+                    cntrlrs.forEach( c => c.relays[0].switch(false));
+                }) ();    
+            }
+        }
+    }
+
     private async onRawIRKey(clockController: ClockController, timeSeq: number, periods_: number[]) {
         // First, remove noise
         let periods = periods_.reduce((per, v, i) => {
@@ -1960,6 +1998,11 @@ class App implements TabletHost {
                         this.onRawIRKey(controller, typedMessage.timeseq!, typedMessage.irkeyperiodsList);
                     }
                 }
+                if (typedMessage.destiniesList && typedMessage.destiniesList.length > 0) {
+                    if (controller) {
+                        this.onRawDestinies(controller, typedMessage.timeseq!, typedMessage.destiniesList);
+                    }
+                }
                 if (typedMessage.parsedremote) {
                     if (controller) {
                         this.onIRKey(typedMessage.parsedremote.remote!, typedMessage.parsedremote.key!, controller);
@@ -2003,7 +2046,7 @@ class App implements TabletHost {
             if (arraysAreEqual(url, ['esp'])) {
                 ws.on('close', (data: string) => {
                     const controller = this.dynamicControllers.get(ip);
-                    this.log((controller || {name: ip}).name, "CLOSE");
+                    this.log(((controller || {name: ip}).name) +  "CLOSE");
                 });
                 // This is ESP controller!
                 ws.on('message', (data: string) => {
@@ -2689,6 +2732,9 @@ class App implements TabletHost {
             onRawIrKey: async (timeSeq: number, periods: number[]) => {
                 return this.onRawIRKey(clockController, timeSeq, periods);
             },
+            onRawDestinies: async (timeSeq: number, periods: number[]) => {
+                return this.onRawDestinies(clockController, timeSeq, periods);
+            },
             onIRKey: (remoteId: string, keyId: string) => {
                 this.onIRKey(remoteId, keyId, clockController);
             }
@@ -2705,6 +2751,10 @@ class App implements TabletHost {
         }
 
         this.log('Connected ' + clockController.name + ' (' + clockController.ip + ')');
+
+        setInterval(() => {
+            handlers.send( { type: 'ping', pingid: '' } );
+        }, 10000);
 
         return clockController;
     }

@@ -78,6 +78,7 @@ type DevParams = {
     "relay.names": string,         // Relay names, separated by ;
     "hasLedStripe": string,        // Has LED stripe
     "hasPotenciometer"?: string,   // Has potentiometer
+    "hasGPIO1Relay"?: string,      // Has relay on D4
     "hasPWMOnD0"?: string,
     "hasDFPlayer"?: string
     "hasATXPowerSupply"?: string;
@@ -129,6 +130,7 @@ export interface ClockControllerEvents {
     onWeightChanged: (weight: number) => void;
     onIRKey: (remoteId: string, keyId: string) => void;
     onRawIrKey: (timeSeq: number, periods: number[]) => void;
+    onRawDestinies: (timeSeq: number, destinies: number[]) => void;
     onPotentiometer: (value: number) => void;
 }
 
@@ -261,6 +263,9 @@ export class ClockController extends ClassWithId implements Controller {
                 if (this.devParams['hasATXPowerSupply'] === 'true') {
                     this.atxEnabledProperty.set(val);
                 }
+                if (this.devParams['hasGPIO1Relay'] === 'true') {
+                    this.send({ type: 'screenEnable', value: val });
+                }
                 if (this.devParams["hasPWMOnD0"] === 'true') {
                     if (this.d4PWM) {
                         if (val) {
@@ -318,10 +323,13 @@ export class ClockController extends ClassWithId implements Controller {
         if (this.devParams['hasDFPlayer'] === 'true') {
             // Nothing ATM
         }
-        if (this.devParams['hasPWMOnD0'] === 'true') {
+        if (this.devParams['hasPWMOnD0'] === 'true' || 
+            this.devParams['hasATXPowerSupply'] === 'true' ||
+            this.devParams['hasGPIO1Relay'] === 'true') {
             this._properties.push(this.screenEnabledProperty);
-            this.d4PWM = this.createPWMProp("D4");
-    
+        }
+        if (this.devParams['hasPWMOnD0'] === 'true') {
+            this.d4PWM = this.createPWMProp("D4");   
             this._properties.push(this.d4PWM);
         }
         if (this.devParams['hasATXPowerSupply'] === 'true') {

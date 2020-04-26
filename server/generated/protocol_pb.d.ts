@@ -176,6 +176,11 @@ export class Msg extends jspb.Message {
   getAtxstate(): boolean | undefined;
   setAtxstate(value: boolean): void;
 
+  clearDestiniesList(): void;
+  getDestiniesList(): Array<number>;
+  setDestiniesList(value: Array<number>): void;
+  addDestinies(value: number, index?: number): number;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Msg.AsObject;
   static toObject(includeInstance: boolean, msg: Msg): Msg.AsObject;
@@ -202,6 +207,7 @@ export namespace Msg {
     pressure?: number,
     potentiometer?: number,
     atxstate?: boolean,
+    destiniesList: Array<number>,
   }
 }
 
