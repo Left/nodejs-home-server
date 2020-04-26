@@ -1660,15 +1660,17 @@ class App implements TabletHost {
 
             const stateThis = clockController.relays[0].get();
             const cntrlrs  = [
-                clockController, this.findDynController('RoomSwitchers')
-            ].filter ( x => !!x ) as ClockController[]
+                [ clockController, [0]], [this.findDynController('RoomSwitchers'), [0, 1]]
+            ].filter ( x => !!x ) as [ClockController, number[]][]
 
-            cntrlrs.forEach( c => c.relays[0].switch(!stateThis));
+            const swtch = (swon: boolean) => cntrlrs.forEach( c => c[1].forEach(rI => c[0].relays[rI].switch(swon)));
+
+            swtch(!stateThis);
 
             if (!stateThis) {
                 (async () => {
                     await delay(600000); // 10 mins
-                    cntrlrs.forEach( c => c.relays[0].switch(false));
+                    swtch(false)
                 }) ();    
             }
         }
