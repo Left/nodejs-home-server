@@ -1646,10 +1646,10 @@ class App implements TabletHost {
 
         this.destinies = this.destinies.concat(destinies_.filter(x => x < 100000)).slice(Math.max(0, this.destinies.length - 100));
 
-        const take = 3;
+        const take = 5;
         const avg = this.destinies.slice(Math.max(0, this.destinies.length - take)).reduce((a, b) => a + b, 0) / take;
 
-        if (avg < 2000) {
+        if (avg < 1000) {
             // Ignore for some time
             this.ignoreDestinies = true;
             this.destinies = [];
@@ -1666,13 +1666,14 @@ class App implements TabletHost {
             const swtch = (swon: boolean) => cntrlrs.forEach( c => c[1].forEach(rI => c[0].relays[rI].switch(swon)));
 
             swtch(!stateThis);
-
+/*
             if (!stateThis) {
                 (async () => {
                     await delay(600000); // 10 mins
                     swtch(false)
                 }) ();    
             }
+*/
         }
     }
 

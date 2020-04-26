@@ -33,7 +33,7 @@ export enum SurfaceOrientation {
 }
 
 class VolumeControl extends WritablePropertyImpl<number> {
-    private inHardNow?: number; // [0:15]
+    private inHardNow?: number; // [0:this.MAX_VOL]
     private chagingValue = false;
 
     constructor(private readonly tbl: Tablet) {
@@ -49,16 +49,18 @@ class VolumeControl extends WritablePropertyImpl<number> {
         }
     }
 
+    private const MAX_VOL: number = 30;
+
     public async setVolume(vol: number): Promise<number> {
         this.chagingValue = true;
         if (!this.inHardNow) {
             this.inHardNow = await this.getVolume();
         }
         
-        while (Math.abs(this.inHardNow - this.get()*15/100) >= 1) {
-            // console.log(this.inHardNow, "->", this.get()*15/100);
+        while (Math.abs(this.inHardNow - this.get()*this.MAX_VOL/100) >= 1) {
+            // console.log(this.inHardNow, "->", this.get()*this.MAX_VOL/100);
             let updown = "DOWN";
-            if (this.inHardNow < this.get()*15/100) {
+            if (this.inHardNow < this.get()*this.MAX_VOL/100) {
                 updown = "UP";
             }
             await this.tbl.shellCmd("input keyevent KEYCODE_VOLUME_" + updown);
@@ -76,7 +78,7 @@ class VolumeControl extends WritablePropertyImpl<number> {
         if (!this.chagingValue) {
             this.inHardNow = await this.getVolume()
             // console.log('inHardNow: ', this.inHardNow);
-            this.setInternal(Math.min(100, Math.max(0, this.inHardNow*100/15)));
+            this.setInternal(Math.min(100, Math.max(0, this.inHardNow*100/this.MAX_VOL)));
         }
     }
 
@@ -85,6 +87,8 @@ class VolumeControl extends WritablePropertyImpl<number> {
             this.tbl.shellCmd('dumpsys audio | grep -A 2 -E \'STREAM_MUSIC\'')
                 .then((val: string) => {
                     let str = val.toString();
+                    // console.log(str);
+
                     const allTheLines = str.split('- STREAM_');
                     const musicLines = allTheLines.filter(ll => ll.startsWith('MUSIC:'))[0];
                     if (!musicLines || musicLines.length < 0) {

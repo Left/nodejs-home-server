@@ -435,8 +435,10 @@ export class ClockController extends ClassWithId implements Controller {
                 .split(';')
                 .forEach((rn, index) => {
                     const relay = new ControllerRelay(this, index, rn, this.name);
-                    this.relays.push(relay);
-                    this._properties.push(relay);
+                    if (!!relay.name) {
+                        this.relays.push(relay);
+                        this._properties.push(relay);
+                    }
                 });
         }
 
