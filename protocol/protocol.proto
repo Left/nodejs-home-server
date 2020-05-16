@@ -29,7 +29,9 @@ message Msg {
     optional string debugLogMessage = 5;
     repeated Relay relayStates = 6;
     optional ParsedRemote parsedRemote = 7; 
-    optional bool buttonPressed = 8;
+    optional bool buttonPressedD7 = 8;
+    optional bool buttonPressedD5 = 108;
+    optional bool buttonPressedD2 = 208;
     optional uint32 weight = 9;
     optional float temp = 10;
     optional float humidity = 11;
@@ -37,6 +39,7 @@ message Msg {
     optional uint32 potentiometer = 13;
     optional bool atxState = 14;
     repeated uint32 destinies = 15 [packed=true];
+    optional bool hcsrOn = 16;
 }
 
 message ScreenOffset {

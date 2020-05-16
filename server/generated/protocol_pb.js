@@ -946,14 +946,17 @@ proto.Msg.toObject = function(includeInstance, msg) {
     relaystatesList: jspb.Message.toObjectList(msg.getRelaystatesList(),
     proto.Relay.toObject, includeInstance),
     parsedremote: (f = msg.getParsedremote()) && proto.ParsedRemote.toObject(includeInstance, f),
-    buttonpressed: (f = jspb.Message.getBooleanField(msg, 8)) == null ? undefined : f,
+    buttonpressedd7: (f = jspb.Message.getBooleanField(msg, 8)) == null ? undefined : f,
+    buttonpressedd5: (f = jspb.Message.getBooleanField(msg, 108)) == null ? undefined : f,
+    buttonpressedd2: (f = jspb.Message.getBooleanField(msg, 208)) == null ? undefined : f,
     weight: (f = jspb.Message.getField(msg, 9)) == null ? undefined : f,
     temp: (f = jspb.Message.getOptionalFloatingPointField(msg, 10)) == null ? undefined : f,
     humidity: (f = jspb.Message.getOptionalFloatingPointField(msg, 11)) == null ? undefined : f,
     pressure: (f = jspb.Message.getOptionalFloatingPointField(msg, 12)) == null ? undefined : f,
     potentiometer: (f = jspb.Message.getField(msg, 13)) == null ? undefined : f,
     atxstate: (f = jspb.Message.getBooleanField(msg, 14)) == null ? undefined : f,
-    destiniesList: (f = jspb.Message.getRepeatedField(msg, 15)) == null ? undefined : f
+    destiniesList: (f = jspb.Message.getRepeatedField(msg, 15)) == null ? undefined : f,
+    hcsron: (f = jspb.Message.getBooleanField(msg, 16)) == null ? undefined : f
   };
 
   if (includeInstance) {
@@ -1023,7 +1026,15 @@ proto.Msg.deserializeBinaryFromReader = function(msg, reader) {
       break;
     case 8:
       var value = /** @type {boolean} */ (reader.readBool());
-      msg.setButtonpressed(value);
+      msg.setButtonpressedd7(value);
+      break;
+    case 108:
+      var value = /** @type {boolean} */ (reader.readBool());
+      msg.setButtonpressedd5(value);
+      break;
+    case 208:
+      var value = /** @type {boolean} */ (reader.readBool());
+      msg.setButtonpressedd2(value);
       break;
     case 9:
       var value = /** @type {number} */ (reader.readUint32());
@@ -1052,6 +1063,10 @@ proto.Msg.deserializeBinaryFromReader = function(msg, reader) {
     case 15:
       var value = /** @type {!Array<number>} */ (reader.readPackedUint32());
       msg.setDestiniesList(value);
+      break;
+    case 16:
+      var value = /** @type {boolean} */ (reader.readBool());
+      msg.setHcsron(value);
       break;
     default:
       reader.skipField();
@@ -1141,6 +1156,20 @@ proto.Msg.serializeBinaryToWriter = function(message, writer) {
       f
     );
   }
+  f = /** @type {boolean} */ (jspb.Message.getField(message, 108));
+  if (f != null) {
+    writer.writeBool(
+      108,
+      f
+    );
+  }
+  f = /** @type {boolean} */ (jspb.Message.getField(message, 208));
+  if (f != null) {
+    writer.writeBool(
+      208,
+      f
+    );
+  }
   f = /** @type {number} */ (jspb.Message.getField(message, 9));
   if (f != null) {
     writer.writeUint32(
@@ -1187,6 +1216,13 @@ proto.Msg.serializeBinaryToWriter = function(message, writer) {
   if (f.length > 0) {
     writer.writePackedUint32(
       15,
+      f
+    );
+  }
+  f = /** @type {boolean} */ (jspb.Message.getField(message, 16));
+  if (f != null) {
+    writer.writeBool(
+      16,
       f
     );
   }
@@ -1451,10 +1487,10 @@ proto.Msg.prototype.hasParsedremote = function() {
 
 
 /**
- * optional bool buttonPressed = 8;
+ * optional bool buttonPressedD7 = 8;
  * @return {boolean}
  */
-proto.Msg.prototype.getButtonpressed = function() {
+proto.Msg.prototype.getButtonpressedd7 = function() {
   return /** @type {boolean} */ (jspb.Message.getBooleanFieldWithDefault(this, 8, false));
 };
 
@@ -1463,7 +1499,7 @@ proto.Msg.prototype.getButtonpressed = function() {
  * @param {boolean} value
  * @return {!proto.Msg} returns this
  */
-proto.Msg.prototype.setButtonpressed = function(value) {
+proto.Msg.prototype.setButtonpressedd7 = function(value) {
   return jspb.Message.setField(this, 8, value);
 };
 
@@ -1472,7 +1508,7 @@ proto.Msg.prototype.setButtonpressed = function(value) {
  * Clears the field making it undefined.
  * @return {!proto.Msg} returns this
  */
-proto.Msg.prototype.clearButtonpressed = function() {
+proto.Msg.prototype.clearButtonpressedd7 = function() {
   return jspb.Message.setField(this, 8, undefined);
 };
 
@@ -1481,8 +1517,80 @@ proto.Msg.prototype.clearButtonpressed = function() {
  * Returns whether this field is set.
  * @return {boolean}
  */
-proto.Msg.prototype.hasButtonpressed = function() {
+proto.Msg.prototype.hasButtonpressedd7 = function() {
   return jspb.Message.getField(this, 8) != null;
+};
+
+
+/**
+ * optional bool buttonPressedD5 = 108;
+ * @return {boolean}
+ */
+proto.Msg.prototype.getButtonpressedd5 = function() {
+  return /** @type {boolean} */ (jspb.Message.getBooleanFieldWithDefault(this, 108, false));
+};
+
+
+/**
+ * @param {boolean} value
+ * @return {!proto.Msg} returns this
+ */
+proto.Msg.prototype.setButtonpressedd5 = function(value) {
+  return jspb.Message.setField(this, 108, value);
+};
+
+
+/**
+ * Clears the field making it undefined.
+ * @return {!proto.Msg} returns this
+ */
+proto.Msg.prototype.clearButtonpressedd5 = function() {
+  return jspb.Message.setField(this, 108, undefined);
+};
+
+
+/**
+ * Returns whether this field is set.
+ * @return {boolean}
+ */
+proto.Msg.prototype.hasButtonpressedd5 = function() {
+  return jspb.Message.getField(this, 108) != null;
+};
+
+
+/**
+ * optional bool buttonPressedD2 = 208;
+ * @return {boolean}
+ */
+proto.Msg.prototype.getButtonpressedd2 = function() {
+  return /** @type {boolean} */ (jspb.Message.getBooleanFieldWithDefault(this, 208, false));
+};
+
+
+/**
+ * @param {boolean} value
+ * @return {!proto.Msg} returns this
+ */
+proto.Msg.prototype.setButtonpressedd2 = function(value) {
+  return jspb.Message.setField(this, 208, value);
+};
+
+
+/**
+ * Clears the field making it undefined.
+ * @return {!proto.Msg} returns this
+ */
+proto.Msg.prototype.clearButtonpressedd2 = function() {
+  return jspb.Message.setField(this, 208, undefined);
+};
+
+
+/**
+ * Returns whether this field is set.
+ * @return {boolean}
+ */
+proto.Msg.prototype.hasButtonpressedd2 = function() {
+  return jspb.Message.getField(this, 208) != null;
 };
 
 
@@ -1736,6 +1844,42 @@ proto.Msg.prototype.addDestinies = function(value, opt_index) {
  */
 proto.Msg.prototype.clearDestiniesList = function() {
   return this.setDestiniesList([]);
+};
+
+
+/**
+ * optional bool hcsrOn = 16;
+ * @return {boolean}
+ */
+proto.Msg.prototype.getHcsron = function() {
+  return /** @type {boolean} */ (jspb.Message.getBooleanFieldWithDefault(this, 16, false));
+};
+
+
+/**
+ * @param {boolean} value
+ * @return {!proto.Msg} returns this
+ */
+proto.Msg.prototype.setHcsron = function(value) {
+  return jspb.Message.setField(this, 16, value);
+};
+
+
+/**
+ * Clears the field making it undefined.
+ * @return {!proto.Msg} returns this
+ */
+proto.Msg.prototype.clearHcsron = function() {
+  return jspb.Message.setField(this, 16, undefined);
+};
+
+
+/**
+ * Returns whether this field is set.
+ * @return {boolean}
+ */
+proto.Msg.prototype.hasHcsron = function() {
+  return jspb.Message.getField(this, 16) != null;
 };
 
 

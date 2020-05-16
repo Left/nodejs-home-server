@@ -74,6 +74,8 @@ type DevParams = {
     "hasDS18B20": string,          // Has DS18B20 (temp sensor) "false"
     "hasBME280": string,           // Has BME280 (temp & humidity sensor)
     "hasButton": string,           // Has button on D7 "false"
+    "hasButtonD2": string,         // Has button on D2 "false"
+    "hasButtonD5": string,         // Has button on D5 "false"
     "brightness": string,          // Brightness [0..100] "0"
     "relay.names": string,         // Relay names, separated by ;
     "hasLedStripe": string,        // Has LED stripe

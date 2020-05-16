@@ -246,6 +246,11 @@ interface IRKeysHandler {
 
 type ChannelType = 'Url' | 'Youtube';
 
+type PullUp = {
+    day: string;
+    count: number;
+}
+
 type IRKey = {
     periods: number[];
     keyName: string;
@@ -308,7 +313,7 @@ const menuKeys = {
     'tvtuner': { menu: 'n5', up: 'n2', down: 'n8', left: 'n4', right: 'n6' },
 } as MenuKeysType;
 
-type SoundType = 'lightOn' | 'lightOff' | 'alarmClock' | 'timerClock';
+type SoundType = 'lightOn' | 'lightOff' | 'alarmClock' | 'timerClock' | 'pullUp';
 type TimersType = 'dayBeginsAt' | 'dayEndsAt';
 
 type SoundAction = {
@@ -350,6 +355,7 @@ const defKeysSettings: KeysSettings = {
     lightOff: { index: 0, volume: 50 },
     alarmClock: { index: 0, volume: 50 },
     timerClock: { index: 0, volume: 50 },
+    pullUp: { index: 0, volume: 50 },
     dayBeginsAt: { h: 7,  m: 0},
     dayEndsAt: { h: 23, m: 0},
 }
@@ -399,7 +405,7 @@ class App implements TabletHost {
         new SpanHTMLRenderer<Log[]>(x => "<br/>" + 
             x.map(i => {
                 const r = [ "<span style='color: green; font-size: smaller'>" + toHMS(i.d) + " </span>" ];
-                r.push("&nbsp;<span>" + encodeStr(i.s) + "</span>");
+                r.push("&nbsp;<span>" + encodeStr(i.s ?? "") + "</span>");
                 if (i.e && i.e.stack) {
                     r.push('<br/>');
                     for (const sl of i.e.stack.split(/\r\n|\r|\n/gi)) {
@@ -411,6 +417,10 @@ class App implements TabletHost {
         ));
 
     private log(str: string, stack?: boolean): void {
+        if (typeof(str) != "string") {
+            str = "UNKNOWN TYPE " + str;
+            stack = true;
+        }
         const sa = this.globalLog.get();
         sa.push({ s: str, d: new Date(), e: (stack ? new Error() : undefined) });
         this.globalLog.setInternal(sa);
@@ -727,6 +737,15 @@ class App implements TabletHost {
         wake();
     }, 'alarmClock');
 
+
+    private pullups = newWritableProperty<number>("Сегодня", 0, new SpanHTMLRenderer());
+    private ctrlPullups = {
+        name: "Подтягиваний",
+        properties: () => [
+            this.pullups
+        ]
+    };
+
     private nowWeatherIcon = newWritableProperty<string>("", "", new ImgHTMLRenderer(40, 40));
     private nowWeather = newWritableProperty<string>("", "", new SpanHTMLRenderer());
     private ctrlWeather = {
@@ -784,6 +803,7 @@ class App implements TabletHost {
     private tvChannels = newConfig({ channels: [] as Channel[], lastUpdate: 0 }, "m3u_tv_channels");
     private channelsHistoryConf = newConfig({ channels: [] as Channel[] }, "tv_channels");
     private irKeysConf = newConfig({ irKeysConf: [] as IRKey[] }, "ir_keys");
+
     // private actions = newConfig({ actions: [] as PerformedAction[] }, "actions");
 
     private channelAsController(h: Channel, 
@@ -1043,6 +1063,7 @@ class App implements TabletHost {
                 this.wakeAt.controller,
                 this.timer.controller,
                 this.ctrlControlOther,
+                this.ctrlPullups,
                 this.ctrlWeather,
                 this.miLight,
             ],
@@ -1341,7 +1362,7 @@ class App implements TabletHost {
                 if (!tablet.screenIsOn.get()) {
                     tablet.screenIsOn.set(true);
                 }
-                tablet.volume.set(tablet.volume.get() + (key === 'volume_up' ? +1 : -1) * 100 / 15)
+                tablet.volume.set(tablet.volume.get() + (key === 'volume_up' ? +1 : -1) * 100 / 30)
             }}
         ]),
         this.simpleCmd([['click']], "MiLight", (from, keys) => {
@@ -1385,7 +1406,7 @@ class App implements TabletHost {
                     if (!this.kindle.screenIsOn.get()) {
                         this.kindle.screenIsOn.set(true);
                     }
-                    this.kindle.volume.set(this.kindle.volume.get() + sign * 100 / 15);
+                    this.kindle.volume.set(this.kindle.volume.get() + sign * 100 / 30);
                 } else if (from.remoteId === 'encoder_middle') {
                     const nowBr = this.modifyBrightnessMi(sign * 10);
                     const ledController1 = this.findDynController('LedController1');
@@ -1639,41 +1660,48 @@ class App implements TabletHost {
     private destinies: number[] = [];
     private ignoreDestinies = false;
 
-    private async onRawDestinies(clockController: ClockController, timeSeq: number, destinies_: number[]) {
-        if (this.ignoreDestinies) {
-            return;
-        }
+    private onHCSR(clockController: ClockController, on: boolean) {
+        // console.log("onHCSR", clockController.internalName, ">>", on);
 
-        this.destinies = this.destinies.concat(destinies_.filter(x => x < 100000)).slice(Math.max(0, this.destinies.length - 100));
+        if (!on) {
+            if (clockController.internalName === 'PullupCounter') {
+                this.pullups.set(this.pullups.get() + 1);
 
-        const take = 5;
-        const avg = this.destinies.slice(Math.max(0, this.destinies.length - take)).reduce((a, b) => a + b, 0) / take;
+                const cr = this.findDynController('ClockNRemote');
+                if (cr) {
+                    this.sound(cr, 'pullUp');
+                }
 
-        if (avg < 1000) {
-            // Ignore for some time
-            this.ignoreDestinies = true;
-            this.destinies = [];
-            (async () => {
-                await delay(1000);
-                this.ignoreDestinies = false;
-            }) ();
-
-            const stateThis = clockController.relays[0].get();
-            const cntrlrs  = [
-                [ clockController, [0]], [this.findDynController('RoomSwitchers'), [0, 1]]
-            ].filter ( x => !!x ) as [ClockController, number[]][]
-
-            const swtch = (swon: boolean) => cntrlrs.forEach( c => c[1].forEach(rI => c[0].relays[rI].switch(swon)));
-
-            swtch(!stateThis);
-/*
-            if (!stateThis) {
-                (async () => {
-                    await delay(600000); // 10 mins
-                    swtch(false)
-                }) ();    
+                console.log("PULLUP!")
             }
-*/
+        }
+    }
+
+
+
+    private async onRawDestinies(clockController: ClockController, timeSeq: number, destinies_: number[]) {
+        // console.log(clockController.internalName)
+        if (clockController.internalName == 'PullupCounter') {
+        } else if (clockController.internalName == 'NoncontactSwitch') {
+            console.log("[" + destinies_.join(",") + "]")
+            if (!this.ignoreDestinies) {
+                if (destinies_.reduce((prev, now) => (now < 1500 ? prev+1 : prev), 0) > 4) {
+                    {
+                        console.log('Non-contact switch')
+                        const stateThis = clockController.relays[0].get();
+                        const cntrlrs  = [
+                            [ clockController, [0]], [this.findDynController('RoomSwitchers'), [0, 1]]
+                        ].filter ( x => !!x ) as [ClockController, number[]][]
+        
+                        const swtch = (swon: boolean) => cntrlrs.forEach( c => c[1].forEach(rI => c[0].relays[rI].switch(swon)));
+        
+                        swtch(!stateThis);        
+                    }
+                    this.ignoreDestinies = true;
+                    await delay(1000);
+                    this.ignoreDestinies = false;
+                }
+            }
         }
     }
 
@@ -1869,6 +1897,20 @@ class App implements TabletHost {
                     this.log('Message from controller that is not initialized:' + rinfo.address + "  " + JSON.stringify(typedMessage));
                 }
 
+                if (typeof(typedMessage.buttonpressedd2) != 'undefined') {
+                    console.log("D2", typedMessage.buttonpressedd2);
+                }
+                if (typeof(typedMessage.buttonpressedd5) != 'undefined') {
+                    console.log("D5", typedMessage.buttonpressedd5);
+                }
+                if (typeof(typedMessage.buttonpressedd7) != 'undefined') {
+                    console.log("D7", typedMessage.buttonpressedd7);
+                }
+                if (typeof(typedMessage.hcsron) != 'undefined') {
+                    if (controller) {
+                        this.onHCSR(controller, typedMessage.hcsron);
+                    }
+                }
                 if (typedMessage.potentiometer) {
                     if (controller) {
                         this.onPotentiometer(controller, typedMessage.potentiometer);
@@ -2023,7 +2065,7 @@ class App implements TabletHost {
                 }
                 // console.log(JSON.stringify(typedMessage, undefined, ' '));
             } catch (e) {
-                this.log(e);
+                this.log(e.toString());
             }
             // console.log(`server got: ${msg} from ${rinfo.address}:${rinfo.port}`);
         });
@@ -2696,7 +2738,11 @@ class App implements TabletHost {
         const snd = (await this.keysSettings.read())[type];
         if (snd !== null) {
             // If there is a day - play full sound, at night - play only half
-            controller.play((await this.isNightMode()) ? snd.volume * 4 / 10 : snd.volume, snd.index);
+            if (controller.screenEnabledProperty.get()) {
+                controller.play((await this.isNightMode()) ? snd.volume * 4 / 10 : snd.volume, snd.index);
+            } else {
+                console.log("Silent because switched off");
+            }
         } else {
             this.log('No sound set for ' + type);
         }

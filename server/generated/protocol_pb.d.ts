@@ -141,10 +141,20 @@ export class Msg extends jspb.Message {
   getParsedremote(): ParsedRemote | undefined;
   setParsedremote(value?: ParsedRemote): void;
 
-  hasButtonpressed(): boolean;
-  clearButtonpressed(): void;
-  getButtonpressed(): boolean | undefined;
-  setButtonpressed(value: boolean): void;
+  hasButtonpressedd7(): boolean;
+  clearButtonpressedd7(): void;
+  getButtonpressedd7(): boolean | undefined;
+  setButtonpressedd7(value: boolean): void;
+
+  hasButtonpressedd5(): boolean;
+  clearButtonpressedd5(): void;
+  getButtonpressedd5(): boolean | undefined;
+  setButtonpressedd5(value: boolean): void;
+
+  hasButtonpressedd2(): boolean;
+  clearButtonpressedd2(): void;
+  getButtonpressedd2(): boolean | undefined;
+  setButtonpressedd2(value: boolean): void;
 
   hasWeight(): boolean;
   clearWeight(): void;
@@ -181,6 +191,11 @@ export class Msg extends jspb.Message {
   setDestiniesList(value: Array<number>): void;
   addDestinies(value: number, index?: number): number;
 
+  hasHcsron(): boolean;
+  clearHcsron(): void;
+  getHcsron(): boolean | undefined;
+  setHcsron(value: boolean): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Msg.AsObject;
   static toObject(includeInstance: boolean, msg: Msg): Msg.AsObject;
@@ -200,7 +215,9 @@ export namespace Msg {
     debuglogmessage?: string,
     relaystatesList: Array<Relay.AsObject>,
     parsedremote?: ParsedRemote.AsObject,
-    buttonpressed?: boolean,
+    buttonpressedd7?: boolean,
+    buttonpressedd5?: boolean,
+    buttonpressedd2?: boolean,
     weight?: number,
     temp?: number,
     humidity?: number,
@@ -208,6 +225,7 @@ export namespace Msg {
     potentiometer?: number,
     atxstate?: boolean,
     destiniesList: Array<number>,
+    hcsron?: boolean,
   }
 }
 
