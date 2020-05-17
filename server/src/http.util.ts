@@ -3,8 +3,10 @@ import * as http from 'http';
 import * as url from "url";
 import * as zlib from "zlib";
 
-export async function get(_url: string): Promise<string> {
-    const data = await getBin(_url);
+type HttpVerb = "GET" | "POST" | "PUT" | "LIST" | "OPTION";
+
+export async function get(_url: string, verb: HttpVerb = "GET", body: string|undefined = undefined): Promise<string> {
+    const data = await getBin(_url, verb, body);
     return data.body.toString();
 }
 
@@ -16,15 +18,16 @@ export function encodeStr(rawStr: string) {
     });
 }
 
-export function getBin(_url: string): Promise<BinResponse> {
+export function getBin(_url: string, verb: HttpVerb = "GET", body: string|undefined = undefined): Promise<BinResponse> {
     return new Promise<BinResponse>((accept, decline) => {
         const u = new url.URL(_url);
             
-        let options = {
+        let options: http.RequestOptions = {
             protocol: u.protocol,
             port: +u.port,
             path: u.pathname + u.search,
             host: u.hostname,
+            method: verb,
             headers: {
                 'Accept-Encoding': 'gzip'//,
                 // 'Cache-Control': 'no-cache',
@@ -34,7 +37,7 @@ export function getBin(_url: string): Promise<BinResponse> {
 
         const process = (resp: http.IncomingMessage) => {
             if ((resp.statusCode == 302 || resp.statusCode == 301) && resp.headers.location) {
-                getBin(resp.headers.location)
+                getBin(resp.headers.location, verb)
                     .then(data => accept(data))
                     .catch(err => decline(err));
             } else {
@@ -66,14 +69,19 @@ export function getBin(_url: string): Promise<BinResponse> {
             }
         };
    
+        var h
         if (u.protocol.indexOf('https') != -1) {
-            https.get(options, process).on("error", (err: Error) => {
-                decline(err);
-            });
+            h = https.request(options, process);
         } else {
-            http.get(options, process).on("error", (err: Error) => {
-                decline(err);
-            });
+            h = http.request(options, process);
         }
+        h.on("error", (err: Error) => {
+            decline(err);
+        });
+        if (body) {
+            h.write(body)
+        }
+        h.end()
+
     });
 }

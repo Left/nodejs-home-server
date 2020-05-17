@@ -22,6 +22,7 @@ import { ClockController, ClockControllerCommunications, Hello, ClockControllerE
 import { Msg, MsgBack, ScreenOffset, ScreenContent } from "./../generated/protocol_pb";
 import { doWithTimeout, delay } from './common.utils';
 import { encodeStr } from './http.util';
+import { addPullup } from './spreadsheet.utils';
 
 type WebPageType = 'web' | 'lights' | 'settings' | 'iptv' | 'ir' | 'actions' | 'log';
 
@@ -313,7 +314,7 @@ const menuKeys = {
     'tvtuner': { menu: 'n5', up: 'n2', down: 'n8', left: 'n4', right: 'n6' },
 } as MenuKeysType;
 
-type SoundType = 'lightOn' | 'lightOff' | 'alarmClock' | 'timerClock' | 'pullUp';
+type SoundType = 'lightOn' | 'lightOff' | 'alarmClock' | 'timerClock' | 'pullUp' | 'pullUpTen';
 type TimersType = 'dayBeginsAt' | 'dayEndsAt';
 
 type SoundAction = {
@@ -340,6 +341,7 @@ const defSleepSettings: SleepSettings = {
 type KeysSettings = {
     weatherApiKey: string;
     youtubeApiKey: string;
+    spreadsheetsApiKey: string;
     simulateHostAtHome: boolean;
 } & {
     [P in SoundType]: SoundAction|null;
@@ -350,12 +352,14 @@ type KeysSettings = {
 const defKeysSettings: KeysSettings = { 
     weatherApiKey: "",
     youtubeApiKey: "",
+    spreadsheetsApiKey: "",
     simulateHostAtHome: false,
     lightOn: { index: 0, volume: 50 },
     lightOff: { index: 0, volume: 50 },
     alarmClock: { index: 0, volume: 50 },
     timerClock: { index: 0, volume: 50 },
     pullUp: { index: 0, volume: 50 },
+    pullUpTen: { index: 0, volume: 50 },
     dayBeginsAt: { h: 7,  m: 0},
     dayEndsAt: { h: 23, m: 0},
 }
@@ -1660,19 +1664,21 @@ class App implements TabletHost {
     private destinies: number[] = [];
     private ignoreDestinies = false;
 
-    private onHCSR(clockController: ClockController, on: boolean) {
+    private async onHCSR(clockController: ClockController, on: boolean) {
         // console.log("onHCSR", clockController.internalName, ">>", on);
 
         if (!on) {
             if (clockController.internalName === 'PullupCounter') {
                 this.pullups.set(this.pullups.get() + 1);
 
+                const res = await curl.get("http://192.168.121.38:81/pullup/")
                 const cr = this.findDynController('ClockNRemote');
-                if (cr) {
+                if (cr && cr.lcdInformer) {
+                    cr.lcdInformer.staticLine(res);
                     this.sound(cr, 'pullUp');
                 }
 
-                console.log("PULLUP!")
+                console.log("PULLUP " + res);
             }
         }
     }
@@ -1683,7 +1689,7 @@ class App implements TabletHost {
         // console.log(clockController.internalName)
         if (clockController.internalName == 'PullupCounter') {
         } else if (clockController.internalName == 'NoncontactSwitch') {
-            console.log("[" + destinies_.join(",") + "]")
+            // console.log("[" + destinies_.join(",") + "]")
             if (!this.ignoreDestinies) {
                 if (destinies_.reduce((prev, now) => (now < 1500 ? prev+1 : prev), 0) > 4) {
                     {
@@ -2827,7 +2833,16 @@ class App implements TabletHost {
             ).filter(x => !!x).join(', '));
     }
 
+    private async addPullup() {
+        const resInfo = await addPullup((await this.keysSettings.read()).spreadsheetsApiKey);
+
+    }
+
     private test(): void {
+        this.addPullup()
+    }
+
+    private test2(): void {
         for (const inf of this.dynamicControllers.values()) {
             if (inf.hasScreen()) {
                 let t = inf.lastMsgLocal + 200;
