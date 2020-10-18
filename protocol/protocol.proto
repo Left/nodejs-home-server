@@ -40,6 +40,8 @@ message Msg {
     optional bool atxState = 14;
     repeated uint32 destinies = 15 [packed=true];
     optional bool hcsrOn = 16;
+
+    optional BluePill bluePillMsg = 19;
 }
 
 message ScreenOffset {
@@ -52,6 +54,10 @@ message ScreenContent {
     required uint32 width = 1;
     required uint32 height = 2;
     required bytes content = 3;
+}
+
+message BluePill {
+    required bytes content = 11;
 }
 
 message MsgBack {
@@ -87,4 +93,6 @@ message MsgBack {
     optional ScreenOffset screenOffsetFrom = 301;
     optional ScreenOffset screenOffsetTo = 302;
     optional bool screenClean = 303;
+
+    optional BluePill bluePillMsg = 304;
 }

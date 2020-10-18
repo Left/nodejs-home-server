@@ -196,6 +196,11 @@ export class Msg extends jspb.Message {
   getHcsron(): boolean | undefined;
   setHcsron(value: boolean): void;
 
+  hasBluepillmsg(): boolean;
+  clearBluepillmsg(): void;
+  getBluepillmsg(): BluePill | undefined;
+  setBluepillmsg(value?: BluePill): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Msg.AsObject;
   static toObject(includeInstance: boolean, msg: Msg): Msg.AsObject;
@@ -226,6 +231,7 @@ export namespace Msg {
     atxstate?: boolean,
     destiniesList: Array<number>,
     hcsron?: boolean,
+    bluepillmsg?: BluePill.AsObject,
   }
 }
 
@@ -295,6 +301,30 @@ export namespace ScreenContent {
   export type AsObject = {
     width?: number,
     height?: number,
+    content: Uint8Array | string,
+  }
+}
+
+export class BluePill extends jspb.Message {
+  hasContent(): boolean;
+  clearContent(): void;
+  getContent(): Uint8Array | string;
+  getContent_asU8(): Uint8Array;
+  getContent_asB64(): string;
+  setContent(value: Uint8Array | string): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): BluePill.AsObject;
+  static toObject(includeInstance: boolean, msg: BluePill): BluePill.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: BluePill, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): BluePill;
+  static deserializeBinaryFromReader(message: BluePill, reader: jspb.BinaryReader): BluePill;
+}
+
+export namespace BluePill {
+  export type AsObject = {
     content: Uint8Array | string,
   }
 }
@@ -430,6 +460,11 @@ export class MsgBack extends jspb.Message {
   getScreenclean(): boolean | undefined;
   setScreenclean(value: boolean): void;
 
+  hasBluepillmsg(): boolean;
+  clearBluepillmsg(): void;
+  getBluepillmsg(): BluePill | undefined;
+  setBluepillmsg(value?: BluePill): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): MsgBack.AsObject;
   static toObject(includeInstance: boolean, msg: MsgBack): MsgBack.AsObject;
@@ -468,6 +503,7 @@ export namespace MsgBack {
     screenoffsetfrom?: ScreenOffset.AsObject,
     screenoffsetto?: ScreenOffset.AsObject,
     screenclean?: boolean,
+    bluepillmsg?: BluePill.AsObject,
   }
 
   export interface ShowTypeMap {

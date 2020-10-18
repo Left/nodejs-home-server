@@ -1311,6 +1311,10 @@ class App implements TabletHost {
             this.sound(from.controller, this.r1.get() ? 'lightOff' : 'lightOn');
             this.r1.switch(!this.r1.get());
         }),
+        this.simpleCmd([["home"]], "Лента на шкафу", (from) => {
+            this.sound(from.controller, this.r1.get() ? 'lightOff' : 'lightOn');
+            this.r1.switch(!this.r1.get());
+        }),
         this.simpleCmd([['stop']], "Ленты на карнизах", (from) => {
             const l = this.lights();
             const onoff = l.find(x => x.name === 'Ленты на карнизах');

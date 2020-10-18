@@ -25,10 +25,13 @@
             "type": "shell",
             "label": "compile protobuf",
             "command": "bash",
-            "args": [ "compile.sh" ],
+            "args": [
+                "compile.sh"
+            ],
             "options": {
                 "cwd": "${workspaceFolder}/protocol"
             },
+            "problemMatcher": []
         }
     ]
 }
